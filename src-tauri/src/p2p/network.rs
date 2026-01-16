@@ -348,7 +348,7 @@ impl NetworkService {
             Ok(Some(info)) => {
                 // Sign the response
                 let timestamp = chrono::Utc::now().timestamp();
-                let signature = match self.identity_service.sign(
+                let signature = match self.identity_service.sign_raw(
                     format!("{}:{}:{}", info.peer_id, info.display_name, timestamp).as_bytes()
                 ) {
                     Ok(sig) => sig,

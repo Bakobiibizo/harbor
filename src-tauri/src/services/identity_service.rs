@@ -2,7 +2,7 @@ use crate::db::Database;
 use crate::db::repositories::IdentityRepository;
 use crate::error::{AppError, Result};
 use crate::models::{CreateIdentityRequest, IdentityInfo, LocalIdentity};
-use crate::services::CryptoService;
+use crate::services::{CryptoService, Signable, sign as signing_sign};
 
 use ed25519_dalek::SigningKey;
 use std::sync::{Arc, RwLock};
@@ -11,7 +11,7 @@ use x25519_dalek::StaticSecret as X25519Secret;
 
 /// Service for managing the local user's identity
 pub struct IdentityService {
-    db: Database,
+    db: Arc<Database>,
     /// Cached unlocked keys (only available after unlock)
     unlocked_keys: Arc<RwLock<Option<UnlockedKeys>>>,
 }
@@ -24,7 +24,7 @@ pub struct UnlockedKeys {
 }
 
 impl IdentityService {
-    pub fn new(db: Database) -> Self {
+    pub fn new(db: Arc<Database>) -> Self {
         Self {
             db,
             unlocked_keys: Arc::new(RwLock::new(None)),
@@ -154,11 +154,23 @@ impl IdentityService {
         })
     }
 
-    /// Sign data using the unlocked Ed25519 key
-    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
+    /// Sign raw data using the unlocked Ed25519 key
+    pub fn sign_raw(&self, data: &[u8]) -> Result<Vec<u8>> {
         let keys = self.get_unlocked_keys()?;
         let signature = CryptoService::sign(&keys.ed25519_signing, data);
         Ok(signature.to_bytes().to_vec())
+    }
+
+    /// Sign a Signable object using canonical CBOR encoding
+    pub fn sign<T: Signable>(&self, signable: &T) -> Result<Vec<u8>> {
+        let keys = self.get_unlocked_keys()?;
+        signing_sign(&keys.ed25519_signing, signable)
+    }
+
+    /// Get the full identity (for internal use)
+    pub fn get_identity(&self) -> Result<Option<LocalIdentity>> {
+        let repo = IdentityRepository::new(&self.db);
+        repo.get().map_err(Into::into)
     }
 
     /// Update display name
@@ -188,7 +200,7 @@ impl IdentityService {
 impl Clone for IdentityService {
     fn clone(&self) -> Self {
         Self {
-            db: self.db.clone(),
+            db: Arc::clone(&self.db),
             unlocked_keys: Arc::clone(&self.unlocked_keys),
         }
     }
@@ -199,7 +211,7 @@ mod tests {
     use super::*;
 
     fn create_test_service() -> IdentityService {
-        let db = Database::in_memory().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
         IdentityService::new(db)
     }
 
@@ -284,14 +296,14 @@ mod tests {
         service.create_identity(request).unwrap();
 
         // Can sign when unlocked
-        let signature = service.sign(b"test data").unwrap();
+        let signature = service.sign_raw(b"test data").unwrap();
         assert!(!signature.is_empty());
 
         // Lock
         service.lock();
 
         // Cannot sign when locked
-        let result = service.sign(b"test data");
+        let result = service.sign_raw(b"test data");
         assert!(result.is_err());
     }
 }

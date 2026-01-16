@@ -6,6 +6,7 @@ use tracing::info;
 const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
 const MIGRATION_002: &str = include_str!("migrations/002_schema_fixes.sql");
 const MIGRATION_003: &str = include_str!("migrations/003_lamport_sync_cursor.sql");
+const MIGRATION_004: &str = include_str!("migrations/004_messages_nonce.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -83,6 +84,12 @@ impl Database {
             info!("Running migration 003...");
             conn.execute_batch(MIGRATION_003)?;
             info!("Migration 003 complete");
+        }
+
+        if version < 4 {
+            info!("Running migration 004...");
+            conn.execute_batch(MIGRATION_004)?;
+            info!("Migration 004 complete");
         }
 
         Ok(())

@@ -1,12 +1,12 @@
 [package]
-name = "chat-app"
+name = "harbor"
 version = "0.1.0"
-description = "A decentralized P2P chat application"
-authors = ["you"]
+description = "A decentralized P2P chat application with local-first data and permission-based sharing"
+authors = ["Harbor Contributors"]
 edition = "2021"
 
 [lib]
-name = "chat_app_lib"
+name = "harbor_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

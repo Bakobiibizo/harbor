@@ -5,6 +5,9 @@ pub enum AppError {
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
+    #[error("Database error: {0}")]
+    DatabaseString(String),
+
     #[error("Cryptography error: {0}")]
     Crypto(String),
 
@@ -28,6 +31,12 @@ pub enum AppError {
 
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
 
     #[error("Network error: {0}")]
     Network(String),

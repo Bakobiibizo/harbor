@@ -1,9 +1,17 @@
+pub mod contacts_service;
 pub mod crypto_service;
 pub mod identity_service;
+pub mod messaging_service;
+pub mod permissions_service;
 pub mod signing;
 
+pub use contacts_service::ContactsService;
 pub use crypto_service::CryptoService;
 pub use identity_service::IdentityService;
+pub use messaging_service::{MessagingService, DecryptedMessage, OutgoingMessage};
+pub use permissions_service::{
+    PermissionsService, PermissionRequestMessage, PermissionGrantMessage, PermissionRevokeMessage,
+};
 pub use signing::{
     Signable, sign, verify,
     // Identity messages

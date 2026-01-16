@@ -175,7 +175,7 @@ impl CryptoService {
 
         let hk = Hkdf::<Sha256>::new(Some(context), shared_secret);
         let mut key = [0u8; 32];
-        hk.expand(b"chat-app-v1", &mut key).expect("HKDF expand failed");
+        hk.expand(b"harbor-v1", &mut key).expect("HKDF expand failed");
         key
     }
 
@@ -204,7 +204,7 @@ impl CryptoService {
 
         // Build salt with full context
         let salt = format!(
-            "chat-app:v1:conv:{}:{}:{}",
+            "harbor:v1:conv:{}:{}:{}",
             conversation_id, first, second
         );
 

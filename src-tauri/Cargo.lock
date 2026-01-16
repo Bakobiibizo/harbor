@@ -649,39 +649,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chat-app"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "argon2",
- "base64 0.22.1",
- "chrono",
- "ciborium",
- "ed25519-dalek",
- "futures",
- "hex",
- "hkdf",
- "libp2p",
- "multiaddr",
- "rand 0.8.5",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "void",
- "x25519-dalek",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1927,6 +1894,39 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "zerocopy",
+]
+
+[[package]]
+name = "harbor"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "argon2",
+ "base64 0.22.1",
+ "chrono",
+ "ciborium",
+ "ed25519-dalek",
+ "futures",
+ "hex",
+ "hkdf",
+ "libp2p",
+ "multiaddr",
+ "rand 0.8.5",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "void",
+ "x25519-dalek",
 ]
 
 [[package]]

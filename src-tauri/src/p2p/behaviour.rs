@@ -81,7 +81,7 @@ impl ChatBehaviour {
 
         // Identify
         let identify = identify::Behaviour::new(identify::Config::new(
-            "/chat-app/1.0.0".to_string(),
+            "/harbor/1.0.0".to_string(),
             local_public_key.clone(),
         ));
 
