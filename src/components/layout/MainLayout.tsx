@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
-import { useIdentityStore } from "../../stores";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useIdentityStore, useSettingsStore } from "../../stores";
 import {
   ChatIcon,
   WallIcon,
@@ -19,7 +19,7 @@ interface MainLayoutProps {
 interface NavItem {
   to: string;
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   description: string;
 }
 
@@ -52,7 +52,9 @@ const navItems: NavItem[] = [
 
 export function MainLayout({ children }: MainLayoutProps) {
   const { state, lock } = useIdentityStore();
+  const { showOnlineStatus, avatarUrl } = useSettingsStore();
   const location = useLocation();
+  const navigate = useNavigate();
   const [isLocking, setIsLocking] = useState(false);
 
   const identity = state.status === "unlocked" ? state.identity : null;
@@ -118,11 +120,12 @@ export function MainLayout({ children }: MainLayoutProps) {
           </div>
         </div>
 
-        {/* User Profile Card */}
+        {/* User Profile Card - clickable to go to profile settings */}
         {identity && (
           <div className="p-4">
-            <div
-              className="p-3 rounded-xl"
+            <button
+              onClick={() => navigate("/settings")}
+              className="w-full p-3 rounded-xl text-left transition-all duration-200 hover:opacity-90"
               style={{
                 background: "hsl(var(--harbor-surface-1))",
                 border: "1px solid hsl(var(--harbor-border-subtle))",
@@ -131,12 +134,20 @@ export function MainLayout({ children }: MainLayoutProps) {
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <div
-                    className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold text-white"
+                    className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold text-white overflow-hidden"
                     style={{
-                      background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
+                      background: avatarUrl
+                        ? "transparent"
+                        : "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
                     }}
                   >
-                    {identity.avatarHash ? (
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt=""
+                        className="w-full h-full rounded-full object-cover"
+                      />
+                    ) : identity.avatarHash ? (
                       <img
                         src={`/media/${identity.avatarHash}`}
                         alt=""
@@ -146,14 +157,16 @@ export function MainLayout({ children }: MainLayoutProps) {
                       getInitials(identity.displayName)
                     )}
                   </div>
-                  {/* Online indicator */}
-                  <div
-                    className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2"
-                    style={{
-                      background: "hsl(var(--harbor-success))",
-                      borderColor: "hsl(var(--harbor-bg-elevated))",
-                    }}
-                  />
+                  {/* Online indicator - only shows if setting is enabled */}
+                  {showOnlineStatus && (
+                    <div
+                      className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2"
+                      style={{
+                        background: "hsl(var(--harbor-success))",
+                        borderColor: "hsl(var(--harbor-bg-elevated))",
+                      }}
+                    />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p
@@ -170,7 +183,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                   </p>
                 </div>
               </div>
-            </div>
+            </button>
           </div>
         )}
 
@@ -305,7 +318,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                   className="text-sm font-medium"
                   style={{ color: "hsl(var(--harbor-text-primary))" }}
                 >
-                  {isLocking ? "Locking..." : "Lock Wallet"}
+                  {isLocking ? "Locking..." : "Lock Account"}
                 </span>
               </div>
             </button>

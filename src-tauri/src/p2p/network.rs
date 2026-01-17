@@ -17,6 +17,7 @@ use super::swarm::build_swarm;
 use super::types::*;
 use crate::error::{AppError, Result};
 use crate::services::IdentityService;
+use std::sync::Arc;
 
 /// Handle to interact with the network service
 #[derive(Clone)]
@@ -99,7 +100,7 @@ impl NetworkHandle {
 pub struct NetworkService {
     swarm: Swarm<ChatBehaviour>,
     config: NetworkConfig,
-    identity_service: IdentityService,
+    identity_service: Arc<IdentityService>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
     event_tx: mpsc::Sender<NetworkEvent>,
     connected_peers: HashMap<PeerId, PeerInfo>,
@@ -114,7 +115,7 @@ impl NetworkService {
     /// Create a new network service
     pub fn new(
         config: NetworkConfig,
-        identity_service: IdentityService,
+        identity_service: Arc<IdentityService>,
         keypair: libp2p::identity::Keypair,
     ) -> Result<(Self, NetworkHandle, mpsc::Receiver<NetworkEvent>)> {
         let swarm = build_swarm(keypair, &config)?;

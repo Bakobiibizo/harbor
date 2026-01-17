@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::IdentityService;
+use std::sync::Arc;
 use tauri::State;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -78,7 +79,7 @@ pub async fn bootstrap_network(
 #[tauri::command]
 pub async fn start_network(
     network: State<'_, NetworkState>,
-    identity_service: State<'_, IdentityService>,
+    identity_service: State<'_, Arc<IdentityService>>,
 ) -> Result<(), AppError> {
     // Check if identity is unlocked
     if !identity_service.is_unlocked() {
@@ -106,10 +107,11 @@ pub async fn start_network(
     // Create network config
     let config = NetworkConfig::default();
 
-    // Create network service
+    // Create network service - clone the Arc to pass to the service
+    let identity_arc: Arc<IdentityService> = (*identity_service).clone();
     let (service, handle, mut event_rx) = NetworkService::new(
         config,
-        identity_service.inner().clone(),
+        identity_arc,
         keypair,
     )?;
 

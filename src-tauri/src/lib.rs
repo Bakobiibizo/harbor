@@ -25,6 +25,11 @@ fn init_logging() {
         .init();
 }
 
+/// Get the profile name from environment variable (for multi-instance support)
+fn get_profile_name() -> Option<String> {
+    std::env::var("HARBOR_PROFILE").ok().filter(|s| !s.is_empty())
+}
+
 /// Get the database path for the application
 fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
     let app_data = app
@@ -32,17 +37,39 @@ fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
         .app_data_dir()
         .expect("Failed to get app data directory");
 
-    app_data.join("harbor.db")
+    // If a profile is specified, use a subdirectory for that profile
+    let base_dir = if let Some(profile) = get_profile_name() {
+        app_data.join(format!("profile-{}", profile))
+    } else {
+        app_data
+    };
+
+    // Ensure the directory exists
+    std::fs::create_dir_all(&base_dir).expect("Failed to create data directory");
+
+    base_dir.join("harbor.db")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_logging();
-    info!("Starting Harbor...");
+
+    let profile = get_profile_name();
+    if let Some(ref p) = profile {
+        info!("Starting Harbor with profile: {}", p);
+    } else {
+        info!("Starting Harbor...");
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
+            // Update window title if running with a profile
+            if let Some(ref profile_name) = profile {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title(&format!("Harbor - {}", profile_name));
+                }
+            }
             // Initialize database
             let db_path = get_db_path(&app.handle());
             info!("Database path: {:?}", db_path);

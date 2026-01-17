@@ -89,7 +89,8 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const peers = await networkService.getConnectedPeers();
       set({ connectedPeers: peers });
     } catch (error) {
-      set({ error: String(error) });
+      // Don't show error for refresh failures - just log it
+      console.error("Failed to refresh peers:", error);
     }
   },
 
@@ -99,7 +100,8 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const stats = await networkService.getNetworkStats();
       set({ stats });
     } catch (error) {
-      set({ error: String(error) });
+      // Don't show error for refresh failures - just log it
+      console.error("Failed to refresh stats:", error);
     }
   },
 }));

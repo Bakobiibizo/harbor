@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { useIdentityStore, useNetworkStore } from "../stores";
 import {
   NetworkIcon,
@@ -9,6 +10,58 @@ import {
   CheckIcon,
   XIcon,
 } from "../components/icons";
+
+// Adjectives and animals for generating human-friendly peer names
+const ADJECTIVES = [
+  "Swift", "Brave", "Calm", "Clever", "Eager", "Gentle", "Happy", "Jolly",
+  "Kind", "Lively", "Merry", "Noble", "Proud", "Quick", "Quiet", "Sleek",
+  "Smart", "Sunny", "Warm", "Wise", "Bold", "Bright", "Cool", "Crisp",
+  "Dapper", "Fresh", "Grand", "Lucky", "Neat", "Sharp", "Vivid", "Witty"
+];
+
+const ANIMALS = [
+  "Falcon", "Wolf", "Bear", "Eagle", "Hawk", "Lion", "Tiger", "Otter",
+  "Fox", "Deer", "Owl", "Raven", "Swan", "Crane", "Heron", "Panda",
+  "Koala", "Dolphin", "Whale", "Seal", "Lynx", "Badger", "Hare", "Finch",
+  "Robin", "Sparrow", "Jay", "Wren", "Lark", "Dove", "Elk", "Moose"
+];
+
+// Generate a consistent human-friendly name from a peer ID
+function getPeerFriendlyName(peerId: string): string {
+  // Use the peer ID to generate consistent indices
+  let hash = 0;
+  for (let i = 0; i < peerId.length; i++) {
+    const char = peerId.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+
+  const adjIndex = Math.abs(hash) % ADJECTIVES.length;
+  const animalIndex = Math.abs(hash >> 8) % ANIMALS.length;
+
+  return `${ADJECTIVES[adjIndex]} ${ANIMALS[animalIndex]}`;
+}
+
+// Generate consistent avatar color from peer ID
+function getPeerColor(peerId: string): string {
+  const colors = [
+    "linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))",
+    "linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))",
+    "linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))",
+    "linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))",
+    "linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))",
+    "linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))",
+    "linear-gradient(135deg, hsl(280 70% 50%), hsl(320 75% 55%))",
+    "linear-gradient(135deg, hsl(170 65% 45%), hsl(200 70% 50%))",
+  ];
+
+  let hash = 0;
+  for (let i = 0; i < peerId.length; i++) {
+    hash = peerId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+
+  return colors[Math.abs(hash) % colors.length];
+}
 
 export function NetworkPage() {
   const { state } = useIdentityStore();
@@ -47,15 +100,19 @@ export function NetworkPage() {
   }, [isRunning, checkStatus, refreshPeers, refreshStats]);
 
   const formatBytes = (bytes: number) => {
+    // Handle NaN, undefined, or null
+    if (!bytes || isNaN(bytes)) return "0 B";
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const formatUptime = (seconds: number) => {
+    // Handle NaN, undefined, or null
+    if (!seconds || isNaN(seconds)) return "0s";
     const hours = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
+    const secs = Math.floor(seconds % 60);
     if (hours > 0) return `${hours}h ${mins}m`;
     if (mins > 0) return `${mins}m ${secs}s`;
     return `${secs}s`;
@@ -70,13 +127,15 @@ export function NetworkPage() {
       .slice(0, 2);
   };
 
-  const filteredPeers = connectedPeers.filter(
-    (peer) =>
-      peer.peerId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      peer.addresses.some((addr) =>
-        addr.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-  );
+  const filteredPeers = connectedPeers.filter((peer) => {
+    const query = searchQuery.toLowerCase();
+    const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
+    return (
+      friendlyName.includes(query) ||
+      peer.peerId.toLowerCase().includes(query) ||
+      peer.addresses.some((addr) => addr.toLowerCase().includes(query))
+    );
+  });
 
   return (
     <div
@@ -203,7 +262,7 @@ export function NetworkPage() {
                     className="text-lg font-semibold"
                     style={{ color: "hsl(var(--harbor-text-primary))" }}
                   >
-                    P2P Network
+                    Peer-to-Peer Network
                   </h3>
                   <div
                     className="px-2 py-0.5 rounded-full text-xs font-medium"
@@ -383,7 +442,10 @@ export function NetworkPage() {
                     background: "hsl(var(--harbor-surface-1))",
                   }}
                   title="Copy Peer ID"
-                  onClick={() => navigator.clipboard.writeText(identity.peerId)}
+                  onClick={() => {
+                    navigator.clipboard.writeText(identity.peerId);
+                    toast.success("Peer ID copied to clipboard!");
+                  }}
                 >
                   <svg
                     className="w-5 h-5"
@@ -546,76 +608,84 @@ export function NetworkPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {filteredPeers.map((peer) => (
-                    <div
-                      key={peer.peerId}
-                      className="flex items-center gap-4 p-3 rounded-xl transition-all duration-200"
-                      style={{
-                        background: "hsl(var(--harbor-surface-1))",
-                      }}
-                    >
-                      {/* Avatar */}
+                  {filteredPeers.map((peer) => {
+                    const friendlyName = getPeerFriendlyName(peer.peerId);
+                    const avatarColor = getPeerColor(peer.peerId);
+                    const initials = friendlyName
+                      .split(" ")
+                      .map((w) => w[0])
+                      .join("");
+
+                    return (
                       <div
-                        className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0"
+                        key={peer.peerId}
+                        className="flex items-center gap-4 p-3 rounded-xl transition-all duration-200"
                         style={{
-                          background: "hsl(var(--harbor-surface-2))",
-                          color: "hsl(var(--harbor-text-secondary))",
+                          background: "hsl(var(--harbor-surface-1))",
                         }}
                       >
-                        {peer.peerId.slice(0, 2).toUpperCase()}
-                      </div>
-
-                      {/* Info */}
-                      <div className="flex-1 min-w-0">
-                        <p
-                          className="font-mono text-sm truncate"
-                          style={{ color: "hsl(var(--harbor-text-primary))" }}
-                        >
-                          {peer.peerId.slice(0, 20)}...
-                        </p>
-                        <p
-                          className="text-xs truncate"
-                          style={{ color: "hsl(var(--harbor-text-tertiary))" }}
-                        >
-                          {peer.addresses.length > 0
-                            ? peer.addresses[0]
-                            : "No address"}
-                        </p>
-                      </div>
-
-                      {/* Status */}
-                      <div className="flex items-center gap-2">
+                        {/* Avatar with color gradient */}
                         <div
-                          className={`w-2 h-2 rounded-full ${
-                            peer.isConnected ? "animate-pulse" : ""
-                          }`}
+                          className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                           style={{
-                            background: peer.isConnected
-                              ? "hsl(var(--harbor-success))"
-                              : "hsl(var(--harbor-text-tertiary))",
+                            background: avatarColor,
                           }}
-                        />
-                        <span
-                          className="text-xs"
-                          style={{ color: "hsl(var(--harbor-text-tertiary))" }}
                         >
-                          {peer.isConnected ? "Connected" : "Disconnected"}
-                        </span>
-                      </div>
+                          {initials}
+                        </div>
 
-                      {/* Actions */}
-                      <button
-                        className="p-2 rounded-lg transition-colors duration-200"
-                        style={{
-                          background: "hsl(var(--harbor-success) / 0.15)",
-                          color: "hsl(var(--harbor-success))",
-                        }}
-                        title="Add to contacts"
-                      >
-                        <CheckIcon className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                        {/* Info - friendly name prominently, peer ID small */}
+                        <div className="flex-1 min-w-0">
+                          <p
+                            className="font-medium text-sm"
+                            style={{ color: "hsl(var(--harbor-text-primary))" }}
+                          >
+                            {friendlyName}
+                          </p>
+                          <p
+                            className="text-xs font-mono truncate"
+                            style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+                            title={peer.peerId}
+                          >
+                            {peer.peerId.slice(0, 12)}...{peer.peerId.slice(-6)}
+                          </p>
+                        </div>
+
+                        {/* Status */}
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-2 h-2 rounded-full ${
+                              peer.isConnected ? "animate-pulse" : ""
+                            }`}
+                            style={{
+                              background: peer.isConnected
+                                ? "hsl(var(--harbor-success))"
+                                : "hsl(var(--harbor-text-tertiary))",
+                            }}
+                          />
+                          <span
+                            className="text-xs"
+                            style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+                          >
+                            {peer.isConnected ? "Connected" : "Disconnected"}
+                          </span>
+                        </div>
+
+                        {/* Actions */}
+                        <button
+                          className="p-2 rounded-lg transition-colors duration-200"
+                          style={{
+                            background: "hsl(var(--harbor-success) / 0.15)",
+                            color: "hsl(var(--harbor-success))",
+                          }}
+                          title={`Add ${friendlyName} to contacts`}
+                          onClick={() => toast.success(`${friendlyName} added to contacts!`)}
+                        >
+                          <CheckIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

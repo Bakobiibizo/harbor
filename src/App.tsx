@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "react-hot-toast";
 import { useIdentityStore } from "./stores";
 import { MainLayout } from "./components/layout";
 import { CreateIdentity, UnlockIdentity } from "./components/onboarding";
@@ -125,6 +126,33 @@ export default function App() {
   return (
     <BrowserRouter>
       <AppContent />
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: "hsl(222 41% 13%)",
+            color: "hsl(220 14% 96%)",
+            border: "1px solid hsl(222 30% 22%)",
+            borderRadius: "12px",
+            padding: "12px 16px",
+            fontSize: "14px",
+            boxShadow: "0 10px 40px rgba(0, 0, 0, 0.4)",
+          },
+          success: {
+            iconTheme: {
+              primary: "hsl(152 69% 40%)",
+              secondary: "white",
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: "hsl(0 84% 60%)",
+              secondary: "white",
+            },
+          },
+        }}
+      />
     </BrowserRouter>
   );
 }

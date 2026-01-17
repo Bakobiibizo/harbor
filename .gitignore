@@ -28,6 +28,9 @@ src-tauri/target/
 src-tauri/WixTools/
 src-tauri/*.pdb
 
+# Mock peer build artifacts
+mock-peer/target/
+
 # Database files (local data)
 *.db
 *.sqlite

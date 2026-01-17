@@ -12,6 +12,7 @@ pub enum ConnectionStatus {
 
 /// Information about a discovered or connected peer
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerInfo {
     pub peer_id: String,
     pub addresses: Vec<String>,
@@ -23,6 +24,7 @@ pub struct PeerInfo {
 
 /// Network statistics
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkStats {
     pub connected_peers: usize,
     pub total_bytes_in: u64,
