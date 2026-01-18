@@ -1,7 +1,7 @@
 import { useEffect, Component, type ReactNode } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
-import { useIdentityStore, useNetworkStore } from "./stores";
+import { useIdentityStore, useNetworkStore, useSettingsStore } from "./stores";
 import { useTauriEvents } from "./hooks";
 import { MainLayout } from "./components/layout";
 import { CreateIdentity, UnlockIdentity } from "./components/onboarding";
@@ -157,7 +157,8 @@ function LoadingScreen() {
 
 function AppContent() {
   const { state, initialize } = useIdentityStore();
-  const { checkStatus } = useNetworkStore();
+  const { checkStatus, startNetwork } = useNetworkStore();
+  const { autoStartNetwork } = useSettingsStore();
 
   // Set up Tauri event listeners for real-time updates from backend
   useTauriEvents();
@@ -166,12 +167,19 @@ function AppContent() {
     initialize();
   }, [initialize]);
 
-  // Check network status when identity is unlocked
+  // Auto-start network when identity is unlocked (if enabled in settings)
   useEffect(() => {
     if (state.status === "unlocked") {
-      checkStatus();
+      checkStatus().then(() => {
+        // Only auto-start if setting is enabled and network isn't already running
+        const networkState = useNetworkStore.getState();
+        if (autoStartNetwork && !networkState.isRunning) {
+          console.log("[Harbor] Auto-starting network...");
+          startNetwork();
+        }
+      });
     }
-  }, [state.status, checkStatus]);
+  }, [state.status, checkStatus, autoStartNetwork, startNetwork]);
 
   // Loading state
   if (state.status === "loading") {
