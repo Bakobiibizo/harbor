@@ -32,7 +32,7 @@ impl Default for NetworkConfig {
             enable_mdns: true,
             enable_dht: true,
             bootstrap_nodes: Vec::new(),
-            idle_connection_timeout: Duration::from_secs(60),
+            idle_connection_timeout: Duration::from_secs(86400), // 24 hours - chat apps stay connected
             enable_relay_client: true,
             enable_dcutr: true,
             enable_autonat: true,

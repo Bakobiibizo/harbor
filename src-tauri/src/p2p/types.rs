@@ -56,6 +56,11 @@ pub enum NetworkEvent {
     },
     /// Network status changed
     StatusChanged { status: ConnectionStatus },
+    /// A contact was added via identity exchange
+    ContactAdded {
+        peer_id: String,
+        display_name: String,
+    },
 }
 
 /// Commands that can be sent to the network service

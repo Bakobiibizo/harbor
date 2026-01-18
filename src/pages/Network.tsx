@@ -82,6 +82,9 @@ export function NetworkPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"peers" | "contacts">("peers");
+  const [showAddContactModal, setShowAddContactModal] = useState(false);
+  const [manualPeerId, setManualPeerId] = useState("");
+  const [isAddingContact, setIsAddingContact] = useState(false);
 
   const identity = state.status === "unlocked" ? state.identity : null;
 
@@ -137,6 +140,33 @@ export function NetworkPage() {
       peer.addresses.some((addr) => addr.toLowerCase().includes(query))
     );
   });
+
+  // Handle adding a contact by peer ID
+  const handleAddContactByPeerId = async () => {
+    if (!manualPeerId.trim()) {
+      toast.error("Please enter a Peer ID");
+      return;
+    }
+
+    // Basic validation: libp2p peer IDs typically start with "12D3KooW" and are ~52 chars
+    if (!manualPeerId.startsWith("12D3KooW") || manualPeerId.length < 50) {
+      toast.error("Invalid Peer ID format. It should start with '12D3KooW' and be about 52 characters.");
+      return;
+    }
+
+    setIsAddingContact(true);
+    try {
+      await contactsService.requestPeerIdentity(manualPeerId.trim());
+      toast.success("Identity request sent! Contact will be added when they respond.");
+      setShowAddContactModal(false);
+      setManualPeerId("");
+    } catch (err) {
+      console.error("Failed to request identity:", err);
+      toast.error(`Failed to add contact: ${err}`);
+    } finally {
+      setIsAddingContact(false);
+    }
+  };
 
   return (
     <div
@@ -549,7 +579,8 @@ export function NetworkPage() {
                     "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
                   color: "white",
                 }}
-                title="Add contact"
+                title="Add contact by Peer ID"
+                onClick={() => setShowAddContactModal(true)}
               >
                 <PlusIcon className="w-5 h-5" />
               </button>
@@ -700,6 +731,117 @@ export function NetworkPage() {
           </div>
         </div>
       </div>
+
+      {/* Add Contact by Peer ID Modal */}
+      {showAddContactModal && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          style={{ background: "rgba(0, 0, 0, 0.6)" }}
+          onClick={() => setShowAddContactModal(false)}
+        >
+          <div
+            className="rounded-xl p-6 max-w-md w-full mx-4"
+            style={{ background: "hsl(var(--harbor-bg-elevated))" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2
+                className="text-lg font-semibold"
+                style={{ color: "hsl(var(--harbor-text-primary))" }}
+              >
+                Add Contact by Peer ID
+              </h2>
+              <button
+                onClick={() => setShowAddContactModal(false)}
+                className="p-1 rounded-lg hover:bg-white/10"
+              >
+                <XIcon className="w-5 h-5" style={{ color: "hsl(var(--harbor-text-secondary))" }} />
+              </button>
+            </div>
+
+            <p
+              className="text-sm mb-4"
+              style={{ color: "hsl(var(--harbor-text-secondary))" }}
+            >
+              Enter the Peer ID of the person you want to add. You can find your own Peer ID in Settings.
+            </p>
+
+            {/* Show own Peer ID for easy sharing */}
+            {identity && (
+              <div
+                className="mb-4 p-3 rounded-lg"
+                style={{ background: "hsl(var(--harbor-surface-1))" }}
+              >
+                <label
+                  className="text-xs font-medium block mb-1"
+                  style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+                >
+                  Your Peer ID (share this with others)
+                </label>
+                <div className="flex items-center gap-2">
+                  <code
+                    className="text-xs flex-1 break-all"
+                    style={{ color: "hsl(var(--harbor-primary))" }}
+                  >
+                    {identity.peerId}
+                  </code>
+                  <button
+                    className="p-1 rounded hover:bg-white/10"
+                    onClick={() => {
+                      navigator.clipboard.writeText(identity.peerId);
+                      toast.success("Peer ID copied!");
+                    }}
+                    title="Copy Peer ID"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "hsl(var(--harbor-text-secondary))" }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <input
+              type="text"
+              value={manualPeerId}
+              onChange={(e) => setManualPeerId(e.target.value)}
+              placeholder="Enter Peer ID (starts with 12D3KooW...)"
+              className="w-full p-3 rounded-lg text-sm mb-4"
+              style={{
+                background: "hsl(var(--harbor-surface-1))",
+                border: "1px solid hsl(var(--harbor-border-subtle))",
+                color: "hsl(var(--harbor-text-primary))",
+              }}
+              disabled={isAddingContact}
+            />
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowAddContactModal(false)}
+                className="flex-1 px-4 py-2 rounded-lg font-medium transition-colors"
+                style={{
+                  background: "hsl(var(--harbor-surface-1))",
+                  color: "hsl(var(--harbor-text-primary))",
+                }}
+                disabled={isAddingContact}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddContactByPeerId}
+                disabled={isAddingContact || !manualPeerId.trim()}
+                className="flex-1 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                style={{
+                  background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
+                  color: "white",
+                }}
+              >
+                {isAddingContact ? "Adding..." : "Add Contact"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

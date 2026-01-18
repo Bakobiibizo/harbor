@@ -130,6 +130,13 @@ impl MessagingService {
         let timestamp = chrono::Utc::now().timestamp();
 
         // Create signable and sign
+        tracing::info!(
+            "MESSAGE SEND - sender_peer_id: {} (len={}), recipient_peer_id: {} (len={})",
+            identity.peer_id,
+            identity.peer_id.len(),
+            recipient_peer_id,
+            recipient_peer_id.len()
+        );
         let signable = SignableDirectMessage {
             message_id: message_id.clone(),
             conversation_id: conversation_id.clone(),
@@ -215,7 +222,20 @@ impl MessagingService {
         let identity = self.identity_service.get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
+        tracing::info!(
+            "MESSAGE RECEIVE - recipient in msg: {} (len={}) vs our identity: {} (len={})",
+            recipient_peer_id,
+            recipient_peer_id.len(),
+            identity.peer_id,
+            identity.peer_id.len()
+        );
+
         if recipient_peer_id != identity.peer_id {
+            tracing::error!(
+                "MESSAGE REJECTED - peer ID mismatch. Message for {} but we are {}",
+                recipient_peer_id,
+                identity.peer_id
+            );
             return Err(AppError::Validation("Message not for us".to_string()));
         }
 
@@ -227,8 +247,18 @@ impl MessagingService {
         }
 
         // Get sender's public key for verification
+        tracing::info!(
+            "Looking up sender {} in contacts",
+            sender_peer_id
+        );
         let sender_public_key = self.contacts_service.get_public_key(sender_peer_id)?
-            .ok_or_else(|| AppError::NotFound("Sender not in contacts".to_string()))?;
+            .ok_or_else(|| {
+                tracing::error!(
+                    "CONTACT LOOKUP FAILED - sender_peer_id {} not found in contacts",
+                    sender_peer_id
+                );
+                AppError::NotFound("Sender not in contacts".to_string())
+            })?;
 
         // Verify signature
         let signable = SignableDirectMessage {

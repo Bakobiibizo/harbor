@@ -9,7 +9,7 @@ import {
   PhoneIcon,
   EllipsisIcon,
 } from "../components/icons";
-import { useMockPeersStore } from "../stores";
+import { useMockPeersStore, useContactsStore, useMessagingStore } from "../stores";
 
 // Back arrow icon
 function BackIcon({ className }: { className?: string }) {
@@ -20,24 +20,135 @@ function BackIcon({ className }: { className?: string }) {
   );
 }
 
+// Unified conversation type for both real and mock
+interface UnifiedConversation {
+  id: string;
+  peerId: string;
+  name: string;
+  online: boolean;
+  avatarGradient: string;
+  lastMessage: string;
+  timestamp: Date;
+  unread: number;
+  isReal: boolean; // true = real contact, false = mock
+}
+
+// Generate consistent avatar color from peer ID
+function getContactColor(peerId: string): string {
+  const colors = [
+    "linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))",
+    "linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))",
+    "linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))",
+    "linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))",
+    "linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))",
+    "linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))",
+  ];
+  let hash = 0;
+  for (let i = 0; i < peerId.length; i++) {
+    hash = peerId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
 export function ChatPage() {
   const navigate = useNavigate();
-  const { conversations, sendMessage } = useMockPeersStore();
+
+  // Mock peers store (for demo contacts)
+  const { conversations: mockConversations, sendMessage: sendMockMessage } = useMockPeersStore();
+
+  // Real contacts and messaging
+  const { contacts, loadContacts } = useContactsStore();
+  const {
+    conversations: realConversations,
+    messages: realMessages,
+    loadConversations,
+    loadMessages,
+    sendMessage: sendRealMessage,
+    setActiveConversation
+  } = useMessagingStore();
+
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
+
+  // Keep the store's activeConversation in sync with local selectedConversation
+  // This is needed for the event handler to know which conversation to refresh
+  useEffect(() => {
+    // Find if selected conversation is a real contact
+    const isReal = selectedConversation?.startsWith("real-");
+    if (isReal && selectedConversation) {
+      const peerId = selectedConversation.replace("real-", "");
+      setActiveConversation(peerId);
+    } else {
+      setActiveConversation(null);
+    }
+  }, [selectedConversation, setActiveConversation]);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [messageInput, setMessageInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Load real contacts and conversations on mount
+  useEffect(() => {
+    loadContacts();
+    loadConversations();
+  }, [loadContacts, loadConversations]);
+
+  // Build unified conversation list
+  const unifiedConversations: UnifiedConversation[] = [
+    // Real contacts (with or without conversations)
+    ...contacts.map((contact): UnifiedConversation => {
+      const realConv = realConversations.find(c => c.peerId === contact.peerId);
+      return {
+        id: `real-${contact.peerId}`,
+        peerId: contact.peerId,
+        name: contact.displayName,
+        online: true, // Assume online for now - would need presence tracking
+        avatarGradient: getContactColor(contact.peerId),
+        lastMessage: realConv ? "Tap to view messages" : "Start a conversation",
+        timestamp: realConv ? new Date(realConv.lastMessageAt * 1000) : new Date(contact.addedAt * 1000),
+        unread: realConv?.unreadCount || 0,
+        isReal: true,
+      };
+    }),
+    // Mock conversations
+    ...mockConversations.map((conv): UnifiedConversation => ({
+      id: conv.id,
+      peerId: conv.peerId,
+      name: conv.name,
+      online: conv.online,
+      avatarGradient: conv.avatarGradient,
+      lastMessage: conv.lastMessage,
+      timestamp: conv.timestamp,
+      unread: conv.unread,
+      isReal: false,
+    })),
+  ];
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Get selected conversation from unified list
+  const selectedConv = unifiedConversations.find((c) => c.id === selectedConversation);
+
+  // Get messages for current conversation
+  const currentMessages = selectedConv
+    ? selectedConv.isReal
+      ? realMessages[selectedConv.peerId] || []
+      : mockConversations.find((c) => c.id === selectedConversation)?.messages || []
+    : [];
+
+  // Load messages when selecting a real conversation
+  useEffect(() => {
+    if (selectedConv?.isReal) {
+      loadMessages(selectedConv.peerId);
+    }
+  }, [selectedConv?.peerId, selectedConv?.isReal, loadMessages]);
+
   // Scroll to bottom when messages change
-  const selectedConv = conversations.find((c) => c.id === selectedConversation);
   useEffect(() => {
     scrollToBottom();
-  }, [selectedConv?.messages.length]);
+  }, [currentMessages.length]);
 
   const formatTime = (date: Date) => {
     const now = new Date();
@@ -61,17 +172,31 @@ export function ChatPage() {
       .slice(0, 2);
   };
 
-  const filteredConversations = conversations.filter((c) =>
+  const filteredConversations = unifiedConversations.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleSendMessage = () => {
-    if (!messageInput.trim() || !selectedConversation) return;
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || !selectedConversation || !selectedConv) return;
 
-    // Send message through the store (this will trigger auto-reply for online peers)
-    sendMessage(selectedConversation, messageInput.trim());
+    const content = messageInput.trim();
     setMessageInput("");
     inputRef.current?.focus();
+
+    if (selectedConv.isReal) {
+      // Send via real P2P messaging
+      try {
+        await sendRealMessage(selectedConv.peerId, content);
+        // Reload messages to show the sent message
+        loadMessages(selectedConv.peerId);
+      } catch (error) {
+        console.error("Failed to send message:", error);
+        toast.error("Failed to send message");
+      }
+    } else {
+      // Send via mock store (triggers auto-reply for online peers)
+      sendMockMessage(selectedConversation, content);
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -220,12 +345,35 @@ export function ChatPage() {
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-0.5">
-                      <p
-                        className="font-semibold text-sm truncate"
-                        style={{ color: "hsl(var(--harbor-text-primary))" }}
-                      >
-                        {conversation.name}
-                      </p>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <p
+                          className="font-semibold text-sm truncate"
+                          style={{ color: "hsl(var(--harbor-text-primary))" }}
+                        >
+                          {conversation.name}
+                        </p>
+                        {conversation.isReal ? (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={{
+                              background: "hsl(var(--harbor-success) / 0.15)",
+                              color: "hsl(var(--harbor-success))",
+                            }}
+                          >
+                            P2P
+                          </span>
+                        ) : (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={{
+                              background: "hsl(var(--harbor-text-tertiary) / 0.15)",
+                              color: "hsl(var(--harbor-text-tertiary))",
+                            }}
+                          >
+                            Demo
+                          </span>
+                        )}
+                      </div>
                       <span
                         className="text-xs flex-shrink-0 ml-2"
                         style={{ color: "hsl(var(--harbor-text-tertiary))" }}
@@ -318,7 +466,9 @@ export function ChatPage() {
                   : "hsl(var(--harbor-text-tertiary))",
               }}
             >
-              {selectedConv!.online ? "Online - will reply automatically" : "Offline"}
+              {selectedConv!.isReal
+                ? (selectedConv!.online ? "Online" : "Offline")
+                : (selectedConv!.online ? "Online - will reply automatically" : "Offline")}
             </p>
           </div>
         </div>
@@ -350,39 +500,49 @@ export function ChatPage() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-3xl mx-auto space-y-3">
-          {selectedConv!.messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.isMine ? "justify-end" : "justify-start"}`}
-            >
+          {currentMessages.map((message) => {
+            // Handle both real messages (Message type) and mock messages (MockMessage type)
+            const isMine = 'isMine' in message ? message.isMine : message.isOutgoing;
+            const timestamp = 'timestamp' in message && message.timestamp instanceof Date
+              ? message.timestamp
+              : new Date(('sentAt' in message ? message.sentAt : 0) * 1000);
+            const content = message.content;
+            const id = 'id' in message ? message.id : message.messageId;
+
+            return (
               <div
-                className="max-w-[75%] px-4 py-2.5 rounded-2xl"
-                style={{
-                  background: message.isMine
-                    ? "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))"
-                    : "hsl(var(--harbor-surface-1))",
-                  color: message.isMine ? "white" : "hsl(var(--harbor-text-primary))",
-                  borderBottomRightRadius: message.isMine ? "4px" : "16px",
-                  borderBottomLeftRadius: message.isMine ? "16px" : "4px",
-                }}
+                key={id}
+                className={`flex ${isMine ? "justify-end" : "justify-start"}`}
               >
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                <p
-                  className="text-xs mt-1 text-right"
+                <div
+                  className="max-w-[75%] px-4 py-2.5 rounded-2xl"
                   style={{
-                    color: message.isMine
-                      ? "rgba(255,255,255,0.7)"
-                      : "hsl(var(--harbor-text-tertiary))",
+                    background: isMine
+                      ? "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))"
+                      : "hsl(var(--harbor-surface-1))",
+                    color: isMine ? "white" : "hsl(var(--harbor-text-primary))",
+                    borderBottomRightRadius: isMine ? "4px" : "16px",
+                    borderBottomLeftRadius: isMine ? "16px" : "4px",
                   }}
                 >
-                  {message.timestamp.toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </p>
+                  <p className="text-sm whitespace-pre-wrap">{content}</p>
+                  <p
+                    className="text-xs mt-1 text-right"
+                    style={{
+                      color: isMine
+                        ? "rgba(255,255,255,0.7)"
+                        : "hsl(var(--harbor-text-tertiary))",
+                    }}
+                  >
+                    {timestamp.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -431,7 +591,9 @@ export function ChatPage() {
           className="text-xs mt-2 text-center"
           style={{ color: "hsl(var(--harbor-text-tertiary))" }}
         >
-          Press Enter to send • {selectedConv?.online ? "Online peers will reply automatically" : "This peer is offline"}
+          Press Enter to send • {selectedConv?.isReal
+            ? "End-to-end encrypted"
+            : (selectedConv?.online ? "Demo mode - auto replies enabled" : "Demo peer is offline")}
         </p>
       </div>
     </div>

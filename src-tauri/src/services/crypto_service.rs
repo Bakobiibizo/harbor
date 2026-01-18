@@ -29,15 +29,28 @@ impl CryptoService {
         (secret, public)
     }
 
-    /// Derive a peer ID from an Ed25519 public key
-    /// Uses a simple hash-based approach compatible with libp2p
+    /// Derive a peer ID from an Ed25519 signing key
+    /// Uses libp2p's actual PeerId derivation for compatibility with the network layer
+    pub fn derive_peer_id_from_signing_key(signing_key: &SigningKey) -> String {
+        // Convert our ed25519_dalek SigningKey to libp2p's format
+        let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(signing_key.to_bytes().to_vec())
+            .expect("Valid Ed25519 key");
+        let libp2p_keypair = libp2p::identity::ed25519::Keypair::from(secret);
+        let libp2p_keypair = libp2p::identity::Keypair::from(libp2p_keypair);
+        let peer_id = libp2p::PeerId::from(libp2p_keypair.public());
+        peer_id.to_string()
+    }
+
+    /// Derive a peer ID from an Ed25519 public key (DEPRECATED - use derive_peer_id_from_signing_key)
+    /// This uses a simplified hash-based approach that is NOT compatible with libp2p
+    #[deprecated(note = "Use derive_peer_id_from_signing_key instead for libp2p compatibility")]
     pub fn derive_peer_id(public_key: &VerifyingKey) -> String {
         let mut hasher = Sha256::new();
         hasher.update(public_key.as_bytes());
         let hash = hasher.finalize();
 
         // Format as base58-like string with "12D3KooW" prefix (simplified)
-        // In production, this should match libp2p's PeerId derivation
+        // WARNING: This is NOT the same as libp2p's PeerId format!
         format!("12D3KooW{}", hex::encode(&hash[..16]))
     }
 
@@ -401,7 +414,43 @@ mod tests {
     }
 
     #[test]
-    fn test_peer_id_derivation() {
+    fn test_peer_id_derivation_libp2p() {
+        let (signing_key, _) = CryptoService::generate_ed25519_keypair();
+        let peer_id = CryptoService::derive_peer_id_from_signing_key(&signing_key);
+
+        // libp2p peer IDs start with "12D3KooW" and are longer (base58 encoded)
+        assert!(peer_id.starts_with("12D3KooW"));
+        // Full libp2p peer ID is typically 52 characters
+        assert!(peer_id.len() >= 50, "Peer ID should be a full libp2p PeerId: {}", peer_id);
+    }
+
+    #[test]
+    fn test_peer_id_matches_network_keypair() {
+        // This test verifies that derive_peer_id_from_signing_key produces the same
+        // peer ID as the network layer would when using ed25519_to_libp2p_keypair
+        let (signing_key, _) = CryptoService::generate_ed25519_keypair();
+
+        // Method 1: Our derive_peer_id_from_signing_key function
+        let derived_peer_id = CryptoService::derive_peer_id_from_signing_key(&signing_key);
+
+        // Method 2: The same way the network layer derives it
+        let bytes = signing_key.to_bytes();
+        let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(bytes.to_vec())
+            .expect("Valid Ed25519 key");
+        let keypair = libp2p::identity::ed25519::Keypair::from(secret);
+        let libp2p_keypair = libp2p::identity::Keypair::from(keypair);
+        let network_peer_id = libp2p::PeerId::from(libp2p_keypair.public()).to_string();
+
+        assert_eq!(
+            derived_peer_id, network_peer_id,
+            "Peer ID mismatch! Identity service: {} vs Network: {}",
+            derived_peer_id, network_peer_id
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_peer_id_derivation_legacy() {
         let (_, verifying_key) = CryptoService::generate_ed25519_keypair();
         let peer_id = CryptoService::derive_peer_id(&verifying_key);
 

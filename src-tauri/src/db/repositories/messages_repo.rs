@@ -163,22 +163,28 @@ impl MessagesRepository {
         before_timestamp: Option<i64>,
     ) -> SqliteResult<Vec<Message>> {
         db.with_connection(|conn| {
+            // For pagination, we need to get the N most recent messages, then sort them ASC for display
+            // When paginating (before_timestamp provided), get messages before that time
             let query = if before_timestamp.is_some() {
                 "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                         content_encrypted, content_type, reply_to_message_id, nonce_counter,
                         lamport_clock, sent_at, received_at, delivered_at, read_at, status
-                 FROM messages
-                 WHERE conversation_id = ? AND sent_at < ?
-                 ORDER BY sent_at DESC
-                 LIMIT ?"
+                 FROM (
+                   SELECT * FROM messages
+                   WHERE conversation_id = ? AND sent_at < ?
+                   ORDER BY sent_at DESC
+                   LIMIT ?
+                 ) ORDER BY sent_at ASC"
             } else {
                 "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                         content_encrypted, content_type, reply_to_message_id, nonce_counter,
                         lamport_clock, sent_at, received_at, delivered_at, read_at, status
-                 FROM messages
-                 WHERE conversation_id = ?
-                 ORDER BY sent_at DESC
-                 LIMIT ?"
+                 FROM (
+                   SELECT * FROM messages
+                   WHERE conversation_id = ?
+                   ORDER BY sent_at DESC
+                   LIMIT ?
+                 ) ORDER BY sent_at ASC"
             };
 
             let mut stmt = conn.prepare(query)?;

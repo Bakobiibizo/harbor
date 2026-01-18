@@ -1,14 +1,102 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import toast from "react-hot-toast";
 import { FeedIcon, EllipsisIcon } from "../components/icons";
-import { useMockPeersStore } from "../stores";
+import { useMockPeersStore, useFeedStore, useContactsStore } from "../stores";
+import type { FeedItem } from "../types";
+
+// Unified post type for both real and mock posts
+interface UnifiedPost {
+  id: string;
+  content: string;
+  timestamp: Date;
+  likes: number;
+  comments: number;
+  likedByUser: boolean;
+  author: {
+    peerId: string;
+    name: string;
+    avatarGradient: string;
+  };
+  isReal: boolean;
+}
+
+// Generate consistent avatar color from peer ID
+function getContactColor(peerId: string): string {
+  const colors = [
+    "linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))",
+    "linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))",
+    "linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))",
+    "linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))",
+    "linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))",
+    "linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))",
+  ];
+  let hash = 0;
+  for (let i = 0; i < peerId.length; i++) {
+    hash = peerId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
 
 export function FeedPage() {
   const { getAllFeedPosts, likePost, toggleSavePost, isPostSaved, peers } = useMockPeersStore();
+  const { feedItems, loadFeed, refreshFeed } = useFeedStore();
+  const { contacts, loadContacts } = useContactsStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Get all feed posts from mock peers, sorted chronologically
-  const posts = useMemo(() => getAllFeedPosts(), [peers]);
+  // Load real feed and contacts on mount
+  useEffect(() => {
+    loadFeed();
+    loadContacts();
+  }, [loadFeed, loadContacts]);
+
+  // Get mock feed posts
+  const mockPosts = useMemo(() => getAllFeedPosts(), [peers]);
+
+  // Convert real feed items to unified format
+  const realPosts: UnifiedPost[] = useMemo(() => {
+    return feedItems.map((item: FeedItem): UnifiedPost => {
+      const contact = contacts.find(c => c.peerId === item.authorPeerId);
+      return {
+        id: `real-${item.postId}`,
+        content: item.contentText || "",
+        timestamp: new Date(item.createdAt * 1000),
+        likes: 0, // Real posts don't have like counts yet
+        comments: 0,
+        likedByUser: false,
+        author: {
+          peerId: item.authorPeerId,
+          name: item.authorDisplayName || contact?.displayName || "Unknown",
+          avatarGradient: getContactColor(item.authorPeerId),
+        },
+        isReal: true,
+      };
+    });
+  }, [feedItems, contacts]);
+
+  // Convert mock posts to unified format
+  const mockUnifiedPosts: UnifiedPost[] = useMemo(() => {
+    return mockPosts.map((post): UnifiedPost => ({
+      id: post.id,
+      content: post.content,
+      timestamp: post.timestamp,
+      likes: post.likes,
+      comments: post.comments,
+      likedByUser: post.likedByUser,
+      author: {
+        peerId: post.author.peerId,
+        name: post.author.name,
+        avatarGradient: post.author.avatarGradient,
+      },
+      isReal: false,
+    }));
+  }, [mockPosts]);
+
+  // Combine and sort all posts by timestamp (newest first)
+  const posts: UnifiedPost[] = useMemo(() => {
+    return [...realPosts, ...mockUnifiedPosts].sort(
+      (a, b) => b.timestamp.getTime() - a.timestamp.getTime()
+    );
+  }, [realPosts, mockUnifiedPosts]);
 
   const formatDate = (date: Date) => {
     const now = new Date();
@@ -37,30 +125,48 @@ export function FeedPage() {
       .slice(0, 2);
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    // Simulate refresh
-    setTimeout(() => {
-      setIsRefreshing(false);
+    try {
+      await refreshFeed();
       toast.success("Feed refreshed!");
-    }, 1000);
-  };
-
-  const handleLike = (peerId: string, postId: string, alreadyLiked: boolean) => {
-    likePost(peerId, postId);
-    if (!alreadyLiked) {
-      toast.success("Post liked!");
+    } catch (error) {
+      toast.error("Failed to refresh feed");
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
-  const handleSave = (peerId: string, postId: string) => {
-    const wasSaved = isPostSaved(peerId, postId);
-    toggleSavePost(peerId, postId);
-    if (!wasSaved) {
-      toast.success("Post saved to your collection!");
+  const handleLike = (post: UnifiedPost) => {
+    if (post.isReal) {
+      // Real posts don't support likes yet
+      toast("Likes for P2P posts coming soon!", { icon: "💜" });
     } else {
-      toast.success("Post removed from saved");
+      likePost(post.author.peerId, post.id);
+      if (!post.likedByUser) {
+        toast.success("Post liked!");
+      }
     }
+  };
+
+  const handleSave = (post: UnifiedPost) => {
+    if (post.isReal) {
+      // Real posts don't support saving yet
+      toast("Saving P2P posts coming soon!", { icon: "🔖" });
+    } else {
+      const wasSaved = isPostSaved(post.author.peerId, post.id);
+      toggleSavePost(post.author.peerId, post.id);
+      if (!wasSaved) {
+        toast.success("Post saved to your collection!");
+      } else {
+        toast.success("Post removed from saved");
+      }
+    }
+  };
+
+  const isSaved = (post: UnifiedPost): boolean => {
+    if (post.isReal) return false;
+    return isPostSaved(post.author.peerId, post.id);
   };
 
   const handlePostMenu = (authorName: string) => {
@@ -149,7 +255,7 @@ export function FeedPage() {
             </div>
           ) : (
             posts.map((post) => {
-              const saved = isPostSaved(post.author.peerId, post.id);
+              const saved = isSaved(post);
 
               return (
                 <article
@@ -175,12 +281,35 @@ export function FeedPage() {
                         {getInitials(post.author.name)}
                       </div>
                       <div>
-                        <p
-                          className="font-semibold text-sm"
-                          style={{ color: "hsl(var(--harbor-text-primary))" }}
-                        >
-                          {post.author.name}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p
+                            className="font-semibold text-sm"
+                            style={{ color: "hsl(var(--harbor-text-primary))" }}
+                          >
+                            {post.author.name}
+                          </p>
+                          {post.isReal ? (
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded"
+                              style={{
+                                background: "hsl(var(--harbor-success) / 0.15)",
+                                color: "hsl(var(--harbor-success))",
+                              }}
+                            >
+                              P2P
+                            </span>
+                          ) : (
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded"
+                              style={{
+                                background: "hsl(var(--harbor-text-tertiary) / 0.15)",
+                                color: "hsl(var(--harbor-text-tertiary))",
+                              }}
+                            >
+                              Demo
+                            </span>
+                          )}
+                        </div>
                         <p
                           className="text-xs"
                           style={{ color: "hsl(var(--harbor-text-tertiary))" }}
@@ -217,7 +346,7 @@ export function FeedPage() {
                     style={{ borderColor: "hsl(var(--harbor-border-subtle))" }}
                   >
                     <button
-                      onClick={() => handleLike(post.author.peerId, post.id, post.likedByUser)}
+                      onClick={() => handleLike(post)}
                       className="flex items-center gap-2 transition-colors duration-200"
                       style={{
                         color: post.likedByUser
@@ -250,7 +379,7 @@ export function FeedPage() {
                     </button>
 
                     <button
-                      onClick={() => handleSave(post.author.peerId, post.id)}
+                      onClick={() => handleSave(post)}
                       className="flex items-center gap-2 transition-colors duration-200 ml-auto"
                       style={{
                         color: saved

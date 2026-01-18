@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, Component, type ReactNode } from "react";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useIdentityStore } from "./stores";
 import { useTauriEvents } from "./hooks";
@@ -13,6 +13,75 @@ import {
   NetworkPage,
   SettingsPage,
 } from "./pages";
+
+// Error boundary to catch and display React errors
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("React Error Boundary caught:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          style={{
+            padding: "40px",
+            background: "#1a1a2e",
+            color: "#fff",
+            minHeight: "100vh",
+            fontFamily: "monospace",
+          }}
+        >
+          <h1 style={{ color: "#ff6b6b", marginBottom: "20px" }}>Something went wrong</h1>
+          <pre
+            style={{
+              background: "#0d0d1a",
+              padding: "20px",
+              borderRadius: "8px",
+              overflow: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {this.state.error?.message}
+            {"\n\n"}
+            {this.state.error?.stack}
+          </pre>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              marginTop: "20px",
+              padding: "10px 20px",
+              background: "#6366f1",
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              cursor: "pointer",
+            }}
+          >
+            Reload App
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 function LoadingScreen() {
   return (
@@ -128,35 +197,37 @@ function AppContent() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppContent />
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: "hsl(222 41% 13%)",
-            color: "hsl(220 14% 96%)",
-            border: "1px solid hsl(222 30% 22%)",
-            borderRadius: "12px",
-            padding: "12px 16px",
-            fontSize: "14px",
-            boxShadow: "0 10px 40px rgba(0, 0, 0, 0.4)",
-          },
-          success: {
-            iconTheme: {
-              primary: "hsl(152 69% 40%)",
-              secondary: "white",
+    <ErrorBoundary>
+      <HashRouter>
+        <AppContent />
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            duration: 3000,
+            style: {
+              background: "hsl(222 41% 13%)",
+              color: "hsl(220 14% 96%)",
+              border: "1px solid hsl(222 30% 22%)",
+              borderRadius: "12px",
+              padding: "12px 16px",
+              fontSize: "14px",
+              boxShadow: "0 10px 40px rgba(0, 0, 0, 0.4)",
             },
-          },
-          error: {
-            iconTheme: {
-              primary: "hsl(0 84% 60%)",
-              secondary: "white",
+            success: {
+              iconTheme: {
+                primary: "hsl(152 69% 40%)",
+                secondary: "white",
+              },
             },
-          },
-        }}
-      />
-    </BrowserRouter>
+            error: {
+              iconTheme: {
+                primary: "hsl(0 84% 60%)",
+                secondary: "white",
+              },
+            },
+          }}
+        />
+      </HashRouter>
+    </ErrorBoundary>
   );
 }

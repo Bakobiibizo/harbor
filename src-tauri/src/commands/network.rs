@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
-use crate::services::{ContactsService, IdentityService, MessagingService};
+use crate::services::{ContactsService, IdentityService, MessagingService, PermissionsService};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
@@ -83,6 +83,7 @@ pub async fn start_network(
     identity_service: State<'_, Arc<IdentityService>>,
     messaging_service: State<'_, Arc<MessagingService>>,
     contacts_service: State<'_, Arc<ContactsService>>,
+    permissions_service: State<'_, Arc<PermissionsService>>,
 ) -> Result<(), AppError> {
     // Check if identity is unlocked
     if !identity_service.is_unlocked() {
@@ -106,6 +107,23 @@ pub async fn start_network(
 
     // Convert to libp2p keypair
     let keypair = crate::p2p::swarm::ed25519_to_libp2p_keypair(&ed25519_bytes)?;
+    let network_peer_id = libp2p::PeerId::from(keypair.public());
+
+    // Compare with stored identity peer ID to verify they match
+    if let Ok(Some(identity_info)) = identity_service.get_identity_info() {
+        info!(
+            "PEER ID CHECK - Stored: {} (len={}) vs Network: {} (len={})",
+            identity_info.peer_id,
+            identity_info.peer_id.len(),
+            network_peer_id,
+            network_peer_id.to_string().len()
+        );
+        if identity_info.peer_id != network_peer_id.to_string() {
+            tracing::error!(
+                "PEER ID MISMATCH! Stored peer ID does not match network peer ID. This will cause messaging to fail."
+            );
+        }
+    }
 
     // Create network config
     let config = NetworkConfig::default();
@@ -118,9 +136,10 @@ pub async fn start_network(
         keypair,
     )?;
 
-    // Inject services for message processing and contact storage
+    // Inject services for message processing, contact storage, and permissions
     service.set_messaging_service((*messaging_service).clone());
     service.set_contacts_service((*contacts_service).clone());
+    service.set_permissions_service((*permissions_service).clone());
 
     // Store the handle
     network.set_handle(handle).await;

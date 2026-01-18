@@ -132,6 +132,7 @@ CSS custom properties in `src/index.css`:
     - Delete account with confirmation
 15. Online status toggle now affects profile indicator in sidebar
 16. Created settings store with persistence (localStorage)
+17. Fixed real-time message display - messages now appear immediately without needing to reload or send a new message (fixed stale closure issue in useTauriEvents hook)
 
 ## Mock Peer Server (for P2P Testing)
 
@@ -157,6 +158,29 @@ cargo run --release -- --name "Test Peer" --bio "For testing" --port 9000
 ## Known Issues / Future Work
 - Network stats show 0s when network starts (need to populate from actual Rust backend)
 - Mock peer server logs replies but doesn't send them back through the messaging protocol yet
+
+## Bug Fixes (Recent)
+
+### Real-time Message Display Fix
+**Issue**: Received messages weren't appearing until user sent a new message or reloaded the chat window.
+
+**Root Cause**: The `useTauriEvents` hook was using stale closures for `loadConversations` and `loadMessages`. When a `message_received` event arrived, these functions were called but React didn't re-render because the closure captured the initial function references.
+
+**Solution**: Changed `useTauriEvents.ts` to use `useMessagingStore.getState()` to get fresh store functions directly:
+```typescript
+case "message_received":
+  const messagingState = useMessagingStore.getState();
+  messagingState.loadConversations();
+  const activeConv = messagingState.activeConversation;
+  if (activeConv) {
+    messagingState.loadMessages(activeConv);
+  }
+```
+
+**Key Files**:
+- `src/hooks/useTauriEvents.ts` - Event handler with getState() pattern
+- `src/stores/messaging.ts` - Zustand store with activeConversation state
+- `src/pages/Chat.tsx` - Syncs selectedConversation to store's activeConversation
 
 ## Commands
 ```bash

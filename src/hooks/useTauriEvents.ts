@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import toast from "react-hot-toast";
 import type { NetworkEvent } from "../types";
-import { useNetworkStore } from "../stores";
+import { useNetworkStore, useContactsStore, useMessagingStore } from "../stores";
 
 /**
  * Hook to listen to Tauri events from the Rust backend.
@@ -10,6 +11,7 @@ import { useNetworkStore } from "../stores";
 export function useTauriEvents() {
   const unlistenersRef = useRef<UnlistenFn[]>([]);
   const { refreshPeers, refreshStats } = useNetworkStore();
+  const { refreshContacts } = useContactsStore();
 
   useEffect(() => {
     async function setupListeners() {
@@ -60,7 +62,19 @@ export function useTauriEvents() {
           console.log(
             `[Network] Message received from ${event.peerId} via ${event.protocol}`
           );
-          // TODO: Route to messaging store when implemented
+          // Use getState() to avoid stale closures - call functions directly from the store
+          const messagingState = useMessagingStore.getState();
+          // Refresh conversations to show new message
+          messagingState.loadConversations();
+          // Reload messages for the active conversation
+          const activeConv = messagingState.activeConversation;
+          console.log(`[Network] Active conversation: ${activeConv}, message from: ${event.peerId}`);
+          if (activeConv) {
+            console.log(`[Network] Reloading messages for active conversation: ${activeConv}`);
+            messagingState.loadMessages(activeConv);
+          }
+          // Also refresh contacts in case this is from a new contact
+          refreshContacts();
           break;
 
         case "listening_on":
@@ -74,6 +88,12 @@ export function useTauriEvents() {
         case "status_changed":
           console.log(`[Network] Status changed: ${event.status}`);
           break;
+
+        case "contact_added":
+          console.log(`[Network] Contact added: ${event.displayName} (${event.peerId})`);
+          refreshContacts();
+          toast.success(`Added ${event.displayName} to contacts!`);
+          break;
       }
     }
 
@@ -84,5 +104,5 @@ export function useTauriEvents() {
       unlistenersRef.current.forEach((unlisten) => unlisten());
       unlistenersRef.current = [];
     };
-  }, [refreshPeers, refreshStats]);
+  }, [refreshPeers, refreshStats, refreshContacts]);
 }

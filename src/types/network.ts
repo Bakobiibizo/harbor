@@ -28,4 +28,5 @@ export type NetworkEvent =
   | { type: "external_address_discovered"; address: string }
   | { type: "listening_on"; address: string }
   | { type: "message_received"; peerId: string; protocol: string; payload: number[] }
-  | { type: "status_changed"; status: ConnectionStatus };
+  | { type: "status_changed"; status: ConnectionStatus }
+  | { type: "contact_added"; peerId: string; displayName: string };

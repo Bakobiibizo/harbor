@@ -17,7 +17,8 @@ use super::protocols::messaging::{MessagingCodec, MessagingMessage};
 use super::swarm::build_swarm;
 use super::types::*;
 use crate::error::{AppError, Result};
-use crate::services::{ContactsService, IdentityService, MessagingService};
+use crate::services::{ContactsService, IdentityService, MessagingService, PermissionsService};
+use crate::db::Capability;
 use std::sync::Arc;
 
 /// Handle to interact with the network service
@@ -134,14 +135,13 @@ pub struct NetworkService {
     identity_service: Arc<IdentityService>,
     messaging_service: Option<Arc<MessagingService>>,
     contacts_service: Option<Arc<ContactsService>>,
+    permissions_service: Option<Arc<PermissionsService>>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
     event_tx: mpsc::Sender<NetworkEvent>,
     connected_peers: HashMap<PeerId, PeerInfo>,
     discovered_peers: HashMap<PeerId, Vec<Multiaddr>>,
     stats: NetworkStats,
     start_time: Instant,
-    pending_identity_responses: HashMap<request_response::InboundRequestId, ResponseChannel<IdentityExchangeResponse>>,
-    pending_messaging_responses: HashMap<request_response::InboundRequestId, ResponseChannel<MessagingResponse>>,
 }
 
 impl NetworkService {
@@ -164,14 +164,13 @@ impl NetworkService {
             identity_service,
             messaging_service: None,
             contacts_service: None,
+            permissions_service: None,
             command_rx,
             event_tx,
             connected_peers: HashMap::new(),
             discovered_peers: HashMap::new(),
             stats: NetworkStats::default(),
             start_time: Instant::now(),
-            pending_identity_responses: HashMap::new(),
-            pending_messaging_responses: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -185,6 +184,11 @@ impl NetworkService {
     /// Set the contacts service for storing contacts from identity exchange
     pub fn set_contacts_service(&mut self, service: Arc<ContactsService>) {
         self.contacts_service = Some(service);
+    }
+
+    /// Set the permissions service for granting permissions to contacts
+    pub fn set_permissions_service(&mut self, service: Arc<PermissionsService>) {
+        self.permissions_service = Some(service);
     }
 
     /// Get the local peer ID
@@ -406,13 +410,16 @@ impl NetworkService {
         _request: IdentityExchangeRequest,
         channel: ResponseChannel<IdentityExchangeResponse>,
     ) {
+        // Get our libp2p peer ID (this is what other peers see us as)
+        let local_peer_id = *self.swarm.local_peer_id();
+
         // Get our identity info to respond with
         match self.identity_service.get_identity_info() {
             Ok(Some(info)) => {
-                // Sign the response
+                // Sign the response using the libp2p peer ID
                 let timestamp = chrono::Utc::now().timestamp();
                 let signature = match self.identity_service.sign_raw(
-                    format!("{}:{}:{}", info.peer_id, info.display_name, timestamp).as_bytes()
+                    format!("{}:{}:{}", local_peer_id, info.display_name, timestamp).as_bytes()
                 ) {
                     Ok(sig) => sig,
                     Err(e) => {
@@ -439,7 +446,8 @@ impl NetworkService {
                 };
 
                 let response = IdentityExchangeResponse {
-                    peer_id: info.peer_id,
+                    // Use the libp2p peer ID, not the stored Harbor peer_id
+                    peer_id: local_peer_id.to_string(),
                     public_key,
                     x25519_public,
                     display_name: info.display_name,
@@ -494,6 +502,28 @@ impl NetworkService {
             ) {
                 Ok(contact_id) => {
                     info!("Added contact {} with ID {}", response.display_name, contact_id);
+
+                    // Grant chat permission to the new contact
+                    if let Some(ref permissions_service) = self.permissions_service {
+                        match permissions_service.create_permission_grant(
+                            &response.peer_id,
+                            Capability::Chat,
+                            None, // No expiration
+                        ) {
+                            Ok(_) => {
+                                info!("Granted chat permission to {}", response.peer_id);
+                            }
+                            Err(e) => {
+                                warn!("Failed to grant chat permission: {}", e);
+                            }
+                        }
+                    }
+
+                    // Emit event to notify frontend
+                    let _ = self.event_tx.send(NetworkEvent::ContactAdded {
+                        peer_id: response.peer_id.clone(),
+                        display_name: response.display_name.clone(),
+                    });
                 }
                 Err(e) => {
                     warn!("Failed to add contact: {}", e);

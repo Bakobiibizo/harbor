@@ -30,18 +30,31 @@ fn get_profile_name() -> Option<String> {
     std::env::var("HARBOR_PROFILE").ok().filter(|s| !s.is_empty())
 }
 
+/// Get custom data directory from environment variable
+fn get_custom_data_dir() -> Option<PathBuf> {
+    std::env::var("HARBOR_DATA_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Get the database path for the application
 fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .expect("Failed to get app data directory");
-
-    // If a profile is specified, use a subdirectory for that profile
-    let base_dir = if let Some(profile) = get_profile_name() {
-        app_data.join(format!("profile-{}", profile))
+    // Check for custom data directory first
+    let base_dir = if let Some(custom_dir) = get_custom_data_dir() {
+        custom_dir
     } else {
-        app_data
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .expect("Failed to get app data directory");
+
+        // If a profile is specified, use a subdirectory for that profile
+        if let Some(profile) = get_profile_name() {
+            app_data.join(format!("profile-{}", profile))
+        } else {
+            app_data
+        }
     };
 
     // Ensure the directory exists

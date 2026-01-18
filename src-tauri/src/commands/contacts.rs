@@ -13,6 +13,7 @@ use crate::services::ContactsService;
 
 /// Contact info for the frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContactInfo {
     pub id: i64,
     pub peer_id: String,
