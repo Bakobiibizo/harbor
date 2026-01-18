@@ -137,6 +137,7 @@ export function NetworkPage() {
     refreshAddresses,
     checkStatus,
     connectToPeer,
+    addBootstrapNode,
   } = useNetworkStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -147,6 +148,9 @@ export function NetworkPage() {
   const [peerMultiaddr, setPeerMultiaddr] = useState('');
   const [isAddingContact, setIsAddingContact] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [customRelayAddress, setCustomRelayAddress] = useState('');
+  const [isAddingRelay, setIsAddingRelay] = useState(false);
 
   const identity = state.status === 'unlocked' ? state.identity : null;
 
@@ -230,6 +234,32 @@ export function NetworkPage() {
       peer.addresses.some((addr) => addr.toLowerCase().includes(query))
     );
   });
+
+  // Handle adding a custom relay server
+  const handleAddCustomRelay = async () => {
+    if (!customRelayAddress.trim()) {
+      toast.error('Please enter a relay address');
+      return;
+    }
+
+    // Basic validation for relay multiaddress format
+    if (!customRelayAddress.includes('/p2p/')) {
+      toast.error('Relay address must include peer ID (/p2p/...)');
+      return;
+    }
+
+    setIsAddingRelay(true);
+    try {
+      await addBootstrapNode(customRelayAddress.trim());
+      toast.success('Custom relay added! Connecting...');
+      setCustomRelayAddress('');
+    } catch (err) {
+      console.error('Failed to add relay:', err);
+      toast.error(`Failed to add relay: ${err}`);
+    } finally {
+      setIsAddingRelay(false);
+    }
+  };
 
   // Handle adding a contact by peer ID
   const handleAddContactByPeerId = async () => {
@@ -973,6 +1003,356 @@ export function NetworkPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Advanced Section - Collapsible */}
+          <div
+            className="rounded-2xl p-6"
+            style={{
+              background: 'hsl(var(--harbor-bg-elevated))',
+              border: '1px solid hsl(var(--harbor-border-subtle))',
+            }}
+          >
+            <button
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 text-sm font-medium transition-colors"
+              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              Advanced: Deploy Your Own Relay Server
+            </button>
+
+            {showAdvanced && (
+              <div className="mt-4">
+            <div className="flex items-start gap-4 mb-6">
+              <div
+                className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: 'hsl(var(--harbor-primary) / 0.15)' }}
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  style={{ color: 'hsl(var(--harbor-primary))' }}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h3
+                  className="text-lg font-semibold mb-1"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  Deploy Your Own Relay Server
+                </h3>
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Run your own relay server on AWS for better connectivity. Free tier eligible!
+                </p>
+              </div>
+            </div>
+
+            {/* Warning about existing deployments */}
+            <div
+              className="mb-6 p-3 rounded-lg flex items-start gap-3"
+              style={{ background: 'hsl(var(--harbor-warning) / 0.1)' }}
+            >
+              <svg
+                className="w-5 h-5 flex-shrink-0 mt-0.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                style={{ color: 'hsl(var(--harbor-warning))' }}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
+              <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                <strong style={{ color: 'hsl(var(--harbor-warning))' }}>Before deploying:</strong>{' '}
+                Check if you already have a relay running to avoid duplicate charges.{' '}
+                <a
+                  href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-medium"
+                  style={{ color: 'hsl(var(--harbor-primary))' }}
+                >
+                  Check existing stacks →
+                </a>
+              </div>
+            </div>
+
+            {/* One-Click Deploy Buttons */}
+            <div className="mb-6">
+              <label
+                className="text-xs font-medium block mb-3"
+                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+              >
+                One-Click Deploy to AWS (Free Tier)
+              </label>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {[
+                  { region: 'us-east-1', name: 'US East' },
+                  { region: 'us-west-2', name: 'US West' },
+                  { region: 'eu-west-1', name: 'EU Ireland' },
+                  { region: 'ap-northeast-1', name: 'Asia Tokyo' },
+                ].map(({ region, name }) => (
+                  <a
+                    key={region}
+                    href={`https://console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/new?stackName=harbor-relay&templateURL=https://harbor-relay-templates.s3.amazonaws.com/libp2p-relay-cloudformation.yaml`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all hover:scale-105"
+                    style={{
+                      background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                      color: 'white',
+                    }}
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M18.75 11.35a4.32 4.32 0 01-.79-.08 3.9 3.9 0 01-.73-.23l-.17-.04h-.12l-.15.06-.08.1a4 4 0 01-.53.48 3.6 3.6 0 01-.63.38 3.7 3.7 0 01-.74.25 3.9 3.9 0 01-.82.08 4 4 0 01-1.47-.28 3.8 3.8 0 01-1.23-.8 3.8 3.8 0 01-.83-1.22 3.9 3.9 0 01-.3-1.5 3.9 3.9 0 01.3-1.5 3.8 3.8 0 01.83-1.22 3.8 3.8 0 011.23-.8 4 4 0 011.47-.28c.28 0 .55.03.82.08.26.05.51.13.74.25.23.11.44.24.63.38.19.15.37.31.53.48l.08.1.15.06h.12l.17-.04c.24-.08.48-.17.73-.23.24-.06.51-.08.79-.08a4.5 4.5 0 011.67.3c.5.2.94.5 1.3.88.37.38.66.84.86 1.36.2.52.3 1.1.3 1.72 0 .62-.1 1.2-.3 1.72-.2.52-.49.98-.86 1.36-.36.38-.8.67-1.3.88-.5.2-1.06.3-1.67.3z" />
+                    </svg>
+                    {name}
+                  </a>
+                ))}
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                Deploys a t2.micro instance (750 free hours/month for 12 months)
+              </p>
+            </div>
+
+            {/* Instructions */}
+            <div
+              className="p-4 rounded-xl mb-6"
+              style={{ background: 'hsl(var(--harbor-surface-1))' }}
+            >
+              <h4
+                className="text-sm font-semibold mb-3"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              >
+                After Deployment - Get Your Relay's Peer ID
+              </h4>
+              <ol
+                className="text-xs space-y-2"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                <li className="flex gap-2">
+                  <span
+                    className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
+                    style={{
+                      background: 'hsl(var(--harbor-primary) / 0.2)',
+                      color: 'hsl(var(--harbor-primary))',
+                    }}
+                  >
+                    1
+                  </span>
+                  <span>
+                    Go to{' '}
+                    <a
+                      href="https://console.aws.amazon.com/ec2/v2/home#Instances"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline"
+                      style={{ color: 'hsl(var(--harbor-primary))' }}
+                    >
+                      AWS EC2 Console
+                    </a>{' '}
+                    and find your "harbor-relay-server" instance
+                  </span>
+                </li>
+                <li className="flex gap-2">
+                  <span
+                    className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
+                    style={{
+                      background: 'hsl(var(--harbor-primary) / 0.2)',
+                      color: 'hsl(var(--harbor-primary))',
+                    }}
+                  >
+                    2
+                  </span>
+                  <span>Click "Connect" → "Session Manager" → "Connect"</span>
+                </li>
+                <li className="flex gap-2">
+                  <span
+                    className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
+                    style={{
+                      background: 'hsl(var(--harbor-primary) / 0.2)',
+                      color: 'hsl(var(--harbor-primary))',
+                    }}
+                  >
+                    3
+                  </span>
+                  <span>
+                    Run:{' '}
+                    <code
+                      className="px-1.5 py-0.5 rounded font-mono"
+                      style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+                    >
+                      /opt/relay/get-relay-address.sh
+                    </code>
+                  </span>
+                </li>
+                <li className="flex gap-2">
+                  <span
+                    className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
+                    style={{
+                      background: 'hsl(var(--harbor-primary) / 0.2)',
+                      color: 'hsl(var(--harbor-primary))',
+                    }}
+                  >
+                    4
+                  </span>
+                  <span>
+                    Copy the full address (looks like{' '}
+                    <code className="font-mono">/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...</code>)
+                  </span>
+                </li>
+                <li className="flex gap-2">
+                  <span
+                    className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold"
+                    style={{
+                      background: 'hsl(var(--harbor-primary) / 0.2)',
+                      color: 'hsl(var(--harbor-primary))',
+                    }}
+                  >
+                    5
+                  </span>
+                  <span>
+                    Paste it in the "Add Your Custom Relay" field below and click "Add Relay"
+                  </span>
+                </li>
+              </ol>
+            </div>
+
+            {/* Add Custom Relay */}
+            <div>
+              <label
+                className="text-xs font-medium block mb-2"
+                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+              >
+                Add Your Custom Relay
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={customRelayAddress}
+                  onChange={(e) => setCustomRelayAddress(e.target.value)}
+                  placeholder="/ip4/YOUR_IP/tcp/4001/p2p/YOUR_PEER_ID"
+                  className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                  }}
+                  disabled={isAddingRelay || !isRunning}
+                />
+                <button
+                  onClick={handleAddCustomRelay}
+                  disabled={isAddingRelay || !customRelayAddress.trim() || !isRunning}
+                  className="px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+                  style={{
+                    background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                    color: 'white',
+                  }}
+                >
+                  {isAddingRelay ? 'Adding...' : 'Add Relay'}
+                </button>
+              </div>
+              {!isRunning && (
+                <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-warning))' }}>
+                  Start the network first to add a custom relay.
+                </p>
+              )}
+              <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                Format: <code className="font-mono">/ip4/PUBLIC_IP/tcp/4001/p2p/PEER_ID</code>
+              </p>
+            </div>
+
+            {/* Cost Info */}
+            <div
+              className="mt-6 p-3 rounded-lg flex items-start gap-3"
+              style={{ background: 'hsl(var(--harbor-success) / 0.1)' }}
+            >
+              <svg
+                className="w-5 h-5 flex-shrink-0 mt-0.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                style={{ color: 'hsl(var(--harbor-success))' }}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                <strong style={{ color: 'hsl(var(--harbor-success))' }}>Free for 12 months!</strong>{' '}
+                AWS Free Tier includes 750 hours/month of t2.micro - enough to run one relay 24/7.
+                After the free tier: ~$9-12/month.
+              </div>
+            </div>
+
+            {/* Cleanup Section */}
+            <div
+              className="mt-4 pt-4 border-t"
+              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  <strong>Need to delete your relay?</strong> Remove all resources to stop charges.
+                </div>
+                <a
+                  href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                  style={{
+                    background: 'hsl(var(--harbor-error) / 0.1)',
+                    color: 'hsl(var(--harbor-error))',
+                  }}
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
+                  Manage Stacks
+                </a>
+              </div>
+              <p
+                className="text-xs mt-2"
+                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+              >
+                Select your stack and click "Delete" to remove all resources.
+              </p>
+            </div>
+          </div>
+        )}
           </div>
         </div>
       </div>
