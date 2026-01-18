@@ -71,20 +71,26 @@ export function NetworkPage() {
     status,
     connectedPeers,
     stats,
+    listeningAddresses,
     error,
     isLoading,
     startNetwork,
     stopNetwork,
     refreshPeers,
     refreshStats,
+    refreshAddresses,
     checkStatus,
+    connectToPeer,
   } = useNetworkStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"peers" | "contacts">("peers");
   const [showAddContactModal, setShowAddContactModal] = useState(false);
+  const [showConnectPeerModal, setShowConnectPeerModal] = useState(false);
   const [manualPeerId, setManualPeerId] = useState("");
+  const [peerMultiaddr, setPeerMultiaddr] = useState("");
   const [isAddingContact, setIsAddingContact] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
 
   const identity = state.status === "unlocked" ? state.identity : null;
 
@@ -92,16 +98,44 @@ export function NetworkPage() {
   useEffect(() => {
     checkStatus();
 
-    // Refresh peers and stats every 5 seconds when running
+    // Refresh peers, stats, and addresses every 5 seconds when running
     const interval = setInterval(() => {
       if (isRunning) {
         refreshPeers();
         refreshStats();
+        refreshAddresses();
       }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isRunning, checkStatus, refreshPeers, refreshStats]);
+  }, [isRunning, checkStatus, refreshPeers, refreshStats, refreshAddresses]);
+
+  // Handle connecting to a peer by multiaddress
+  const handleConnectToPeer = async () => {
+    if (!peerMultiaddr.trim()) {
+      toast.error("Please enter a multiaddress");
+      return;
+    }
+
+    // Basic validation
+    if (!peerMultiaddr.includes("/p2p/")) {
+      toast.error("Multiaddress must include peer ID (/p2p/...)");
+      return;
+    }
+
+    setIsConnecting(true);
+    try {
+      await connectToPeer(peerMultiaddr.trim());
+      toast.success("Connection initiated!");
+      setShowConnectPeerModal(false);
+      setPeerMultiaddr("");
+    } catch (err) {
+      console.error("Failed to connect:", err);
+      toast.error(`Failed to connect: ${err}`);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
 
   const formatBytes = (bytes: number) => {
     // Handle NaN, undefined, or null
@@ -496,6 +530,95 @@ export function NetworkPage() {
             </div>
           )}
 
+          {/* Connect to Remote Peers Card - Only show when network is running */}
+          {isRunning && (
+            <div
+              className="rounded-2xl p-6"
+              style={{
+                background: "hsl(var(--harbor-bg-elevated))",
+                border: "1px solid hsl(var(--harbor-border-subtle))",
+              }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3
+                  className="text-sm font-medium"
+                  style={{ color: "hsl(var(--harbor-text-secondary))" }}
+                >
+                  Remote Connections
+                </h3>
+                <button
+                  onClick={() => setShowConnectPeerModal(true)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                  style={{
+                    background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
+                    color: "white",
+                  }}
+                >
+                  <PlusIcon className="w-4 h-4" />
+                  Connect to Peer
+                </button>
+              </div>
+
+              {/* Your addresses for sharing */}
+              {listeningAddresses.length > 0 && (
+                <div>
+                  <label
+                    className="text-xs font-medium block mb-2"
+                    style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+                  >
+                    Your shareable addresses (for remote peers)
+                  </label>
+                  <div className="space-y-2">
+                    {listeningAddresses
+                      .filter(addr => !addr.includes("127.0.0.1") && !addr.includes("::1"))
+                      .slice(0, 3)
+                      .map((addr, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center gap-2 p-2 rounded-lg"
+                          style={{ background: "hsl(var(--harbor-surface-1))" }}
+                        >
+                          <code
+                            className="text-xs flex-1 break-all font-mono"
+                            style={{ color: "hsl(var(--harbor-primary))" }}
+                          >
+                            {addr}
+                          </code>
+                          <button
+                            className="p-1.5 rounded hover:bg-white/10 flex-shrink-0"
+                            onClick={() => {
+                              navigator.clipboard.writeText(addr);
+                              toast.success("Address copied!");
+                            }}
+                            title="Copy address"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "hsl(var(--harbor-text-secondary))" }}>
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                  <p
+                    className="text-xs mt-2"
+                    style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+                  >
+                    Share one of these addresses with someone to let them connect to you directly.
+                  </p>
+                </div>
+              )}
+
+              {listeningAddresses.length === 0 && (
+                <p
+                  className="text-sm"
+                  style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+                >
+                  Addresses will appear here once the network is ready.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Peers/Contacts Section */}
           <div
             className="rounded-2xl overflow-hidden"
@@ -837,6 +960,100 @@ export function NetworkPage() {
                 }}
               >
                 {isAddingContact ? "Adding..." : "Add Contact"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Connect to Peer Modal */}
+      {showConnectPeerModal && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          style={{ background: "rgba(0, 0, 0, 0.6)" }}
+          onClick={() => setShowConnectPeerModal(false)}
+        >
+          <div
+            className="rounded-xl p-6 max-w-lg w-full mx-4"
+            style={{ background: "hsl(var(--harbor-bg-elevated))" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2
+                className="text-lg font-semibold"
+                style={{ color: "hsl(var(--harbor-text-primary))" }}
+              >
+                Connect to Remote Peer
+              </h2>
+              <button
+                onClick={() => setShowConnectPeerModal(false)}
+                className="p-1 rounded-lg hover:bg-white/10"
+              >
+                <XIcon className="w-5 h-5" style={{ color: "hsl(var(--harbor-text-secondary))" }} />
+              </button>
+            </div>
+
+            <p
+              className="text-sm mb-4"
+              style={{ color: "hsl(var(--harbor-text-secondary))" }}
+            >
+              Enter the multiaddress of the peer you want to connect to. They can find their address in the Network page under "Remote Connections".
+            </p>
+
+            <div
+              className="mb-4 p-3 rounded-lg"
+              style={{ background: "hsl(var(--harbor-surface-1))" }}
+            >
+              <label
+                className="text-xs font-medium block mb-1"
+                style={{ color: "hsl(var(--harbor-text-tertiary))" }}
+              >
+                Example format
+              </label>
+              <code
+                className="text-xs break-all"
+                style={{ color: "hsl(var(--harbor-text-secondary))" }}
+              >
+                /ip4/1.2.3.4/tcp/9000/p2p/12D3KooW...
+              </code>
+            </div>
+
+            <input
+              type="text"
+              value={peerMultiaddr}
+              onChange={(e) => setPeerMultiaddr(e.target.value)}
+              placeholder="Enter multiaddress..."
+              className="w-full p-3 rounded-lg text-sm mb-4 font-mono"
+              style={{
+                background: "hsl(var(--harbor-surface-1))",
+                border: "1px solid hsl(var(--harbor-border-subtle))",
+                color: "hsl(var(--harbor-text-primary))",
+              }}
+              disabled={isConnecting}
+            />
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowConnectPeerModal(false)}
+                className="flex-1 px-4 py-2 rounded-lg font-medium transition-colors"
+                style={{
+                  background: "hsl(var(--harbor-surface-1))",
+                  color: "hsl(var(--harbor-text-primary))",
+                }}
+                disabled={isConnecting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConnectToPeer}
+                disabled={isConnecting || !peerMultiaddr.trim()}
+                className="flex-1 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                style={{
+                  background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
+                  color: "white",
+                }}
+              >
+                {isConnecting ? "Connecting..." : "Connect"}
               </button>
             </div>
           </div>

@@ -126,6 +126,36 @@ impl NetworkHandle {
             _ => Err(AppError::Internal("Unexpected response".into())),
         }
     }
+
+    /// Get listening addresses (with peer ID appended)
+    pub async fn get_listening_addresses(&self) -> Result<Vec<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::GetListeningAddresses, Some(tx)))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Addresses(addrs)) => Ok(addrs),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Add a bootstrap node and dial it
+    pub async fn add_bootstrap_node(&self, address: Multiaddr) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::AddBootstrapNode { address }, Some(tx)))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
 }
 
 /// The network service manages the libp2p swarm
@@ -140,6 +170,7 @@ pub struct NetworkService {
     event_tx: mpsc::Sender<NetworkEvent>,
     connected_peers: HashMap<PeerId, PeerInfo>,
     discovered_peers: HashMap<PeerId, Vec<Multiaddr>>,
+    listening_addresses: Vec<Multiaddr>,
     stats: NetworkStats,
     start_time: Instant,
 }
@@ -169,6 +200,7 @@ impl NetworkService {
             event_tx,
             connected_peers: HashMap::new(),
             discovered_peers: HashMap::new(),
+            listening_addresses: Vec::new(),
             stats: NetworkStats::default(),
             start_time: Instant::now(),
         };
@@ -268,6 +300,7 @@ impl NetworkService {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on: {}", address);
+                self.listening_addresses.push(address.clone());
                 let _ = self.event_tx.send(NetworkEvent::ListeningOn {
                     address: address.to_string(),
                 }).await;
@@ -655,6 +688,45 @@ impl NetworkService {
             NetworkCommand::GetConnectedPeers => {
                 let peers: Vec<PeerInfo> = self.connected_peers.values().cloned().collect();
                 NetworkResponse::Peers(peers)
+            }
+
+            NetworkCommand::GetListeningAddresses => {
+                let local_peer_id = self.swarm.local_peer_id();
+                let addresses: Vec<String> = self.listening_addresses
+                    .iter()
+                    .map(|addr| format!("{}/p2p/{}", addr, local_peer_id))
+                    .collect();
+                NetworkResponse::Addresses(addresses)
+            }
+
+            NetworkCommand::AddBootstrapNode { address } => {
+                // Parse the multiaddress to extract peer ID if present
+                if let Some(peer_id) = address.iter().find_map(|proto| {
+                    if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                        Some(peer_id)
+                    } else {
+                        None
+                    }
+                }) {
+                    // Add to Kademlia routing table
+                    let addr_without_peer: Multiaddr = address
+                        .iter()
+                        .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+                        .collect();
+                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr_without_peer);
+                    info!("Added bootstrap node: {} at {}", peer_id, address);
+
+                    // Try to dial the bootstrap node
+                    match self.swarm.dial(address.clone()) {
+                        Ok(_) => {
+                            info!("Dialing bootstrap node: {}", address);
+                            NetworkResponse::Ok
+                        }
+                        Err(e) => NetworkResponse::Error(format!("Failed to dial bootstrap node: {}", e)),
+                    }
+                } else {
+                    NetworkResponse::Error("Multiaddress must contain peer ID (/p2p/...)".to_string())
+                }
             }
 
             NetworkCommand::Bootstrap => {

@@ -184,3 +184,45 @@ pub async fn stop_network(
 
     Ok(())
 }
+
+/// Get listening addresses (for sharing with remote peers)
+#[tauri::command]
+pub async fn get_listening_addresses(
+    network: State<'_, NetworkState>,
+) -> Result<Vec<String>, AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+    handle.get_listening_addresses().await
+}
+
+/// Connect to a peer by multiaddress
+/// Format: /ip4/1.2.3.4/tcp/9000/p2p/12D3KooW...
+#[tauri::command]
+pub async fn connect_to_peer(
+    network: State<'_, NetworkState>,
+    multiaddr: String,
+) -> Result<(), AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+
+    // Parse the multiaddress
+    let addr: libp2p::Multiaddr = multiaddr
+        .parse()
+        .map_err(|e| AppError::Validation(format!("Invalid multiaddress: {}", e)))?;
+
+    // Use add_bootstrap_node which handles both adding to Kademlia and dialing
+    handle.add_bootstrap_node(addr).await
+}
+
+/// Add a bootstrap node address
+#[tauri::command]
+pub async fn add_bootstrap_node(
+    network: State<'_, NetworkState>,
+    multiaddr: String,
+) -> Result<(), AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+
+    let addr: libp2p::Multiaddr = multiaddr
+        .parse()
+        .map_err(|e| AppError::Validation(format!("Invalid multiaddress: {}", e)))?;
+
+    handle.add_bootstrap_node(addr).await
+}

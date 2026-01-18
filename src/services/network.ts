@@ -30,3 +30,18 @@ export async function getNetworkStats(): Promise<NetworkStats> {
 export async function bootstrapNetwork(): Promise<void> {
   return invoke("bootstrap_network");
 }
+
+/** Get listening addresses (for sharing with remote peers) */
+export async function getListeningAddresses(): Promise<string[]> {
+  return invoke("get_listening_addresses");
+}
+
+/** Connect to a peer by multiaddress */
+export async function connectToPeer(multiaddr: string): Promise<void> {
+  return invoke("connect_to_peer", { multiaddr });
+}
+
+/** Add a bootstrap node address */
+export async function addBootstrapNode(multiaddr: string): Promise<void> {
+  return invoke("add_bootstrap_node", { multiaddr });
+}

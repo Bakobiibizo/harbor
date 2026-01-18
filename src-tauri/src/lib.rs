@@ -153,6 +153,9 @@ pub fn run() {
             commands::bootstrap_network,
             commands::start_network,
             commands::stop_network,
+            commands::get_listening_addresses,
+            commands::connect_to_peer,
+            commands::add_bootstrap_node,
             // Contact commands
             commands::get_contacts,
             commands::get_active_contacts,

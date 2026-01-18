@@ -8,6 +8,7 @@ interface NetworkState {
   status: ConnectionStatus;
   connectedPeers: PeerInfo[];
   stats: NetworkStats;
+  listeningAddresses: string[];
   error: string | null;
   isLoading: boolean;
 
@@ -16,7 +17,10 @@ interface NetworkState {
   stopNetwork: () => Promise<void>;
   refreshPeers: () => Promise<void>;
   refreshStats: () => Promise<void>;
+  refreshAddresses: () => Promise<void>;
   checkStatus: () => Promise<void>;
+  connectToPeer: (multiaddr: string) => Promise<void>;
+  addBootstrapNode: (multiaddr: string) => Promise<void>;
 }
 
 const initialStats: NetworkStats = {
@@ -32,6 +36,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
   status: "disconnected",
   connectedPeers: [],
   stats: initialStats,
+  listeningAddresses: [],
   error: null,
   isLoading: false,
 
@@ -41,9 +46,10 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
     try {
       await networkService.startNetwork();
       set({ isRunning: true, status: "connected", isLoading: false });
-      // Refresh peers and stats after starting
+      // Refresh peers, stats, and addresses after starting
       await get().refreshPeers();
       await get().refreshStats();
+      await get().refreshAddresses();
     } catch (error) {
       set({
         error: String(error),
@@ -63,6 +69,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         status: "disconnected",
         connectedPeers: [],
         stats: initialStats,
+        listeningAddresses: [],
         isLoading: false,
       });
     } catch (error) {
@@ -102,6 +109,44 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
     } catch (error) {
       // Don't show error for refresh failures - just log it
       console.error("Failed to refresh stats:", error);
+    }
+  },
+
+  // Refresh listening addresses
+  refreshAddresses: async () => {
+    try {
+      const addresses = await networkService.getListeningAddresses();
+      set({ listeningAddresses: addresses });
+    } catch (error) {
+      console.error("Failed to refresh addresses:", error);
+    }
+  },
+
+  // Connect to a peer by multiaddress
+  connectToPeer: async (multiaddr: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await networkService.connectToPeer(multiaddr);
+      set({ isLoading: false });
+      // Refresh peers after connecting
+      await get().refreshPeers();
+    } catch (error) {
+      set({ error: String(error), isLoading: false });
+      throw error;
+    }
+  },
+
+  // Add a bootstrap node
+  addBootstrapNode: async (multiaddr: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await networkService.addBootstrapNode(multiaddr);
+      set({ isLoading: false });
+      // Refresh peers after adding bootstrap
+      await get().refreshPeers();
+    } catch (error) {
+      set({ error: String(error), isLoading: false });
+      throw error;
     }
   },
 }));

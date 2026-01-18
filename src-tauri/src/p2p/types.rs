@@ -78,6 +78,10 @@ pub enum NetworkCommand {
     GetStats,
     /// Get list of connected peers
     GetConnectedPeers,
+    /// Get listening addresses
+    GetListeningAddresses,
+    /// Add a bootstrap node address
+    AddBootstrapNode { address: Multiaddr },
     /// Bootstrap the DHT
     Bootstrap,
     /// Shutdown the network
@@ -90,5 +94,6 @@ pub enum NetworkResponse {
     Ok,
     Stats(NetworkStats),
     Peers(Vec<PeerInfo>),
+    Addresses(Vec<String>),
     Error(String),
 }
