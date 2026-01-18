@@ -1270,10 +1270,20 @@ export function NetworkPage() {
                   Get your relay address (after 5 minutes)
                 </span>
               </div>
-              <div className="text-xs space-y-2" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                <p>After deployment completes, your relay address is automatically saved. To get it:</p>
+              <div className="text-xs space-y-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                <p>After deployment completes, your relay address is automatically saved to AWS Parameter Store.</p>
+
+                <div className="p-3 rounded-lg" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
+                  <p className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>To find your relay address:</p>
+                  <ol className="space-y-1 list-decimal list-inside">
+                    <li>Go to your CloudFormation stack's <strong>"Outputs"</strong> tab</li>
+                    <li>Click the link next to <strong>"Step2GetYourRelayAddress"</strong></li>
+                    <li>Copy the <strong>"Value"</strong> field (starts with <code className="font-mono">/ip4/...</code>)</li>
+                  </ol>
+                </div>
+
                 <a
-                  href="https://console.aws.amazon.com/systems-manager/parameters/harbor/relay-address/description"
+                  href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -1285,10 +1295,10 @@ export function NetworkPage() {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                   </svg>
-                  Open Relay Address Page
+                  Open Your CloudFormation Stack
                 </a>
-                <p className="pt-2">Copy the <strong>"Value"</strong> field (looks like <code className="font-mono">/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...</code>)</p>
-                <p>Then paste it below and click <strong>"Add Relay"</strong></p>
+
+                <p className="pt-1">Once you have the address, paste it below and click <strong>"Add Relay"</strong></p>
               </div>
             </div>
 
