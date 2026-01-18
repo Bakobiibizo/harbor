@@ -1,5 +1,5 @@
 /** Permission capability types */
-export type Capability = "chat" | "wall_read" | "call";
+export type Capability = 'chat' | 'wall_read' | 'call';
 
 /** Permission info */
 export interface PermissionInfo {

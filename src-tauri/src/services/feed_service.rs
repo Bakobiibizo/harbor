@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::db::{Database, Capability, PostsRepository, Post, PostVisibility};
+use crate::db::{Capability, Database, Post, PostVisibility, PostsRepository};
 use crate::error::{AppError, Result};
 use crate::services::{IdentityService, PermissionsService};
 
@@ -42,7 +42,9 @@ impl FeedService {
     /// - Only non-deleted posts
     /// - Sorted by creation time, newest first
     pub fn get_feed(&self, limit: i64, before_timestamp: Option<i64>) -> Result<Vec<FeedItem>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Get all peer IDs who granted us WallRead
@@ -105,21 +107,32 @@ impl FeedService {
 
     /// Get posts from a specific author (their wall)
     /// Requires WallRead permission if not our own posts
-    pub fn get_wall(&self, author_peer_id: &str, limit: i64, before_timestamp: Option<i64>) -> Result<Vec<FeedItem>> {
-        let identity = self.identity_service.get_identity()?
+    pub fn get_wall(
+        &self,
+        author_peer_id: &str,
+        limit: i64,
+        before_timestamp: Option<i64>,
+    ) -> Result<Vec<FeedItem>> {
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Check permission if not our own wall
         if author_peer_id != identity.peer_id {
-            if !self.permissions_service.we_have_capability(author_peer_id, Capability::WallRead)? {
+            if !self
+                .permissions_service
+                .we_have_capability(author_peer_id, Capability::WallRead)?
+            {
                 return Err(AppError::PermissionDenied(
-                    "No permission to view this wall".to_string()
+                    "No permission to view this wall".to_string(),
                 ));
             }
         }
 
-        let posts = PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let posts =
+            PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Filter by visibility
         let visible_posts: Vec<Post> = posts

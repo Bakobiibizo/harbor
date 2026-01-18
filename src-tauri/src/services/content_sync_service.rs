@@ -5,13 +5,11 @@ use std::sync::Arc;
 
 use ed25519_dalek::VerifyingKey;
 
-use crate::db::{Database, PostsRepository, PostData, PostVisibility, Capability};
+use crate::db::{Capability, Database, PostData, PostVisibility, PostsRepository};
 use crate::error::{AppError, Result};
 use crate::services::{
-    ContactsService, IdentityService, PermissionsService,
-    verify,
-    SignableContentManifestRequest, SignableContentManifestResponse, PostSummary,
-    SignablePost,
+    verify, ContactsService, IdentityService, PermissionsService, PostSummary,
+    SignableContentManifestRequest, SignableContentManifestResponse, SignablePost,
 };
 
 /// Service for syncing content between peers
@@ -65,7 +63,9 @@ impl ContentSyncService {
         cursor: HashMap<String, u64>,
         limit: u32,
     ) -> Result<OutgoingManifestRequest> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
@@ -97,11 +97,15 @@ impl ContentSyncService {
         timestamp: i64,
         signature: &[u8],
     ) -> Result<OutgoingManifestResponse> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify the requester's signature
-        let requester_public_key = self.contacts_service.get_public_key(requester_peer_id)?
+        let requester_public_key = self
+            .contacts_service
+            .get_public_key(requester_peer_id)?
             .ok_or_else(|| AppError::NotFound("Requester not in contacts".to_string()))?;
 
         let signable = SignableContentManifestRequest {
@@ -112,18 +116,26 @@ impl ContentSyncService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            requester_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            requester_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
-            return Err(AppError::Crypto("Invalid manifest request signature".to_string()));
+            return Err(AppError::Crypto(
+                "Invalid manifest request signature".to_string(),
+            ));
         }
 
         // Check if the requester has WallRead permission from us
-        if !self.permissions_service.peer_has_capability(requester_peer_id, Capability::WallRead)? {
+        if !self
+            .permissions_service
+            .peer_has_capability(requester_peer_id, Capability::WallRead)?
+        {
             return Err(AppError::PermissionDenied(
-                "Requester doesn't have WallRead permission".to_string()
+                "Requester doesn't have WallRead permission".to_string(),
             ));
         }
 
@@ -138,8 +150,8 @@ impl ContentSyncService {
         let post_summaries: Vec<PostSummary> = posts
             .iter()
             .map(|post| {
-                let media_hashes = PostsRepository::get_media_hashes(&self.db, &post.post_id)
-                    .unwrap_or_default();
+                let media_hashes =
+                    PostsRepository::get_media_hashes(&self.db, &post.post_id).unwrap_or_default();
 
                 PostSummary {
                     post_id: post.post_id.clone(),
@@ -194,7 +206,9 @@ impl ContentSyncService {
         signature: &[u8],
     ) -> Result<Vec<String>> {
         // Verify the responder's signature
-        let responder_public_key = self.contacts_service.get_public_key(responder_peer_id)?
+        let responder_public_key = self
+            .contacts_service
+            .get_public_key(responder_peer_id)?
             .ok_or_else(|| AppError::NotFound("Responder not in contacts".to_string()))?;
 
         let signable = SignableContentManifestResponse {
@@ -206,12 +220,17 @@ impl ContentSyncService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            responder_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            responder_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
-            return Err(AppError::Crypto("Invalid manifest response signature".to_string()));
+            return Err(AppError::Crypto(
+                "Invalid manifest response signature".to_string(),
+            ));
         }
 
         // Return list of post IDs we need to fetch
@@ -248,7 +267,9 @@ impl ContentSyncService {
         signature: &[u8],
     ) -> Result<()> {
         // Verify the signature
-        let author_public_key = self.contacts_service.get_public_key(author_peer_id)?
+        let author_public_key = self
+            .contacts_service
+            .get_public_key(author_peer_id)?
             .ok_or_else(|| AppError::NotFound("Author not in contacts".to_string()))?;
 
         let signable = SignablePost {
@@ -263,9 +284,12 @@ impl ContentSyncService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            author_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            author_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid post signature".to_string()));
@@ -285,11 +309,11 @@ impl ContentSyncService {
                 content_text,
                 created_at,
                 lamport_clock as i64,
-            ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
         } else {
             // Insert new post
-            let vis = PostVisibility::from_str(visibility)
-                .unwrap_or(PostVisibility::Contacts);
+            let vis = PostVisibility::from_str(visibility).unwrap_or(PostVisibility::Contacts);
 
             let post_data = PostData {
                 post_id: post_id.to_string(),
@@ -307,7 +331,8 @@ impl ContentSyncService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(author_peer_id, lamport_clock as i64)
+        self.db
+            .update_lamport_clock(author_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(())

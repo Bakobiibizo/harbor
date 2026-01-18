@@ -1,7 +1,7 @@
 //! Posts repository for storing and retrieving wall/blog posts
 
-use rusqlite::{params, Connection, Result as SqliteResult};
 use crate::db::Database;
+use rusqlite::{params, Connection, Result as SqliteResult};
 
 /// Post visibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +118,7 @@ impl PostsRepository {
                     post.lamport_clock,
                     post.created_at,
                     post.created_at, // updated_at = created_at initially
-                    1i32, // is_local = true for posts we create
+                    1i32,            // is_local = true for posts we create
                     post.signature,
                 ],
             )?;
@@ -154,9 +154,7 @@ impl PostsRepository {
 
     /// Get a post by ID
     pub fn get_by_post_id(db: &Database, post_id: &str) -> SqliteResult<Option<Post>> {
-        db.with_connection(|conn| {
-            Self::get_by_post_id_inner(conn, post_id)
-        })
+        db.with_connection(|conn| Self::get_by_post_id_inner(conn, post_id))
     }
 
     fn get_by_post_id_inner(conn: &Connection, post_id: &str) -> SqliteResult<Option<Post>> {
@@ -164,7 +162,7 @@ impl PostsRepository {
             "SELECT id, post_id, author_peer_id, content_type, content_text,
                     visibility, lamport_clock, created_at, updated_at,
                     deleted_at, is_local, signature
-             FROM posts WHERE post_id = ?"
+             FROM posts WHERE post_id = ?",
         )?;
 
         let mut rows = stmt.query([post_id])?;
@@ -178,8 +176,8 @@ impl PostsRepository {
 
     fn row_to_post(row: &rusqlite::Row) -> SqliteResult<Post> {
         let visibility_str: String = row.get(5)?;
-        let visibility = PostVisibility::from_str(&visibility_str)
-            .unwrap_or(PostVisibility::Contacts);
+        let visibility =
+            PostVisibility::from_str(&visibility_str).unwrap_or(PostVisibility::Contacts);
 
         Ok(Post {
             id: row.get(0)?,
@@ -215,7 +213,7 @@ impl PostsRepository {
                      FROM posts
                      WHERE author_peer_id = ? AND deleted_at IS NULL AND created_at < ?
                      ORDER BY created_at DESC
-                     LIMIT ?"
+                     LIMIT ?",
                 )?;
                 let mut rows = stmt.query(params![author_peer_id, before, limit])?;
                 while let Some(row) = rows.next()? {
@@ -229,7 +227,7 @@ impl PostsRepository {
                      FROM posts
                      WHERE author_peer_id = ? AND deleted_at IS NULL
                      ORDER BY created_at DESC
-                     LIMIT ?"
+                     LIMIT ?",
                 )?;
                 let mut rows = stmt.query(params![author_peer_id, limit])?;
                 while let Some(row) = rows.next()? {
@@ -258,7 +256,7 @@ impl PostsRepository {
                      FROM posts
                      WHERE is_local = 1 AND deleted_at IS NULL AND created_at < ?
                      ORDER BY created_at DESC
-                     LIMIT ?"
+                     LIMIT ?",
                 )?;
                 let mut rows = stmt.query(params![before, limit])?;
                 while let Some(row) = rows.next()? {
@@ -272,7 +270,7 @@ impl PostsRepository {
                      FROM posts
                      WHERE is_local = 1 AND deleted_at IS NULL
                      ORDER BY created_at DESC
-                     LIMIT ?"
+                     LIMIT ?",
                 )?;
                 let mut rows = stmt.query(params![limit])?;
                 while let Some(row) = rows.next()? {
@@ -303,11 +301,7 @@ impl PostsRepository {
     }
 
     /// Soft delete a post
-    pub fn delete_post(
-        db: &Database,
-        post_id: &str,
-        deleted_at: i64,
-    ) -> SqliteResult<bool> {
+    pub fn delete_post(db: &Database, post_id: &str, deleted_at: i64) -> SqliteResult<bool> {
         db.with_connection(|conn| {
             let rows = conn.execute(
                 "UPDATE posts SET deleted_at = ?
@@ -365,7 +359,7 @@ impl PostsRepository {
                         duration_seconds, sort_order
                  FROM post_media
                  WHERE post_id = ?
-                 ORDER BY sort_order ASC"
+                 ORDER BY sort_order ASC",
             )?;
 
             let mut media = Vec::new();
@@ -441,7 +435,7 @@ impl PostsRepository {
     pub fn get_media_hashes(db: &Database, post_id: &str) -> SqliteResult<Vec<String>> {
         db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT media_hash FROM post_media WHERE post_id = ? ORDER BY sort_order"
+                "SELECT media_hash FROM post_media WHERE post_id = ? ORDER BY sort_order",
             )?;
             let mut hashes = Vec::new();
             let mut rows = stmt.query([post_id])?;
@@ -505,13 +499,9 @@ mod tests {
 
         PostsRepository::insert_post(&db, &post).unwrap();
 
-        let updated = PostsRepository::update_post(
-            &db,
-            "post-456",
-            Some("Updated content"),
-            1234567891,
-            2,
-        ).unwrap();
+        let updated =
+            PostsRepository::update_post(&db, "post-456", Some("Updated content"), 1234567891, 2)
+                .unwrap();
         assert!(updated);
 
         let stored = PostsRepository::get_by_post_id(&db, "post-456")

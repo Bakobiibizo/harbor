@@ -6,12 +6,8 @@ pub mod posts_repo;
 
 pub use contacts_repo::{Contact, ContactData, ContactsRepository};
 pub use identity_repo::IdentityRepository;
-pub use messages_repo::{
-    Conversation, Message, MessageData, MessageStatus, MessagesRepository,
-};
+pub use messages_repo::{Conversation, Message, MessageData, MessageStatus, MessagesRepository};
 pub use permissions_repo::{
     Capability, GrantData, Permission, PermissionEvent, PermissionsRepository,
 };
-pub use posts_repo::{
-    Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
-};
+pub use posts_repo::{Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository};

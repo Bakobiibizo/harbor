@@ -1,26 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
-import type {
-  OfferResult,
-  AnswerResult,
-  IceResult,
-  HangupResult,
-  HangupReason,
-} from "../types";
+import { invoke } from '@tauri-apps/api/core';
+import type { OfferResult, AnswerResult, IceResult, HangupResult, HangupReason } from '../types';
 
 /** Calling service - wraps Tauri commands for voice calling */
 export const callingService = {
   /** Start a call (create an offer) */
   async startCall(calleePeerId: string, sdp: string): Promise<OfferResult> {
-    return invoke<OfferResult>("start_call", { calleePeerId, sdp });
+    return invoke<OfferResult>('start_call', { calleePeerId, sdp });
   },
 
   /** Answer a call */
-  async answerCall(
-    callId: string,
-    callerPeerId: string,
-    sdp: string
-  ): Promise<AnswerResult> {
-    return invoke<AnswerResult>("answer_call", { callId, callerPeerId, sdp });
+  async answerCall(callId: string, callerPeerId: string, sdp: string): Promise<AnswerResult> {
+    return invoke<AnswerResult>('answer_call', { callId, callerPeerId, sdp });
   },
 
   /** Send an ICE candidate */
@@ -28,9 +18,9 @@ export const callingService = {
     callId: string,
     candidate: string,
     sdpMid?: string,
-    sdpMlineIndex?: number
+    sdpMlineIndex?: number,
   ): Promise<IceResult> {
-    return invoke<IceResult>("send_ice_candidate", {
+    return invoke<IceResult>('send_ice_candidate', {
       callId,
       candidate,
       sdpMid,
@@ -39,11 +29,8 @@ export const callingService = {
   },
 
   /** Hang up a call */
-  async hangupCall(
-    callId: string,
-    reason?: HangupReason
-  ): Promise<HangupResult> {
-    return invoke<HangupResult>("hangup_call", { callId, reason });
+  async hangupCall(callId: string, reason?: HangupReason): Promise<HangupResult> {
+    return invoke<HangupResult>('hangup_call', { callId, reason });
   },
 
   /** Process an incoming offer (validate it) */
@@ -53,9 +40,9 @@ export const callingService = {
     calleePeerId: string,
     sdp: string,
     timestamp: number,
-    signature: number[]
+    signature: number[],
   ): Promise<void> {
-    return invoke<void>("process_offer", {
+    return invoke<void>('process_offer', {
       callId,
       callerPeerId,
       calleePeerId,
@@ -72,9 +59,9 @@ export const callingService = {
     calleePeerId: string,
     sdp: string,
     timestamp: number,
-    signature: number[]
+    signature: number[],
   ): Promise<void> {
-    return invoke<void>("process_answer", {
+    return invoke<void>('process_answer', {
       callId,
       callerPeerId,
       calleePeerId,
@@ -92,9 +79,9 @@ export const callingService = {
     sdpMid: string | undefined,
     sdpMlineIndex: number | undefined,
     timestamp: number,
-    signature: number[]
+    signature: number[],
   ): Promise<void> {
-    return invoke<void>("process_ice_candidate", {
+    return invoke<void>('process_ice_candidate', {
       callId,
       senderPeerId,
       candidate,
@@ -111,9 +98,9 @@ export const callingService = {
     senderPeerId: string,
     reason: string,
     timestamp: number,
-    signature: number[]
+    signature: number[],
   ): Promise<void> {
-    return invoke<void>("process_hangup", {
+    return invoke<void>('process_hangup', {
       callId,
       senderPeerId,
       reason,

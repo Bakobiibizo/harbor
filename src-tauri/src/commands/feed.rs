@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::error::AppError;
-use crate::services::{FeedService, FeedItem};
+use crate::services::{FeedItem, FeedService};
 
 /// Feed item info for the frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]

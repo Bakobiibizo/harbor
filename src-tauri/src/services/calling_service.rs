@@ -1,15 +1,14 @@
 //! Voice calling service using WebRTC signaling
 
+use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
-use ed25519_dalek::VerifyingKey;
 
-use crate::db::{Database, Capability};
+use crate::db::{Capability, Database};
 use crate::error::{AppError, Result};
 use crate::services::{
-    ContactsService, IdentityService, PermissionsService,
-    verify,
-    SignableSignalingOffer, SignableSignalingAnswer, SignableSignalingIce, SignableSignalingHangup,
+    verify, ContactsService, IdentityService, PermissionsService, SignableSignalingAnswer,
+    SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
 };
 
 /// Call state
@@ -119,13 +118,18 @@ impl CallingService {
 
     /// Start a call to a peer
     pub fn create_offer(&self, callee_peer_id: &str, sdp: &str) -> Result<OutgoingOffer> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Check we have call permission with this peer
-        if !self.permissions_service.peer_has_capability(callee_peer_id, Capability::Call)? {
+        if !self
+            .permissions_service
+            .peer_has_capability(callee_peer_id, Capability::Call)?
+        {
             return Err(AppError::PermissionDenied(
-                "No call permission with this peer".to_string()
+                "No call permission with this peer".to_string(),
             ));
         }
 
@@ -162,7 +166,9 @@ impl CallingService {
         timestamp: i64,
         signature: &[u8],
     ) -> Result<()> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify we are the callee
@@ -171,7 +177,9 @@ impl CallingService {
         }
 
         // Verify signature
-        let caller_public_key = self.contacts_service.get_public_key(caller_peer_id)?
+        let caller_public_key = self
+            .contacts_service
+            .get_public_key(caller_peer_id)?
             .ok_or_else(|| AppError::NotFound("Caller not in contacts".to_string()))?;
 
         let signable = SignableSignalingOffer {
@@ -183,18 +191,24 @@ impl CallingService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            caller_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            caller_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid offer signature".to_string()));
         }
 
         // Check caller has call permission from us
-        if !self.permissions_service.we_have_capability(caller_peer_id, Capability::Call)? {
+        if !self
+            .permissions_service
+            .we_have_capability(caller_peer_id, Capability::Call)?
+        {
             return Err(AppError::PermissionDenied(
-                "Caller doesn't have call permission".to_string()
+                "Caller doesn't have call permission".to_string(),
             ));
         }
 
@@ -208,7 +222,9 @@ impl CallingService {
         caller_peer_id: &str,
         sdp: &str,
     ) -> Result<OutgoingAnswer> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
@@ -243,7 +259,9 @@ impl CallingService {
         timestamp: i64,
         signature: &[u8],
     ) -> Result<()> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify we are the caller
@@ -252,7 +270,9 @@ impl CallingService {
         }
 
         // Verify signature
-        let callee_public_key = self.contacts_service.get_public_key(callee_peer_id)?
+        let callee_public_key = self
+            .contacts_service
+            .get_public_key(callee_peer_id)?
             .ok_or_else(|| AppError::NotFound("Callee not in contacts".to_string()))?;
 
         let signable = SignableSignalingAnswer {
@@ -264,9 +284,12 @@ impl CallingService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            callee_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            callee_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid answer signature".to_string()));
@@ -283,7 +306,9 @@ impl CallingService {
         sdp_mid: Option<&str>,
         sdp_mline_index: Option<u32>,
     ) -> Result<OutgoingIce> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
@@ -322,7 +347,9 @@ impl CallingService {
         signature: &[u8],
     ) -> Result<()> {
         // Verify signature
-        let sender_public_key = self.contacts_service.get_public_key(sender_peer_id)?
+        let sender_public_key = self
+            .contacts_service
+            .get_public_key(sender_peer_id)?
             .ok_or_else(|| AppError::NotFound("Sender not in contacts".to_string()))?;
 
         let signable = SignableSignalingIce {
@@ -335,12 +362,17 @@ impl CallingService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            sender_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            sender_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
-            return Err(AppError::Crypto("Invalid ICE candidate signature".to_string()));
+            return Err(AppError::Crypto(
+                "Invalid ICE candidate signature".to_string(),
+            ));
         }
 
         Ok(())
@@ -348,7 +380,9 @@ impl CallingService {
 
     /// Hang up a call
     pub fn create_hangup(&self, call_id: &str, reason: &str) -> Result<OutgoingHangup> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
@@ -381,7 +415,9 @@ impl CallingService {
         signature: &[u8],
     ) -> Result<()> {
         // Verify signature
-        let sender_public_key = self.contacts_service.get_public_key(sender_peer_id)?
+        let sender_public_key = self
+            .contacts_service
+            .get_public_key(sender_peer_id)?
             .ok_or_else(|| AppError::NotFound("Sender not in contacts".to_string()))?;
 
         let signable = SignableSignalingHangup {
@@ -392,9 +428,12 @@ impl CallingService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            sender_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            sender_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid hangup signature".to_string()));

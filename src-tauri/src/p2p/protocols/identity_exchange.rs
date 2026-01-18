@@ -38,26 +38,34 @@ pub struct IdentityCodec;
 
 impl IdentityCodec {
     /// Encode an identity request to CBOR bytes
-    pub fn encode_request(request: &IdentityRequest) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+    pub fn encode_request(
+        request: &IdentityRequest,
+    ) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
         let mut bytes = Vec::new();
         ciborium::into_writer(request, &mut bytes)?;
         Ok(bytes)
     }
 
     /// Decode an identity request from CBOR bytes
-    pub fn decode_request(bytes: &[u8]) -> Result<IdentityRequest, ciborium::de::Error<std::io::Error>> {
+    pub fn decode_request(
+        bytes: &[u8],
+    ) -> Result<IdentityRequest, ciborium::de::Error<std::io::Error>> {
         ciborium::from_reader(bytes)
     }
 
     /// Encode an identity response to CBOR bytes
-    pub fn encode_response(response: &IdentityResponse) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+    pub fn encode_response(
+        response: &IdentityResponse,
+    ) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
         let mut bytes = Vec::new();
         ciborium::into_writer(response, &mut bytes)?;
         Ok(bytes)
     }
 
     /// Decode an identity response from CBOR bytes
-    pub fn decode_response(bytes: &[u8]) -> Result<IdentityResponse, ciborium::de::Error<std::io::Error>> {
+    pub fn decode_response(
+        bytes: &[u8],
+    ) -> Result<IdentityResponse, ciborium::de::Error<std::io::Error>> {
         ciborium::from_reader(bytes)
     }
 }

@@ -1,7 +1,7 @@
 //! Permissions repository for managing capability grants and revocations
 
-use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 use crate::db::Database;
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
 /// Capability types that can be granted
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,8 +38,8 @@ impl Capability {
 pub struct PermissionEvent {
     pub id: i64,
     pub event_id: String,
-    pub event_type: String,  // "request", "grant", "revoke"
-    pub entity_id: String,   // request_id or grant_id
+    pub event_type: String, // "request", "grant", "revoke"
+    pub entity_id: String,  // request_id or grant_id
     pub author_peer_id: String,
     pub issuer_peer_id: Option<String>,
     pub subject_peer_id: String,
@@ -237,7 +237,7 @@ impl PermissionsRepository {
                  FROM permissions_current
                  WHERE subject_peer_id = ?
                    AND revoked_at IS NULL
-                   AND (expires_at IS NULL OR expires_at > ?)"
+                   AND (expires_at IS NULL OR expires_at > ?)",
             )?;
 
             let perms = stmt.query_map(params![subject_peer_id, now], |row| {
@@ -272,7 +272,7 @@ impl PermissionsRepository {
                  FROM permissions_current
                  WHERE issuer_peer_id = ?
                    AND revoked_at IS NULL
-                   AND (expires_at IS NULL OR expires_at > ?)"
+                   AND (expires_at IS NULL OR expires_at > ?)",
             )?;
 
             let perms = stmt.query_map(params![issuer_peer_id, now], |row| {
@@ -366,7 +366,7 @@ impl PermissionsRepository {
                  WHERE issuer_peer_id = ?
                    AND capability = 'chat'
                    AND revoked_at IS NULL
-                   AND (expires_at IS NULL OR expires_at > ?)"
+                   AND (expires_at IS NULL OR expires_at > ?)",
             )?;
 
             let peers = stmt.query_map(params![our_peer_id, now], |row| row.get(0))?;
@@ -387,7 +387,7 @@ impl PermissionsRepository {
                  WHERE subject_peer_id = ?
                    AND capability = ?
                    AND revoked_at IS NULL
-                   AND (expires_at IS NULL OR expires_at > ?)"
+                   AND (expires_at IS NULL OR expires_at > ?)",
             )?;
 
             let peers = stmt.query_map(params![our_peer_id, capability, now], |row| row.get(0))?;
@@ -432,7 +432,8 @@ mod tests {
             "12D3KooWIssuer",
             "12D3KooWSubject",
             "chat"
-        ).unwrap());
+        )
+        .unwrap());
 
         // Check different capability doesn't exist
         assert!(!PermissionsRepository::has_capability(
@@ -440,7 +441,8 @@ mod tests {
             "12D3KooWIssuer",
             "12D3KooWSubject",
             "call"
-        ).unwrap());
+        )
+        .unwrap());
     }
 
     #[test]
@@ -464,8 +466,12 @@ mod tests {
 
         // Capability exists before revocation
         assert!(PermissionsRepository::has_capability(
-            &db, "12D3KooWIssuer", "12D3KooWSubject", "chat"
-        ).unwrap());
+            &db,
+            "12D3KooWIssuer",
+            "12D3KooWSubject",
+            "chat"
+        )
+        .unwrap());
 
         // Revoke
         let now = chrono::Utc::now().timestamp();
@@ -473,8 +479,12 @@ mod tests {
 
         // Capability no longer valid
         assert!(!PermissionsRepository::has_capability(
-            &db, "12D3KooWIssuer", "12D3KooWSubject", "chat"
-        ).unwrap());
+            &db,
+            "12D3KooWIssuer",
+            "12D3KooWSubject",
+            "chat"
+        )
+        .unwrap());
     }
 
     #[test]
@@ -499,8 +509,12 @@ mod tests {
 
         // Expired permission should not be valid
         assert!(!PermissionsRepository::has_capability(
-            &db, "12D3KooWIssuer", "12D3KooWSubject", "chat"
-        ).unwrap());
+            &db,
+            "12D3KooWIssuer",
+            "12D3KooWSubject",
+            "chat"
+        )
+        .unwrap());
     }
 
     #[test]
@@ -524,7 +538,8 @@ mod tests {
             PermissionsRepository::upsert_grant(&db, &grant).unwrap();
         }
 
-        let perms = PermissionsRepository::get_permissions_by_issuer(&db, "12D3KooWIssuer").unwrap();
+        let perms =
+            PermissionsRepository::get_permissions_by_issuer(&db, "12D3KooWIssuer").unwrap();
         assert_eq!(perms.len(), 3);
     }
 }

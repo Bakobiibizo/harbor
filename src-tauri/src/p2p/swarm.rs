@@ -1,7 +1,4 @@
-use libp2p::{
-    identity::Keypair,
-    noise, tcp, yamux, PeerId, Swarm, SwarmBuilder,
-};
+use libp2p::{identity::Keypair, noise, tcp, yamux, PeerId, Swarm, SwarmBuilder};
 use tracing::info;
 
 use super::behaviour::ChatBehaviour;
@@ -9,10 +6,7 @@ use super::config::NetworkConfig;
 use crate::error::{AppError, Result};
 
 /// Build a libp2p swarm with all configured protocols
-pub fn build_swarm(
-    keypair: Keypair,
-    config: &NetworkConfig,
-) -> Result<Swarm<ChatBehaviour>> {
+pub fn build_swarm(keypair: Keypair, config: &NetworkConfig) -> Result<Swarm<ChatBehaviour>> {
     let local_peer_id = PeerId::from(keypair.public());
 
     info!("Building swarm with peer ID: {}", local_peer_id);
@@ -36,9 +30,7 @@ pub fn build_swarm(
             ))
         })
         .map_err(|e| AppError::Network(format!("Behaviour error: {}", e)))?
-        .with_swarm_config(|cfg| {
-            cfg.with_idle_connection_timeout(config.idle_connection_timeout)
-        })
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(config.idle_connection_timeout))
         .build();
 
     Ok(swarm)

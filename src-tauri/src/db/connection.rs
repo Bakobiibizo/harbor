@@ -19,9 +19,8 @@ impl Database {
     pub fn new(path: PathBuf) -> SqliteResult<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| {
-                rusqlite::Error::InvalidPath(path.clone().into())
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|_| rusqlite::Error::InvalidPath(path.clone().into()))?;
         }
 
         let conn = Connection::open(&path)?;
@@ -124,11 +123,13 @@ impl Database {
             let tx = conn.transaction()?;
 
             // Get current value (or 0 if not exists)
-            let current: i64 = tx.query_row(
-                "SELECT current_value FROM lamport_clocks WHERE author_peer_id = ?",
-                [author_peer_id],
-                |row| row.get(0),
-            ).unwrap_or(0);
+            let current: i64 = tx
+                .query_row(
+                    "SELECT current_value FROM lamport_clocks WHERE author_peer_id = ?",
+                    [author_peer_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
 
             let next = current + 1;
 
@@ -163,7 +164,8 @@ impl Database {
                 "SELECT current_value FROM lamport_clocks WHERE author_peer_id = ?",
                 [author_peer_id],
                 |row| row.get(0),
-            ).or(Ok(0))
+            )
+            .or(Ok(0))
         })
     }
 
@@ -253,17 +255,14 @@ impl Database {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT author_peer_id, highest_lamport_clock FROM sync_cursors
-                 WHERE source_peer_id = ? AND sync_type = ?"
+                 WHERE source_peer_id = ? AND sync_type = ?",
             )?;
 
-            let rows = stmt.query_map(
-                rusqlite::params![source_peer_id, sync_type],
-                |row| {
-                    let author: String = row.get(0)?;
-                    let clock: i64 = row.get(1)?;
-                    Ok((author, clock as u64))
-                },
-            )?;
+            let rows = stmt.query_map(rusqlite::params![source_peer_id, sync_type], |row| {
+                let author: String = row.get(0)?;
+                let clock: i64 = row.get(1)?;
+                Ok((author, clock as u64))
+            })?;
 
             let mut cursor = std::collections::HashMap::new();
             for row in rows {
@@ -349,7 +348,8 @@ impl Database {
                  WHERE source_peer_id = ? AND sync_type = ?",
                 rusqlite::params![source_peer_id, sync_type],
                 |row| row.get(0),
-            ).or(Ok(None))
+            )
+            .or(Ok(None))
         })
     }
 }
@@ -380,7 +380,8 @@ mod tests {
             )?;
             assert!(count > 0, "Tables should be created");
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -447,7 +448,9 @@ mod tests {
         assert!(db.check_and_record_nonce(conv_id, sender, 2).unwrap());
 
         // Same nonce from different sender - should be accepted
-        assert!(db.check_and_record_nonce(conv_id, "12D3KooWOther", 1).unwrap());
+        assert!(db
+            .check_and_record_nonce(conv_id, "12D3KooWOther", 1)
+            .unwrap());
     }
 
     #[test]
@@ -511,7 +514,8 @@ mod tests {
         db.update_sync_cursor(source, "posts", author, 10).unwrap();
 
         // Update permissions cursor (different type)
-        db.update_sync_cursor(source, "permissions", author, 5).unwrap();
+        db.update_sync_cursor(source, "permissions", author, 5)
+            .unwrap();
 
         // They should be separate
         let posts_cursor = db.get_sync_cursor(source, "posts").unwrap();
@@ -533,7 +537,8 @@ mod tests {
         updates.insert("12D3KooWAuthor2".to_string(), 20u64);
         updates.insert("12D3KooWAuthor3".to_string(), 30u64);
 
-        db.update_sync_cursors_batch(source, "posts", &updates).unwrap();
+        db.update_sync_cursors_batch(source, "posts", &updates)
+            .unwrap();
 
         let cursor = db.get_sync_cursor(source, "posts").unwrap();
         assert_eq!(cursor.len(), 3);

@@ -1,8 +1,8 @@
-export { identityService } from "./identity";
-export * as networkService from "./network";
-export { contactsService } from "./contacts";
-export { permissionsService } from "./permissions";
-export { messagingService } from "./messaging";
-export { postsService } from "./posts";
-export { feedService } from "./feed";
-export { callingService } from "./calling";
+export { identityService } from './identity';
+export * as networkService from './network';
+export { contactsService } from './contacts';
+export { permissionsService } from './permissions';
+export { messagingService } from './messaging';
+export { postsService } from './posts';
+export { feedService } from './feed';
+export { callingService } from './calling';

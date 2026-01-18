@@ -1,6 +1,6 @@
-import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import type { Message, Conversation, SendMessageResult } from "../types";
+import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
+import type { Message, Conversation, SendMessageResult } from '../types';
 
 interface MessagingState {
   // State
@@ -16,7 +16,7 @@ interface MessagingState {
   sendMessage: (
     peerId: string,
     content: string,
-    contentType?: string
+    contentType?: string,
   ) => Promise<SendMessageResult>;
   setActiveConversation: (peerId: string | null) => void;
   handleIncomingMessage: (message: Message) => void;
@@ -35,10 +35,10 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
   loadConversations: async () => {
     set({ isLoading: true, error: null });
     try {
-      const conversations = await invoke<Conversation[]>("get_conversations");
+      const conversations = await invoke<Conversation[]>('get_conversations');
       set({ conversations, isLoading: false });
     } catch (error) {
-      console.error("Failed to load conversations:", error);
+      console.error('Failed to load conversations:', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -47,7 +47,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
   loadMessages: async (peerId: string) => {
     set({ isLoading: true, error: null });
     try {
-      const messages = await invoke<Message[]>("get_messages", {
+      const messages = await invoke<Message[]>('get_messages', {
         peerId,
         limit: 100,
       });
@@ -56,19 +56,15 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
         isLoading: false,
       }));
     } catch (error) {
-      console.error("Failed to load messages:", error);
+      console.error('Failed to load messages:', error);
       set({ error: String(error), isLoading: false });
     }
   },
 
   // Send a message
-  sendMessage: async (
-    peerId: string,
-    content: string,
-    contentType: string = "text"
-  ) => {
+  sendMessage: async (peerId: string, content: string, contentType: string = 'text') => {
     try {
-      const result = await invoke<SendMessageResult>("send_message", {
+      const result = await invoke<SendMessageResult>('send_message', {
         peerId,
         content,
         contentType,
@@ -78,7 +74,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       const newMessage: Message = {
         messageId: result.messageId,
         conversationId: result.conversationId,
-        senderPeerId: "", // Will be filled by backend
+        senderPeerId: '', // Will be filled by backend
         recipientPeerId: peerId,
         content,
         contentType,
@@ -86,7 +82,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
         sentAt: result.sentAt,
         deliveredAt: null,
         readAt: null,
-        status: "sent",
+        status: 'sent',
         isOutgoing: true,
       };
 
@@ -102,7 +98,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
 
       return result;
     } catch (error) {
-      console.error("Failed to send message:", error);
+      console.error('Failed to send message:', error);
       throw error;
     }
   },
@@ -117,9 +113,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
 
   // Handle incoming message from Tauri event
   handleIncomingMessage: (message: Message) => {
-    const peerId = message.isOutgoing
-      ? message.recipientPeerId
-      : message.senderPeerId;
+    const peerId = message.isOutgoing ? message.recipientPeerId : message.senderPeerId;
 
     set((state) => ({
       messages: {
@@ -135,11 +129,11 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
   // Mark conversation as read
   markConversationRead: async (peerId: string) => {
     try {
-      await invoke("mark_conversation_read", { peerId });
+      await invoke('mark_conversation_read', { peerId });
       // Refresh conversations to update unread count
       get().loadConversations();
     } catch (error) {
-      console.error("Failed to mark conversation read:", error);
+      console.error('Failed to mark conversation read:', error);
     }
   },
 }));

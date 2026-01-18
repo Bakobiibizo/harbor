@@ -28,9 +28,9 @@
 //! 3. CBOR-encode with canonical encoding
 //! 4. Verify signature against raw bytes
 
+use crate::error::{AppError, Result};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use crate::error::{AppError, Result};
 
 /// Trait for types that can be canonically signed
 pub trait Signable: Serialize {
@@ -86,7 +86,7 @@ pub struct SignableIdentityResponse {
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
-    pub identity_version: String,  // hash for caching
+    pub identity_version: String, // hash for caching
     pub timestamp: i64,
 }
 
@@ -156,7 +156,7 @@ pub struct SignableDirectMessage {
     pub content_encrypted: Vec<u8>,
     pub content_type: String,
     pub reply_to: Option<String>,
-    pub nonce_counter: u64,  // For replay protection - bound to signature
+    pub nonce_counter: u64, // For replay protection - bound to signature
     pub lamport_clock: u64,
     pub timestamp: i64,
 }
@@ -169,7 +169,7 @@ pub struct SignableMessageAck {
     pub message_id: String,
     pub conversation_id: String,
     pub ack_sender_peer_id: String,
-    pub status: String,  // "delivered" or "read"
+    pub status: String, // "delivered" or "read"
     pub timestamp: i64,
 }
 
@@ -269,7 +269,7 @@ impl Signable for SignableSignalingIce {}
 pub struct SignableSignalingHangup {
     pub call_id: String,
     pub sender_peer_id: String,
-    pub reason: String,  // "normal", "busy", "declined", "error"
+    pub reason: String, // "normal", "busy", "declined", "error"
     pub timestamp: i64,
 }
 

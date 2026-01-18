@@ -110,12 +110,8 @@ pub async fn send_message(
     let content_type = content_type.unwrap_or_else(|| "text".to_string());
 
     // Create the encrypted, signed message
-    let outgoing = messaging_service.send_message(
-        &peer_id,
-        &content,
-        &content_type,
-        reply_to.as_deref(),
-    )?;
+    let outgoing =
+        messaging_service.send_message(&peer_id, &content, &content_type, reply_to.as_deref())?;
 
     // Convert to DirectMessage and encode for network transmission
     let direct_msg = outgoing_to_direct_message(&outgoing);
@@ -129,7 +125,9 @@ pub async fn send_message(
 
     // Send over the network
     let handle = network.get_handle().await?;
-    handle.send_message(libp2p_peer_id, "message".to_string(), payload).await?;
+    handle
+        .send_message(libp2p_peer_id, "message".to_string(), payload)
+        .await?;
 
     info!("Message {} sent to peer {}", outgoing.message_id, peer_id);
 
@@ -150,11 +148,8 @@ pub async fn get_messages(
 ) -> Result<Vec<MessageInfo>, AppError> {
     let limit = limit.unwrap_or(50);
 
-    let messages = messaging_service.get_conversation_messages(
-        &peer_id,
-        limit,
-        before_timestamp,
-    )?;
+    let messages =
+        messaging_service.get_conversation_messages(&peer_id, limit, before_timestamp)?;
 
     Ok(messages.into_iter().map(MessageInfo::from).collect())
 }
@@ -165,7 +160,10 @@ pub async fn get_conversations(
     messaging_service: State<'_, Arc<MessagingService>>,
 ) -> Result<Vec<ConversationInfo>, AppError> {
     let conversations = messaging_service.get_conversations()?;
-    Ok(conversations.into_iter().map(ConversationInfo::from).collect())
+    Ok(conversations
+        .into_iter()
+        .map(ConversationInfo::from)
+        .collect())
 }
 
 /// Mark a conversation as read

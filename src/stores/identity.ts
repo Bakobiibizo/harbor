@@ -1,6 +1,6 @@
-import { create } from "zustand";
-import type { IdentityState, CreateIdentityRequest } from "../types";
-import { identityService } from "../services";
+import { create } from 'zustand';
+import type { IdentityState, CreateIdentityRequest } from '../types';
+import { identityService } from '../services';
 
 interface IdentityStore {
   state: IdentityState;
@@ -17,36 +17,36 @@ interface IdentityStore {
 }
 
 export const useIdentityStore = create<IdentityStore>((set, get) => ({
-  state: { status: "loading" },
+  state: { status: 'loading' },
   error: null,
 
   initialize: async () => {
     try {
-      set({ state: { status: "loading" }, error: null });
+      set({ state: { status: 'loading' }, error: null });
 
       const hasIdentity = await identityService.hasIdentity();
 
       if (!hasIdentity) {
-        set({ state: { status: "no_identity" } });
+        set({ state: { status: 'no_identity' } });
         return;
       }
 
       const identity = await identityService.getIdentityInfo();
       if (!identity) {
-        set({ state: { status: "no_identity" } });
+        set({ state: { status: 'no_identity' } });
         return;
       }
 
       const isUnlocked = await identityService.isUnlocked();
 
       if (isUnlocked) {
-        set({ state: { status: "unlocked", identity } });
+        set({ state: { status: 'unlocked', identity } });
       } else {
-        set({ state: { status: "locked", identity } });
+        set({ state: { status: 'locked', identity } });
       }
     } catch (err) {
       set({
-        state: { status: "no_identity" },
+        state: { status: 'no_identity' },
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -56,7 +56,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     try {
       set({ error: null });
       const identity = await identityService.createIdentity(request);
-      set({ state: { status: "unlocked", identity } });
+      set({ state: { status: 'unlocked', identity } });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
       throw err;
@@ -67,7 +67,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     try {
       set({ error: null });
       const identity = await identityService.unlock(passphrase);
-      set({ state: { status: "unlocked", identity } });
+      set({ state: { status: 'unlocked', identity } });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
       throw err;
@@ -78,8 +78,8 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     try {
       await identityService.lock();
       const { state } = get();
-      if (state.status === "unlocked") {
-        set({ state: { status: "locked", identity: state.identity } });
+      if (state.status === 'unlocked') {
+        set({ state: { status: 'locked', identity: state.identity } });
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
@@ -90,7 +90,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     try {
       await identityService.updateDisplayName(displayName);
       const { state } = get();
-      if (state.status === "unlocked" || state.status === "locked") {
+      if (state.status === 'unlocked' || state.status === 'locked') {
         set({
           state: {
             ...state,
@@ -107,7 +107,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     try {
       await identityService.updateBio(bio);
       const { state } = get();
-      if (state.status === "unlocked" || state.status === "locked") {
+      if (state.status === 'unlocked' || state.status === 'locked') {
         set({
           state: {
             ...state,

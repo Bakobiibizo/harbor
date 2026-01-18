@@ -1,5 +1,5 @@
-@import "tailwindcss";
-@import "./styles/design-system.css";
+@import 'tailwindcss';
+@import './styles/design-system.css';
 
 /* ============================================
    Harbor - Global Styles
@@ -97,7 +97,9 @@ html {
    Input Enhancements
    ============================================ */
 
-input, textarea, select {
+input,
+textarea,
+select {
   font-family: inherit;
 }
 

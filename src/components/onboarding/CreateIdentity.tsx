@@ -1,15 +1,15 @@
-import { useState, type FormEvent } from "react";
-import { Button, Input } from "../common";
-import { useIdentityStore } from "../../stores";
-import { HarborIcon, UserIcon, LockIcon, ShieldIcon } from "../icons";
+import { useState, type FormEvent } from 'react';
+import { Button, Input } from '../common';
+import { useIdentityStore } from '../../stores';
+import { HarborIcon, UserIcon, LockIcon, ShieldIcon } from '../icons';
 
 export function CreateIdentity() {
   const { createIdentity, error, clearError } = useIdentityStore();
 
-  const [displayName, setDisplayName] = useState("");
-  const [passphrase, setPassphrase] = useState("");
-  const [confirmPassphrase, setConfirmPassphrase] = useState("");
-  const [bio, setBio] = useState("");
+  const [displayName, setDisplayName] = useState('');
+  const [passphrase, setPassphrase] = useState('');
+  const [confirmPassphrase, setConfirmPassphrase] = useState('');
+  const [bio, setBio] = useState('');
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
@@ -17,7 +17,7 @@ export function CreateIdentity() {
   const handleNextStep = () => {
     setLocalError(null);
     if (!displayName.trim()) {
-      setLocalError("Display name is required");
+      setLocalError('Display name is required');
       return;
     }
     setStep(2);
@@ -29,12 +29,12 @@ export function CreateIdentity() {
     setLocalError(null);
 
     if (passphrase.length < 8) {
-      setLocalError("Passphrase must be at least 8 characters");
+      setLocalError('Passphrase must be at least 8 characters');
       return;
     }
 
     if (passphrase !== confirmPassphrase) {
-      setLocalError("Passphrases do not match");
+      setLocalError('Passphrases do not match');
       return;
     }
 
@@ -56,11 +56,14 @@ export function CreateIdentity() {
 
   // Password strength indicator
   const getPasswordStrength = () => {
-    if (!passphrase) return { level: 0, label: "", color: "" };
-    if (passphrase.length < 8) return { level: 1, label: "Too short", color: "hsl(var(--harbor-error))" };
-    if (passphrase.length < 12) return { level: 2, label: "Fair", color: "hsl(var(--harbor-warning))" };
-    if (passphrase.length < 16) return { level: 3, label: "Good", color: "hsl(var(--harbor-success))" };
-    return { level: 4, label: "Strong", color: "hsl(152 69% 50%)" };
+    if (!passphrase) return { level: 0, label: '', color: '' };
+    if (passphrase.length < 8)
+      return { level: 1, label: 'Too short', color: 'hsl(var(--harbor-error))' };
+    if (passphrase.length < 12)
+      return { level: 2, label: 'Fair', color: 'hsl(var(--harbor-warning))' };
+    if (passphrase.length < 16)
+      return { level: 3, label: 'Good', color: 'hsl(var(--harbor-success))' };
+    return { level: 4, label: 'Strong', color: 'hsl(152 69% 50%)' };
   };
 
   const strength = getPasswordStrength();
@@ -69,7 +72,8 @@ export function CreateIdentity() {
     <div
       className="min-h-screen flex"
       style={{
-        background: "linear-gradient(135deg, hsl(220 91% 8%) 0%, hsl(262 60% 12%) 50%, hsl(220 91% 8%) 100%)",
+        background:
+          'linear-gradient(135deg, hsl(220 91% 8%) 0%, hsl(262 60% 12%) 50%, hsl(220 91% 8%) 100%)',
       }}
     >
       {/* Left side - Branding */}
@@ -80,8 +84,9 @@ export function CreateIdentity() {
             <div
               className="w-14 h-14 rounded-2xl flex items-center justify-center"
               style={{
-                background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
-                boxShadow: "0 8px 32px hsl(var(--harbor-primary) / 0.4)",
+                background:
+                  'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                boxShadow: '0 8px 32px hsl(var(--harbor-primary) / 0.4)',
               }}
             >
               <HarborIcon className="w-8 h-8 text-white" />
@@ -89,14 +94,11 @@ export function CreateIdentity() {
             <div>
               <h1
                 className="text-2xl font-bold"
-                style={{ color: "hsl(var(--harbor-text-primary))" }}
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
                 Harbor
               </h1>
-              <p
-                className="text-sm"
-                style={{ color: "hsl(var(--harbor-text-tertiary))" }}
-              >
+              <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                 Decentralized Chat
               </p>
             </div>
@@ -107,25 +109,20 @@ export function CreateIdentity() {
             <div className="flex gap-4">
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ background: "hsl(var(--harbor-primary) / 0.15)" }}
+                style={{ background: 'hsl(var(--harbor-primary) / 0.15)' }}
               >
-                <ShieldIcon
-                  className="w-5 h-5"
-                  style={{ color: "hsl(var(--harbor-primary))" }}
-                />
+                <ShieldIcon className="w-5 h-5" style={{ color: 'hsl(var(--harbor-primary))' }} />
               </div>
               <div>
                 <h3
                   className="font-semibold mb-1"
-                  style={{ color: "hsl(var(--harbor-text-primary))" }}
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
                   End-to-End Encrypted
                 </h3>
-                <p
-                  className="text-sm"
-                  style={{ color: "hsl(var(--harbor-text-tertiary))" }}
-                >
-                  Your messages are encrypted before they leave your device. Only you and your contacts can read them.
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Your messages are encrypted before they leave your device. Only you and your
+                  contacts can read them.
                 </p>
               </div>
             </div>
@@ -133,25 +130,20 @@ export function CreateIdentity() {
             <div className="flex gap-4">
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ background: "hsl(var(--harbor-accent) / 0.15)" }}
+                style={{ background: 'hsl(var(--harbor-accent) / 0.15)' }}
               >
-                <LockIcon
-                  className="w-5 h-5"
-                  style={{ color: "hsl(var(--harbor-accent))" }}
-                />
+                <LockIcon className="w-5 h-5" style={{ color: 'hsl(var(--harbor-accent))' }} />
               </div>
               <div>
                 <h3
                   className="font-semibold mb-1"
-                  style={{ color: "hsl(var(--harbor-text-primary))" }}
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
                   Own Your Data
                 </h3>
-                <p
-                  className="text-sm"
-                  style={{ color: "hsl(var(--harbor-text-tertiary))" }}
-                >
-                  No central servers, no data harvesting. Your identity and content stay on your device.
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  No central servers, no data harvesting. Your identity and content stay on your
+                  device.
                 </p>
               </div>
             </div>
@@ -159,25 +151,20 @@ export function CreateIdentity() {
             <div className="flex gap-4">
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ background: "hsl(var(--harbor-success) / 0.15)" }}
+                style={{ background: 'hsl(var(--harbor-success) / 0.15)' }}
               >
-                <UserIcon
-                  className="w-5 h-5"
-                  style={{ color: "hsl(var(--harbor-success))" }}
-                />
+                <UserIcon className="w-5 h-5" style={{ color: 'hsl(var(--harbor-success))' }} />
               </div>
               <div>
                 <h3
                   className="font-semibold mb-1"
-                  style={{ color: "hsl(var(--harbor-text-primary))" }}
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
                   Peer-to-Peer
                 </h3>
-                <p
-                  className="text-sm"
-                  style={{ color: "hsl(var(--harbor-text-tertiary))" }}
-                >
-                  Connect directly with friends. No middlemen, no tracking, just secure communication.
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Connect directly with friends. No middlemen, no tracking, just secure
+                  communication.
                 </p>
               </div>
             </div>
@@ -191,9 +178,9 @@ export function CreateIdentity() {
           <div
             className="rounded-2xl p-8"
             style={{
-              background: "hsl(var(--harbor-bg-elevated))",
-              border: "1px solid hsl(var(--harbor-border-subtle))",
-              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+              background: 'hsl(var(--harbor-bg-elevated))',
+              border: '1px solid hsl(var(--harbor-border-subtle))',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
             }}
           >
             {/* Mobile logo */}
@@ -201,14 +188,15 @@ export function CreateIdentity() {
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center"
                 style={{
-                  background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
+                  background:
+                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                 }}
               >
                 <HarborIcon className="w-6 h-6 text-white" />
               </div>
               <span
                 className="text-lg font-bold"
-                style={{ color: "hsl(var(--harbor-text-primary))" }}
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
                 Harbor
               </span>
@@ -220,15 +208,16 @@ export function CreateIdentity() {
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold"
                   style={{
-                    background: "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))",
-                    color: "white",
+                    background:
+                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                    color: 'white',
                   }}
                 >
                   1
                 </div>
                 <span
                   className="text-sm font-medium"
-                  style={{ color: "hsl(var(--harbor-text-primary))" }}
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
                   Profile
                 </span>
@@ -236,19 +225,21 @@ export function CreateIdentity() {
               <div
                 className="flex-1 h-0.5 rounded"
                 style={{
-                  background: step === 2
-                    ? "linear-gradient(90deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))"
-                    : "hsl(var(--harbor-surface-2))",
+                  background:
+                    step === 2
+                      ? 'linear-gradient(90deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                      : 'hsl(var(--harbor-surface-2))',
                 }}
               />
               <div className="flex items-center gap-2">
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-300"
                   style={{
-                    background: step === 2
-                      ? "linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))"
-                      : "hsl(var(--harbor-surface-2))",
-                    color: step === 2 ? "white" : "hsl(var(--harbor-text-tertiary))",
+                    background:
+                      step === 2
+                        ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                        : 'hsl(var(--harbor-surface-2))',
+                    color: step === 2 ? 'white' : 'hsl(var(--harbor-text-tertiary))',
                   }}
                 >
                   2
@@ -256,9 +247,10 @@ export function CreateIdentity() {
                 <span
                   className="text-sm font-medium"
                   style={{
-                    color: step === 2
-                      ? "hsl(var(--harbor-text-primary))"
-                      : "hsl(var(--harbor-text-tertiary))",
+                    color:
+                      step === 2
+                        ? 'hsl(var(--harbor-text-primary))'
+                        : 'hsl(var(--harbor-text-tertiary))',
                   }}
                 >
                   Security
@@ -270,22 +262,28 @@ export function CreateIdentity() {
             <div className="mb-6">
               <h2
                 className="text-2xl font-bold mb-2"
-                style={{ color: "hsl(var(--harbor-text-primary))" }}
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
-                {step === 1 ? "Create Your Identity" : "Secure Your Keys"}
+                {step === 1 ? 'Create Your Identity' : 'Secure Your Keys'}
               </h2>
-              <p
-                className="text-sm"
-                style={{ color: "hsl(var(--harbor-text-secondary))" }}
-              >
+              <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {step === 1
-                  ? "Choose how others will see you on the network"
-                  : "Your passphrase encrypts your private keys locally"}
+                  ? 'Choose how others will see you on the network'
+                  : 'Your passphrase encrypts your private keys locally'}
               </p>
             </div>
 
             {/* Form */}
-            <form onSubmit={step === 1 ? (e) => { e.preventDefault(); handleNextStep(); } : handleSubmit}>
+            <form
+              onSubmit={
+                step === 1
+                  ? (e) => {
+                      e.preventDefault();
+                      handleNextStep();
+                    }
+                  : handleSubmit
+              }
+            >
               {step === 1 ? (
                 <div className="space-y-4">
                   <Input
@@ -309,9 +307,9 @@ export function CreateIdentity() {
                     <div
                       className="p-3 rounded-xl text-sm"
                       style={{
-                        background: "hsl(var(--harbor-error) / 0.1)",
-                        color: "hsl(var(--harbor-error))",
-                        border: "1px solid hsl(var(--harbor-error) / 0.2)",
+                        background: 'hsl(var(--harbor-error) / 0.1)',
+                        color: 'hsl(var(--harbor-error))',
+                        border: '1px solid hsl(var(--harbor-error) / 0.2)',
                       }}
                     >
                       {displayError}
@@ -342,17 +340,15 @@ export function CreateIdentity() {
                               key={level}
                               className="h-1 flex-1 rounded-full transition-colors duration-200"
                               style={{
-                                background: level <= strength.level
-                                  ? strength.color
-                                  : "hsl(var(--harbor-surface-2))",
+                                background:
+                                  level <= strength.level
+                                    ? strength.color
+                                    : 'hsl(var(--harbor-surface-2))',
                               }}
                             />
                           ))}
                         </div>
-                        <p
-                          className="text-xs"
-                          style={{ color: strength.color }}
-                        >
+                        <p className="text-xs" style={{ color: strength.color }}>
                           {strength.label}
                         </p>
                       </div>
@@ -371,9 +367,9 @@ export function CreateIdentity() {
                     <div
                       className="p-3 rounded-xl text-sm"
                       style={{
-                        background: "hsl(var(--harbor-error) / 0.1)",
-                        color: "hsl(var(--harbor-error))",
-                        border: "1px solid hsl(var(--harbor-error) / 0.2)",
+                        background: 'hsl(var(--harbor-error) / 0.1)',
+                        color: 'hsl(var(--harbor-error))',
+                        border: '1px solid hsl(var(--harbor-error) / 0.2)',
                       }}
                     >
                       {displayError}
@@ -390,12 +386,7 @@ export function CreateIdentity() {
                     >
                       Back
                     </Button>
-                    <Button
-                      type="submit"
-                      className="flex-1"
-                      size="lg"
-                      loading={loading}
-                    >
+                    <Button type="submit" className="flex-1" size="lg" loading={loading}>
                       Create Identity
                     </Button>
                   </div>
@@ -408,27 +399,25 @@ export function CreateIdentity() {
               <div
                 className="mt-6 p-4 rounded-xl"
                 style={{
-                  background: "hsl(var(--harbor-warning) / 0.1)",
-                  border: "1px solid hsl(var(--harbor-warning) / 0.2)",
+                  background: 'hsl(var(--harbor-warning) / 0.1)',
+                  border: '1px solid hsl(var(--harbor-warning) / 0.2)',
                 }}
               >
                 <div className="flex gap-3">
                   <ShieldIcon
                     className="w-5 h-5 flex-shrink-0 mt-0.5"
-                    style={{ color: "hsl(var(--harbor-warning))" }}
+                    style={{ color: 'hsl(var(--harbor-warning))' }}
                   />
                   <div>
                     <p
                       className="text-sm font-medium mb-1"
-                      style={{ color: "hsl(var(--harbor-warning))" }}
+                      style={{ color: 'hsl(var(--harbor-warning))' }}
                     >
                       Important
                     </p>
-                    <p
-                      className="text-sm"
-                      style={{ color: "hsl(var(--harbor-text-secondary))" }}
-                    >
-                      Your passphrase encrypts your private keys. If you lose it, you cannot recover your identity. Store it safely!
+                    <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                      Your passphrase encrypts your private keys. If you lose it, you cannot recover
+                      your identity. Store it safely!
                     </p>
                   </div>
                 </div>

@@ -1,16 +1,16 @@
 //! Posts service for managing wall/blog posts
 
+use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
-use ed25519_dalek::VerifyingKey;
 
 use crate::db::{
-    Database, Capability, PostsRepository, PostData, PostMediaData, PostVisibility, Post, PostMedia,
+    Capability, Database, Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
 };
 use crate::error::{AppError, Result};
 use crate::services::{
-    ContactsService, IdentityService, PermissionsService,
-    verify, Signable, SignablePost, SignablePostUpdate, SignablePostDelete,
+    verify, ContactsService, IdentityService, PermissionsService, Signable, SignablePost,
+    SignablePostDelete, SignablePostUpdate,
 };
 
 /// Service for managing wall/blog posts
@@ -79,12 +79,16 @@ impl PostsService {
         content_text: Option<&str>,
         visibility: PostVisibility,
     ) -> Result<OutgoingPost> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let post_id = Uuid::new_v4().to_string();
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let created_at = chrono::Utc::now().timestamp();
 
         // Create signable
@@ -129,7 +133,8 @@ impl PostsService {
             created_at,
             &payload_cbor,
             &signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(OutgoingPost {
             post_id,
@@ -145,8 +150,14 @@ impl PostsService {
     }
 
     /// Update a post's content
-    pub fn update_post(&self, post_id: &str, content_text: Option<&str>) -> Result<OutgoingPostUpdate> {
-        let identity = self.identity_service.get_identity()?
+    pub fn update_post(
+        &self,
+        post_id: &str,
+        content_text: Option<&str>,
+    ) -> Result<OutgoingPostUpdate> {
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify we own the post
@@ -155,11 +166,15 @@ impl PostsService {
             .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
 
         if post.author_peer_id != identity.peer_id {
-            return Err(AppError::PermissionDenied("Cannot update another user's post".to_string()));
+            return Err(AppError::PermissionDenied(
+                "Cannot update another user's post".to_string(),
+            ));
         }
 
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let updated_at = chrono::Utc::now().timestamp();
 
         // Create signable
@@ -174,8 +189,14 @@ impl PostsService {
         let signature = self.identity_service.sign(&signable)?;
 
         // Update locally
-        PostsRepository::update_post(&self.db, post_id, content_text, updated_at, lamport_clock as i64)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        PostsRepository::update_post(
+            &self.db,
+            post_id,
+            content_text,
+            updated_at,
+            lamport_clock as i64,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Record event
         let event_id = format!("updated:{}:{}", post_id, lamport_clock);
@@ -190,7 +211,8 @@ impl PostsService {
             updated_at,
             &payload_cbor,
             &signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(OutgoingPostUpdate {
             post_id: post_id.to_string(),
@@ -204,7 +226,9 @@ impl PostsService {
 
     /// Delete a post (soft delete)
     pub fn delete_post(&self, post_id: &str) -> Result<OutgoingPostDelete> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify we own the post
@@ -213,11 +237,15 @@ impl PostsService {
             .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
 
         if post.author_peer_id != identity.peer_id {
-            return Err(AppError::PermissionDenied("Cannot delete another user's post".to_string()));
+            return Err(AppError::PermissionDenied(
+                "Cannot delete another user's post".to_string(),
+            ));
         }
 
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let deleted_at = chrono::Utc::now().timestamp();
 
         // Create signable
@@ -247,7 +275,8 @@ impl PostsService {
             deleted_at,
             &payload_cbor,
             &signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(OutgoingPostDelete {
             post_id: post_id.to_string(),
@@ -272,7 +301,9 @@ impl PostsService {
         duration_seconds: Option<i32>,
         sort_order: i32,
     ) -> Result<()> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify we own the post
@@ -281,7 +312,9 @@ impl PostsService {
             .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
 
         if post.author_peer_id != identity.peer_id {
-            return Err(AppError::PermissionDenied("Cannot add media to another user's post".to_string()));
+            return Err(AppError::PermissionDenied(
+                "Cannot add media to another user's post".to_string(),
+            ));
         }
 
         let media_data = PostMediaData {
@@ -316,7 +349,9 @@ impl PostsService {
     /// Get local user's posts (their wall)
     pub fn get_my_posts(&self, limit: i64, before_timestamp: Option<i64>) -> Result<Vec<Post>> {
         // Verify identity exists
-        let _identity = self.identity_service.get_identity()?
+        let _identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PostsRepository::get_local_posts(&self.db, limit, before_timestamp)
@@ -324,16 +359,26 @@ impl PostsService {
     }
 
     /// Get posts by a specific author (for viewing their wall)
-    pub fn get_posts_by_author(&self, author_peer_id: &str, limit: i64, before_timestamp: Option<i64>) -> Result<Vec<Post>> {
+    pub fn get_posts_by_author(
+        &self,
+        author_peer_id: &str,
+        limit: i64,
+        before_timestamp: Option<i64>,
+    ) -> Result<Vec<Post>> {
         // If not our posts, check we have WallRead permission
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         if author_peer_id != identity.peer_id {
             // Check if they've granted us WallRead permission
-            if !self.permissions_service.we_have_capability(author_peer_id, Capability::WallRead)? {
+            if !self
+                .permissions_service
+                .we_have_capability(author_peer_id, Capability::WallRead)?
+            {
                 return Err(AppError::PermissionDenied(
-                    "No permission to view this user's wall".to_string()
+                    "No permission to view this user's wall".to_string(),
                 ));
             }
         }
@@ -356,7 +401,9 @@ impl PostsService {
         signature: &[u8],
     ) -> Result<()> {
         // Get author's public key for verification
-        let author_public_key = self.contacts_service.get_public_key(author_peer_id)?
+        let author_public_key = self
+            .contacts_service
+            .get_public_key(author_peer_id)?
             .ok_or_else(|| AppError::NotFound("Author not in contacts".to_string()))?;
 
         // Verify signature
@@ -372,9 +419,12 @@ impl PostsService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            author_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            author_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid post signature".to_string()));
@@ -391,14 +441,20 @@ impl PostsService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(author_peer_id, lamport_clock as i64)
+        self.db
+            .update_lamport_clock(author_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Parse visibility
         let vis = match visibility {
             "contacts" => PostVisibility::Contacts,
             "public" => PostVisibility::Public,
-            _ => return Err(AppError::Validation(format!("Invalid visibility: {}", visibility))),
+            _ => {
+                return Err(AppError::Validation(format!(
+                    "Invalid visibility: {}",
+                    visibility
+                )))
+            }
         };
 
         // Store post
@@ -415,11 +471,18 @@ impl PostsService {
 
         // Use upsert behavior
         if PostsRepository::get_by_post_id(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?.is_some()
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+            .is_some()
         {
             // Update existing - use update_post but with full content
-            PostsRepository::update_post(&self.db, post_id, content_text, created_at, lamport_clock as i64)
-                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+            PostsRepository::update_post(
+                &self.db,
+                post_id,
+                content_text,
+                created_at,
+                lamport_clock as i64,
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
         } else {
             PostsRepository::insert_post(&self.db, &post_data)
                 .map_err(|e| AppError::DatabaseString(e.to_string()))?;
@@ -438,7 +501,8 @@ impl PostsService {
             created_at,
             &payload_cbor,
             signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(())
     }
@@ -454,7 +518,9 @@ impl PostsService {
         signature: &[u8],
     ) -> Result<()> {
         // Get author's public key
-        let author_public_key = self.contacts_service.get_public_key(author_peer_id)?
+        let author_public_key = self
+            .contacts_service
+            .get_public_key(author_peer_id)?
             .ok_or_else(|| AppError::NotFound("Author not in contacts".to_string()))?;
 
         // Verify signature
@@ -467,12 +533,17 @@ impl PostsService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            author_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            author_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
-            return Err(AppError::Crypto("Invalid post update signature".to_string()));
+            return Err(AppError::Crypto(
+                "Invalid post update signature".to_string(),
+            ));
         }
 
         // Check we have the post and it's older
@@ -485,12 +556,19 @@ impl PostsService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(author_peer_id, lamport_clock as i64)
+        self.db
+            .update_lamport_clock(author_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Update post
-        PostsRepository::update_post(&self.db, post_id, content_text, updated_at, lamport_clock as i64)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        PostsRepository::update_post(
+            &self.db,
+            post_id,
+            content_text,
+            updated_at,
+            lamport_clock as i64,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Record event
         let event_id = format!("updated:{}:{}", post_id, lamport_clock);
@@ -505,7 +583,8 @@ impl PostsService {
             updated_at,
             &payload_cbor,
             signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(())
     }
@@ -520,7 +599,9 @@ impl PostsService {
         signature: &[u8],
     ) -> Result<()> {
         // Get author's public key
-        let author_public_key = self.contacts_service.get_public_key(author_peer_id)?
+        let author_public_key = self
+            .contacts_service
+            .get_public_key(author_peer_id)?
             .ok_or_else(|| AppError::NotFound("Author not in contacts".to_string()))?;
 
         // Verify signature
@@ -532,12 +613,17 @@ impl PostsService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            author_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            author_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
-            return Err(AppError::Crypto("Invalid post delete signature".to_string()));
+            return Err(AppError::Crypto(
+                "Invalid post delete signature".to_string(),
+            ));
         }
 
         // Check we have the post
@@ -551,7 +637,8 @@ impl PostsService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(author_peer_id, lamport_clock as i64)
+        self.db
+            .update_lamport_clock(author_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Delete post
@@ -571,7 +658,8 @@ impl PostsService {
             deleted_at,
             &payload_cbor,
             signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(())
     }

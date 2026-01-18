@@ -1,5 +1,5 @@
-import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 interface SettingsState {
   // Network settings
@@ -10,7 +10,7 @@ interface SettingsState {
   // Privacy settings
   showReadReceipts: boolean;
   showOnlineStatus: boolean;
-  defaultVisibility: "contacts" | "public";
+  defaultVisibility: 'contacts' | 'public';
 
   // Profile settings
   avatarUrl: string | null;
@@ -22,7 +22,7 @@ interface SettingsState {
   removeBootstrapNode: (address: string) => void;
   setShowReadReceipts: (value: boolean) => void;
   setShowOnlineStatus: (value: boolean) => void;
-  setDefaultVisibility: (value: "contacts" | "public") => void;
+  setDefaultVisibility: (value: 'contacts' | 'public') => void;
   setAvatarUrl: (url: string | null) => void;
 }
 
@@ -35,7 +35,7 @@ export const useSettingsStore = create<SettingsState>()(
       bootstrapNodes: [],
       showReadReceipts: true,
       showOnlineStatus: true,
-      defaultVisibility: "contacts",
+      defaultVisibility: 'contacts',
       avatarUrl: null,
 
       // Actions
@@ -57,7 +57,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAvatarUrl: (url) => set({ avatarUrl: url }),
     }),
     {
-      name: "harbor-settings",
-    }
-  )
+      name: 'harbor-settings',
+    },
+  ),
 );

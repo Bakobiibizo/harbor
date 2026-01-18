@@ -97,11 +97,7 @@ pub async fn create_post(
         _ => PostVisibility::Contacts, // Default to contacts-only
     };
 
-    let outgoing = posts_service.create_post(
-        &content_type,
-        content_text.as_deref(),
-        vis,
-    )?;
+    let outgoing = posts_service.create_post(&content_type, content_text.as_deref(), vis)?;
 
     Ok(CreatePostResult {
         post_id: outgoing.post_id,

@@ -19,7 +19,7 @@ export interface CreateIdentityRequest {
 
 /** Application state for identity */
 export type IdentityState =
-  | { status: "loading" }
-  | { status: "no_identity" }
-  | { status: "locked"; identity: IdentityInfo }
-  | { status: "unlocked"; identity: IdentityInfo };
+  | { status: 'loading' }
+  | { status: 'no_identity' }
+  | { status: 'locked'; identity: IdentityInfo }
+  | { status: 'unlocked'; identity: IdentityInfo };

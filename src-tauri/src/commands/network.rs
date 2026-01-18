@@ -26,9 +26,9 @@ impl NetworkState {
     pub async fn get_handle(&self) -> Result<NetworkHandle, AppError> {
         let guard: tokio::sync::RwLockReadGuard<'_, Option<NetworkHandle>> =
             self.handle.read().await;
-        guard.clone().ok_or_else(|| {
-            AppError::Network("Network not initialized".to_string())
-        })
+        guard
+            .clone()
+            .ok_or_else(|| AppError::Network("Network not initialized".to_string()))
     }
 }
 
@@ -49,18 +49,14 @@ pub async fn get_connected_peers(
 
 /// Get network statistics
 #[tauri::command]
-pub async fn get_network_stats(
-    network: State<'_, NetworkState>,
-) -> Result<NetworkStats, AppError> {
+pub async fn get_network_stats(network: State<'_, NetworkState>) -> Result<NetworkStats, AppError> {
     let handle: NetworkHandle = network.get_handle().await?;
     handle.get_stats().await
 }
 
 /// Check if the network is running
 #[tauri::command]
-pub async fn is_network_running(
-    network: State<'_, NetworkState>,
-) -> Result<bool, AppError> {
+pub async fn is_network_running(network: State<'_, NetworkState>) -> Result<bool, AppError> {
     let guard: tokio::sync::RwLockReadGuard<'_, Option<NetworkHandle>> =
         network.handle.read().await;
     Ok(guard.is_some())
@@ -68,9 +64,7 @@ pub async fn is_network_running(
 
 /// Bootstrap the DHT (connect to bootstrap nodes)
 #[tauri::command]
-pub async fn bootstrap_network(
-    network: State<'_, NetworkState>,
-) -> Result<(), AppError> {
+pub async fn bootstrap_network(network: State<'_, NetworkState>) -> Result<(), AppError> {
     let handle: NetworkHandle = network.get_handle().await?;
     handle.bootstrap().await
 }
@@ -130,11 +124,7 @@ pub async fn start_network(
 
     // Create network service - clone the Arc to pass to the service
     let identity_arc: Arc<IdentityService> = (*identity_service).clone();
-    let (mut service, handle, mut event_rx) = NetworkService::new(
-        config,
-        identity_arc,
-        keypair,
-    )?;
+    let (mut service, handle, mut event_rx) = NetworkService::new(config, identity_arc, keypair)?;
 
     // Inject services for message processing, contact storage, and permissions
     service.set_messaging_service((*messaging_service).clone());
@@ -169,9 +159,7 @@ pub async fn start_network(
 
 /// Stop the P2P network
 #[tauri::command]
-pub async fn stop_network(
-    network: State<'_, NetworkState>,
-) -> Result<(), AppError> {
+pub async fn stop_network(network: State<'_, NetworkState>) -> Result<(), AppError> {
     let maybe_handle: Option<NetworkHandle> = {
         let mut guard = network.handle.write().await;
         guard.take()

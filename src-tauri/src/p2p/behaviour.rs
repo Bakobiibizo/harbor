@@ -28,7 +28,8 @@ pub struct ChatBehaviour {
     /// AutoNAT for external address discovery
     pub autonat: autonat::Behaviour,
     /// Request-response for identity exchange
-    pub identity_exchange: request_response::cbor::Behaviour<IdentityExchangeRequest, IdentityExchangeResponse>,
+    pub identity_exchange:
+        request_response::cbor::Behaviour<IdentityExchangeRequest, IdentityExchangeResponse>,
     /// Request-response for messaging
     pub messaging: request_response::cbor::Behaviour<MessagingRequest, MessagingResponse>,
 }
@@ -86,35 +87,34 @@ impl ChatBehaviour {
         ));
 
         // Kademlia DHT
-        let kademlia = kad::Behaviour::new(
-            local_peer_id,
-            kad::store::MemoryStore::new(local_peer_id),
-        );
+        let kademlia =
+            kad::Behaviour::new(local_peer_id, kad::store::MemoryStore::new(local_peer_id));
 
         // mDNS
-        let mdns = mdns::tokio::Behaviour::new(
-            mdns::Config::default(),
-            local_peer_id,
-        ).expect("Failed to create mDNS behaviour");
+        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
+            .expect("Failed to create mDNS behaviour");
 
         // DCUtR for hole punching
         let dcutr = dcutr::Behaviour::new(local_peer_id);
 
         // AutoNAT
-        let autonat = autonat::Behaviour::new(
-            local_peer_id,
-            autonat::Config::default(),
-        );
+        let autonat = autonat::Behaviour::new(local_peer_id, autonat::Config::default());
 
         // Identity exchange protocol
         let identity_exchange = request_response::cbor::Behaviour::new(
-            [(StreamProtocol::new(IDENTITY_PROTOCOL), ProtocolSupport::Full)],
+            [(
+                StreamProtocol::new(IDENTITY_PROTOCOL),
+                ProtocolSupport::Full,
+            )],
             request_response::Config::default(),
         );
 
         // Messaging protocol
         let messaging = request_response::cbor::Behaviour::new(
-            [(StreamProtocol::new(MESSAGING_PROTOCOL), ProtocolSupport::Full)],
+            [(
+                StreamProtocol::new(MESSAGING_PROTOCOL),
+                ProtocolSupport::Full,
+            )],
             request_response::Config::default(),
         );
 

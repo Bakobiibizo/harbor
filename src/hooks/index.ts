@@ -1,1 +1,1 @@
-export { useTauriEvents } from "./useTauriEvents";
+export { useTauriEvents } from './useTauriEvents';

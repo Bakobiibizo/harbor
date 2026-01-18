@@ -13,7 +13,7 @@ export interface Post {
 }
 
 /** Post visibility setting */
-export type PostVisibility = "contacts" | "public";
+export type PostVisibility = 'contacts' | 'public';
 
 /** Post media attachment */
 export interface PostMedia {

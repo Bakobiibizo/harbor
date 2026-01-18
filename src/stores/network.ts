@@ -1,6 +1,6 @@
-import { create } from "zustand";
-import type { PeerInfo, NetworkStats, ConnectionStatus } from "../types";
-import * as networkService from "../services/network";
+import { create } from 'zustand';
+import type { PeerInfo, NetworkStats, ConnectionStatus } from '../types';
+import * as networkService from '../services/network';
 
 interface NetworkState {
   // State
@@ -33,7 +33,7 @@ const initialStats: NetworkStats = {
 export const useNetworkStore = create<NetworkState>((set, get) => ({
   // Initial state
   isRunning: false,
-  status: "disconnected",
+  status: 'disconnected',
   connectedPeers: [],
   stats: initialStats,
   listeningAddresses: [],
@@ -42,10 +42,10 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
 
   // Start the network
   startNetwork: async () => {
-    set({ isLoading: true, error: null, status: "connecting" });
+    set({ isLoading: true, error: null, status: 'connecting' });
     try {
       await networkService.startNetwork();
-      set({ isRunning: true, status: "connected", isLoading: false });
+      set({ isRunning: true, status: 'connected', isLoading: false });
       // Refresh peers, stats, and addresses after starting
       await get().refreshPeers();
       await get().refreshStats();
@@ -54,7 +54,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({
         error: String(error),
         isLoading: false,
-        status: "disconnected",
+        status: 'disconnected',
       });
     }
   },
@@ -66,7 +66,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       await networkService.stopNetwork();
       set({
         isRunning: false,
-        status: "disconnected",
+        status: 'disconnected',
         connectedPeers: [],
         stats: initialStats,
         listeningAddresses: [],
@@ -83,7 +83,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const isRunning = await networkService.isNetworkRunning();
       set({
         isRunning,
-        status: isRunning ? "connected" : "disconnected",
+        status: isRunning ? 'connected' : 'disconnected',
       });
     } catch (error) {
       set({ error: String(error) });
@@ -97,7 +97,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({ connectedPeers: peers });
     } catch (error) {
       // Don't show error for refresh failures - just log it
-      console.error("Failed to refresh peers:", error);
+      console.error('Failed to refresh peers:', error);
     }
   },
 
@@ -108,7 +108,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({ stats });
     } catch (error) {
       // Don't show error for refresh failures - just log it
-      console.error("Failed to refresh stats:", error);
+      console.error('Failed to refresh stats:', error);
     }
   },
 
@@ -118,7 +118,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const addresses = await networkService.getListeningAddresses();
       set({ listeningAddresses: addresses });
     } catch (error) {
-      console.error("Failed to refresh addresses:", error);
+      console.error('Failed to refresh addresses:', error);
     }
   },
 

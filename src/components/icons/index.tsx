@@ -1,4 +1,4 @@
-import { type SVGProps } from "react";
+import { type SVGProps } from 'react';
 
 type IconProps = SVGProps<SVGSVGElement> & {
   size?: number;
@@ -7,8 +7,8 @@ type IconProps = SVGProps<SVGSVGElement> & {
 const defaultProps: IconProps = {
   size: 20,
   strokeWidth: 1.5,
-  stroke: "currentColor",
-  fill: "none",
+  stroke: 'currentColor',
+  fill: 'none',
 };
 
 export function ChatIcon({ size = 20, ...props }: IconProps) {
@@ -275,14 +275,7 @@ export function SpinnerIcon({ size = 20, ...props }: IconProps) {
       className="animate-spin"
       {...props}
     >
-      <circle
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeOpacity="0.2"
-      />
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2" />
       <path
         d="M12 2a10 10 0 019.95 9"
         stroke="currentColor"

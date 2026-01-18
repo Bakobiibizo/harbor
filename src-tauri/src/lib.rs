@@ -7,7 +7,10 @@ pub mod services;
 
 use commands::NetworkState;
 use db::Database;
-use services::{CallingService, ContactsService, FeedService, IdentityService, MessagingService, PermissionsService, PostsService};
+use services::{
+    CallingService, ContactsService, FeedService, IdentityService, MessagingService,
+    PermissionsService, PostsService,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
@@ -27,7 +30,9 @@ fn init_logging() {
 
 /// Get the profile name from environment variable (for multi-instance support)
 fn get_profile_name() -> Option<String> {
-    std::env::var("HARBOR_PROFILE").ok().filter(|s| !s.is_empty())
+    std::env::var("HARBOR_PROFILE")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// Get custom data directory from environment variable
@@ -87,13 +92,16 @@ pub fn run() {
             let db_path = get_db_path(&app.handle());
             info!("Database path: {:?}", db_path);
 
-            let db = Arc::new(Database::new(db_path)
-                .expect("Failed to initialize database"));
+            let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
 
             // Initialize services
             let identity_service = Arc::new(IdentityService::new(db.clone()));
-            let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-            let permissions_service = Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+            let contacts_service =
+                Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+            let permissions_service = Arc::new(PermissionsService::new(
+                db.clone(),
+                identity_service.clone(),
+            ));
             let messaging_service = Arc::new(MessagingService::new(
                 db.clone(),
                 identity_service.clone(),

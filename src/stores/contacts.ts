@@ -1,6 +1,6 @@
-import { create } from "zustand";
-import { contactsService } from "../services/contacts";
-import type { Contact } from "../types";
+import { create } from 'zustand';
+import { contactsService } from '../services/contacts';
+import type { Contact } from '../types';
 
 interface ContactsState {
   // State
@@ -28,7 +28,7 @@ export const useContactsStore = create<ContactsState>((set, get) => ({
       const contacts = await contactsService.getActiveContacts();
       set({ contacts, isLoading: false });
     } catch (error) {
-      console.error("Failed to load contacts:", error);
+      console.error('Failed to load contacts:', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -39,7 +39,7 @@ export const useContactsStore = create<ContactsState>((set, get) => ({
       const contacts = await contactsService.getActiveContacts();
       set({ contacts });
     } catch (error) {
-      console.error("Failed to refresh contacts:", error);
+      console.error('Failed to refresh contacts:', error);
     }
   },
 

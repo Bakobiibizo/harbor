@@ -1,9 +1,9 @@
 //! Contacts service for managing peer relationships
 
-use std::sync::Arc;
-use crate::db::{Database, ContactData, ContactsRepository, Contact};
+use crate::db::{Contact, ContactData, ContactsRepository, Database};
 use crate::error::{AppError, Result};
 use crate::services::IdentityService;
+use std::sync::Arc;
 
 /// Service for managing contacts
 pub struct ContactsService {
@@ -14,7 +14,10 @@ pub struct ContactsService {
 impl ContactsService {
     /// Create a new contacts service
     pub fn new(db: Arc<Database>, identity_service: Arc<IdentityService>) -> Self {
-        Self { db, identity_service }
+        Self {
+            db,
+            identity_service,
+        }
     }
 
     /// Add a new contact from identity exchange data
@@ -30,7 +33,9 @@ impl ContactsService {
         // Don't add ourselves as a contact
         if let Some(identity) = self.identity_service.get_identity()? {
             if identity.peer_id == peer_id {
-                return Err(AppError::Validation("Cannot add self as contact".to_string()));
+                return Err(AppError::Validation(
+                    "Cannot add self as contact".to_string(),
+                ));
             }
         }
 
@@ -45,7 +50,8 @@ impl ContactsService {
                 display_name,
                 avatar_hash,
                 bio,
-            ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
             // Return existing contact's ID
             let contact = ContactsRepository::get_by_peer_id(&self.db, peer_id)
@@ -75,8 +81,7 @@ impl ContactsService {
 
     /// Get all contacts
     pub fn get_all_contacts(&self) -> Result<Vec<Contact>> {
-        ContactsRepository::get_all(&self.db)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))
+        ContactsRepository::get_all(&self.db).map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 
     /// Get all non-blocked contacts
@@ -162,14 +167,16 @@ mod tests {
     fn test_add_and_get_contact() {
         let (_, _, service) = create_test_services();
 
-        let id = service.add_contact(
-            "12D3KooWTest",
-            &[1, 2, 3, 4],
-            &[5, 6, 7, 8],
-            "Test User",
-            None,
-            Some("Hello!"),
-        ).unwrap();
+        let id = service
+            .add_contact(
+                "12D3KooWTest",
+                &[1, 2, 3, 4],
+                &[5, 6, 7, 8],
+                "Test User",
+                None,
+                Some("Hello!"),
+            )
+            .unwrap();
 
         assert!(id > 0);
 
@@ -182,14 +189,16 @@ mod tests {
     fn test_block_contact() {
         let (_, _, service) = create_test_services();
 
-        service.add_contact(
-            "12D3KooWTest",
-            &[1, 2, 3, 4],
-            &[5, 6, 7, 8],
-            "Test User",
-            None,
-            None,
-        ).unwrap();
+        service
+            .add_contact(
+                "12D3KooWTest",
+                &[1, 2, 3, 4],
+                &[5, 6, 7, 8],
+                "Test User",
+                None,
+                None,
+            )
+            .unwrap();
 
         assert!(!service.is_blocked("12D3KooWTest").unwrap());
 

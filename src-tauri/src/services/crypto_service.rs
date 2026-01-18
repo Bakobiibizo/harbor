@@ -6,10 +6,10 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
-use sha2::{Sha256, Digest};
-use x25519_dalek::{StaticSecret as X25519Secret, PublicKey as X25519Public};
+use sha2::{Digest, Sha256};
+use x25519_dalek::{PublicKey as X25519Public, StaticSecret as X25519Secret};
 
 /// Cryptographic operations service
 pub struct CryptoService;
@@ -33,8 +33,9 @@ impl CryptoService {
     /// Uses libp2p's actual PeerId derivation for compatibility with the network layer
     pub fn derive_peer_id_from_signing_key(signing_key: &SigningKey) -> String {
         // Convert our ed25519_dalek SigningKey to libp2p's format
-        let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(signing_key.to_bytes().to_vec())
-            .expect("Valid Ed25519 key");
+        let secret =
+            libp2p::identity::ed25519::SecretKey::try_from_bytes(signing_key.to_bytes().to_vec())
+                .expect("Valid Ed25519 key");
         let libp2p_keypair = libp2p::identity::ed25519::Keypair::from(secret);
         let libp2p_keypair = libp2p::identity::Keypair::from(libp2p_keypair);
         let peer_id = libp2p::PeerId::from(libp2p_keypair.public());
@@ -68,9 +69,9 @@ impl CryptoService {
             .hash_password(passphrase.as_bytes(), &salt)
             .map_err(|e| AppError::Crypto(format!("Failed to hash passphrase: {}", e)))?;
 
-        let hash_bytes = password_hash.hash.ok_or_else(|| {
-            AppError::Crypto("Failed to get hash bytes".to_string())
-        })?;
+        let hash_bytes = password_hash
+            .hash
+            .ok_or_else(|| AppError::Crypto("Failed to get hash bytes".to_string()))?;
 
         // Use first 32 bytes of hash as AES key
         let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
@@ -118,7 +119,9 @@ impl CryptoService {
         // Parse: salt_len (1 byte) + salt + nonce (12 bytes) + ciphertext
         let salt_len = encrypted[0] as usize;
         if encrypted.len() < 1 + salt_len + 12 {
-            return Err(AppError::Crypto("Invalid encrypted data format".to_string()));
+            return Err(AppError::Crypto(
+                "Invalid encrypted data format".to_string(),
+            ));
         }
 
         let salt_str = std::str::from_utf8(&encrypted[1..1 + salt_len])
@@ -140,9 +143,9 @@ impl CryptoService {
             .hash_password(passphrase.as_bytes(), &salt)
             .map_err(|e| AppError::Crypto(format!("Failed to hash passphrase: {}", e)))?;
 
-        let hash_bytes = password_hash.hash.ok_or_else(|| {
-            AppError::Crypto("Failed to get hash bytes".to_string())
-        })?;
+        let hash_bytes = password_hash
+            .hash
+            .ok_or_else(|| AppError::Crypto("Failed to get hash bytes".to_string()))?;
 
         let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
             .try_into()
@@ -188,7 +191,8 @@ impl CryptoService {
 
         let hk = Hkdf::<Sha256>::new(Some(context), shared_secret);
         let mut key = [0u8; 32];
-        hk.expand(b"harbor-v1", &mut key).expect("HKDF expand failed");
+        hk.expand(b"harbor-v1", &mut key)
+            .expect("HKDF expand failed");
         key
     }
 
@@ -216,14 +220,12 @@ impl CryptoService {
         };
 
         // Build salt with full context
-        let salt = format!(
-            "harbor:v1:conv:{}:{}:{}",
-            conversation_id, first, second
-        );
+        let salt = format!("harbor:v1:conv:{}:{}:{}", conversation_id, first, second);
 
         let hk = Hkdf::<Sha256>::new(Some(salt.as_bytes()), shared_secret);
         let mut key = [0u8; 32];
-        hk.expand(b"conversation-key", &mut key).expect("HKDF expand failed");
+        hk.expand(b"conversation-key", &mut key)
+            .expect("HKDF expand failed");
         key
     }
 
@@ -355,7 +357,11 @@ mod tests {
         assert!(CryptoService::verify(&verifying_key, message, &signature));
 
         // Wrong message should fail
-        assert!(!CryptoService::verify(&verifying_key, b"Wrong message", &signature));
+        assert!(!CryptoService::verify(
+            &verifying_key,
+            b"Wrong message",
+            &signature
+        ));
     }
 
     #[test]
@@ -375,11 +381,8 @@ mod tests {
         let x25519_private = [2u8; 32];
         let passphrase = "test-passphrase-123";
 
-        let encrypted = CryptoService::encrypt_keys(
-            &ed25519_private,
-            &x25519_private,
-            passphrase,
-        ).unwrap();
+        let encrypted =
+            CryptoService::encrypt_keys(&ed25519_private, &x25519_private, passphrase).unwrap();
 
         let decrypted = CryptoService::decrypt_keys(&encrypted, passphrase).unwrap();
 
@@ -392,11 +395,9 @@ mod tests {
         let ed25519_private = [1u8; 32];
         let x25519_private = [2u8; 32];
 
-        let encrypted = CryptoService::encrypt_keys(
-            &ed25519_private,
-            &x25519_private,
-            "correct-passphrase",
-        ).unwrap();
+        let encrypted =
+            CryptoService::encrypt_keys(&ed25519_private, &x25519_private, "correct-passphrase")
+                .unwrap();
 
         let result = CryptoService::decrypt_keys(&encrypted, "wrong-passphrase");
         assert!(result.is_err());
@@ -421,7 +422,11 @@ mod tests {
         // libp2p peer IDs start with "12D3KooW" and are longer (base58 encoded)
         assert!(peer_id.starts_with("12D3KooW"));
         // Full libp2p peer ID is typically 52 characters
-        assert!(peer_id.len() >= 50, "Peer ID should be a full libp2p PeerId: {}", peer_id);
+        assert!(
+            peer_id.len() >= 50,
+            "Peer ID should be a full libp2p PeerId: {}",
+            peer_id
+        );
     }
 
     #[test]
@@ -505,8 +510,10 @@ mod tests {
         assert_ne!(ciphertext1, ciphertext2);
 
         // Both decrypt correctly with their respective counters
-        let decrypted1 = CryptoService::decrypt_message_with_counter(&key, &ciphertext1, 1).unwrap();
-        let decrypted2 = CryptoService::decrypt_message_with_counter(&key, &ciphertext2, 2).unwrap();
+        let decrypted1 =
+            CryptoService::decrypt_message_with_counter(&key, &ciphertext1, 1).unwrap();
+        let decrypted2 =
+            CryptoService::decrypt_message_with_counter(&key, &ciphertext2, 2).unwrap();
         assert_eq!(decrypted1, message);
         assert_eq!(decrypted2, message);
     }
@@ -532,10 +539,15 @@ mod tests {
         let peer_b = "12D3KooWBob";
 
         // Order of peer IDs shouldn't matter
-        let key_ab = CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_a, peer_b);
-        let key_ba = CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_b, peer_a);
+        let key_ab =
+            CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_a, peer_b);
+        let key_ba =
+            CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_b, peer_a);
 
-        assert_eq!(key_ab, key_ba, "Peer order should not affect key derivation");
+        assert_eq!(
+            key_ab, key_ba,
+            "Peer order should not affect key derivation"
+        );
     }
 
     #[test]
@@ -547,7 +559,10 @@ mod tests {
         let key1 = CryptoService::derive_conversation_key(&shared_secret, "conv-1", peer_a, peer_b);
         let key2 = CryptoService::derive_conversation_key(&shared_secret, "conv-2", peer_a, peer_b);
 
-        assert_ne!(key1, key2, "Different conversations should have different keys");
+        assert_ne!(
+            key1, key2,
+            "Different conversations should have different keys"
+        );
     }
 
     #[test]
@@ -556,13 +571,22 @@ mod tests {
         let conv_id = "conv-123";
 
         let key1 = CryptoService::derive_conversation_key(
-            &shared_secret, conv_id, "12D3KooWAlice", "12D3KooWBob"
+            &shared_secret,
+            conv_id,
+            "12D3KooWAlice",
+            "12D3KooWBob",
         );
         let key2 = CryptoService::derive_conversation_key(
-            &shared_secret, conv_id, "12D3KooWAlice", "12D3KooWCharlie"
+            &shared_secret,
+            conv_id,
+            "12D3KooWAlice",
+            "12D3KooWCharlie",
         );
 
-        assert_ne!(key1, key2, "Different peer combinations should have different keys");
+        assert_ne!(
+            key1, key2,
+            "Different peer combinations should have different keys"
+        );
     }
 
     #[test]
@@ -576,6 +600,9 @@ mod tests {
         let key1 = CryptoService::derive_conversation_key(&secret1, conv_id, peer_a, peer_b);
         let key2 = CryptoService::derive_conversation_key(&secret2, conv_id, peer_a, peer_b);
 
-        assert_ne!(key1, key2, "Different shared secrets should produce different keys");
+        assert_ne!(
+            key1, key2,
+            "Different shared secrets should produce different keys"
+        );
     }
 }

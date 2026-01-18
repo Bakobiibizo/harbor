@@ -1,3 +1,4 @@
+use base64::Engine;
 use futures::StreamExt;
 use libp2p::{
     identify, kad, mdns, ping,
@@ -6,19 +7,21 @@ use libp2p::{
     Multiaddr, PeerId, Swarm,
 };
 use std::collections::HashMap;
-use base64::Engine;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
-use super::behaviour::{ChatBehaviour, ChatBehaviourEvent, IdentityExchangeRequest, IdentityExchangeResponse, MessagingRequest, MessagingResponse};
+use super::behaviour::{
+    ChatBehaviour, ChatBehaviourEvent, IdentityExchangeRequest, IdentityExchangeResponse,
+    MessagingRequest, MessagingResponse,
+};
 use super::config::NetworkConfig;
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
 use super::swarm::build_swarm;
 use super::types::*;
+use crate::db::Capability;
 use crate::error::{AppError, Result};
 use crate::services::{ContactsService, IdentityService, MessagingService, PermissionsService};
-use crate::db::Capability;
 use std::sync::Arc;
 
 /// Handle to interact with the network service
@@ -98,10 +101,22 @@ impl NetworkHandle {
     }
 
     /// Send a message to a peer
-    pub async fn send_message(&self, peer_id: PeerId, protocol: String, payload: Vec<u8>) -> Result<()> {
+    pub async fn send_message(
+        &self,
+        peer_id: PeerId,
+        protocol: String,
+        payload: Vec<u8>,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send((NetworkCommand::SendMessage { peer_id, protocol, payload }, Some(tx)))
+            .send((
+                NetworkCommand::SendMessage {
+                    peer_id,
+                    protocol,
+                    payload,
+                },
+                Some(tx),
+            ))
             .await
             .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
 
@@ -230,13 +245,15 @@ impl NetworkService {
 
     /// Create an identity exchange request
     fn create_identity_request(&self) -> Result<IdentityExchangeRequest> {
-        let info = self.identity_service.get_identity_info()?
+        let info = self
+            .identity_service
+            .get_identity_info()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
-        let signature = self.identity_service.sign_raw(
-            format!("{}:{}", info.peer_id, timestamp).as_bytes()
-        )?;
+        let signature = self
+            .identity_service
+            .sign_raw(format!("{}:{}", info.peer_id, timestamp).as_bytes())?;
 
         Ok(IdentityExchangeRequest {
             requester_peer_id: info.peer_id,
@@ -301,12 +318,17 @@ impl NetworkService {
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on: {}", address);
                 self.listening_addresses.push(address.clone());
-                let _ = self.event_tx.send(NetworkEvent::ListeningOn {
-                    address: address.to_string(),
-                }).await;
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::ListeningOn {
+                        address: address.to_string(),
+                    })
+                    .await;
             }
 
-            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
                 info!("Connected to peer: {} at {:?}", peer_id, endpoint);
                 let peer_info = PeerInfo {
                     peer_id: peer_id.to_string(),
@@ -319,9 +341,12 @@ impl NetworkService {
                 self.connected_peers.insert(peer_id, peer_info);
                 self.stats.connected_peers = self.connected_peers.len();
 
-                let _ = self.event_tx.send(NetworkEvent::PeerConnected {
-                    peer_id: peer_id.to_string(),
-                }).await;
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::PeerConnected {
+                        peer_id: peer_id.to_string(),
+                    })
+                    .await;
             }
 
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -329,16 +354,22 @@ impl NetworkService {
                 self.connected_peers.remove(&peer_id);
                 self.stats.connected_peers = self.connected_peers.len();
 
-                let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
-                    peer_id: peer_id.to_string(),
-                }).await;
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::PeerDisconnected {
+                        peer_id: peer_id.to_string(),
+                    })
+                    .await;
             }
 
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 info!("External address confirmed: {}", address);
-                let _ = self.event_tx.send(NetworkEvent::ExternalAddressDiscovered {
-                    address: address.to_string(),
-                }).await;
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::ExternalAddressDiscovered {
+                        address: address.to_string(),
+                    })
+                    .await;
             }
 
             SwarmEvent::Behaviour(behaviour_event) => {
@@ -360,11 +391,17 @@ impl NetworkService {
                         .push(addr.clone());
 
                     // Add to Kademlia routing table
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr);
 
-                    let _ = self.event_tx.send(NetworkEvent::PeerDiscovered {
-                        peer_id: peer_id.to_string(),
-                    }).await;
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::PeerDiscovered {
+                            peer_id: peer_id.to_string(),
+                        })
+                        .await;
                 }
             }
 
@@ -375,9 +412,12 @@ impl NetworkService {
                         addrs.retain(|a| a != &addr);
                         if addrs.is_empty() {
                             self.discovered_peers.remove(&peer_id);
-                            let _ = self.event_tx.send(NetworkEvent::PeerExpired {
-                                peer_id: peer_id.to_string(),
-                            }).await;
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::PeerExpired {
+                                    peer_id: peer_id.to_string(),
+                                })
+                                .await;
                         }
                     }
                 }
@@ -392,7 +432,10 @@ impl NetworkService {
 
                 // Add addresses to Kademlia
                 for addr in info.listen_addrs {
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr);
                 }
             }
 
@@ -406,26 +449,49 @@ impl NetworkService {
                 }
             }
 
-            ChatBehaviourEvent::IdentityExchange(request_response::Event::Message { peer, message, .. }) => {
-                match message {
-                    request_response::Message::Request { request_id, request, channel } => {
-                        info!("Received identity request from {}", peer);
-                        self.handle_identity_request(peer, request_id, request, channel).await;
-                    }
-                    request_response::Message::Response { request_id, response } => {
-                        info!("Received identity response from {}", peer);
-                        self.handle_identity_response(peer, request_id, response).await;
-                    }
+            ChatBehaviourEvent::IdentityExchange(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => match message {
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                } => {
+                    info!("Received identity request from {}", peer);
+                    self.handle_identity_request(peer, request_id, request, channel)
+                        .await;
                 }
-            }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
+                    info!("Received identity response from {}", peer);
+                    self.handle_identity_response(peer, request_id, response)
+                        .await;
+                }
+            },
 
-            ChatBehaviourEvent::Messaging(request_response::Event::Message { peer, message, .. }) => {
+            ChatBehaviourEvent::Messaging(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => {
                 match message {
-                    request_response::Message::Request { request_id, request, channel } => {
+                    request_response::Message::Request {
+                        request_id,
+                        request,
+                        channel,
+                    } => {
                         debug!("Received message request from {}", peer);
-                        self.handle_messaging_request(peer, request_id, request, channel).await;
+                        self.handle_messaging_request(peer, request_id, request, channel)
+                            .await;
                     }
-                    request_response::Message::Response { request_id: _, response: _ } => {
+                    request_response::Message::Response {
+                        request_id: _,
+                        response: _,
+                    } => {
                         debug!("Received message response from {}", peer);
                         // Handle response (e.g., update message delivery status)
                     }
@@ -452,7 +518,7 @@ impl NetworkService {
                 // Sign the response using the libp2p peer ID
                 let timestamp = chrono::Utc::now().timestamp();
                 let signature = match self.identity_service.sign_raw(
-                    format!("{}:{}:{}", local_peer_id, info.display_name, timestamp).as_bytes()
+                    format!("{}:{}:{}", local_peer_id, info.display_name, timestamp).as_bytes(),
                 ) {
                     Ok(sig) => sig,
                     Err(e) => {
@@ -490,7 +556,12 @@ impl NetworkService {
                     signature,
                 };
 
-                if let Err(e) = self.swarm.behaviour_mut().identity_exchange.send_response(channel, response) {
+                if let Err(e) = self
+                    .swarm
+                    .behaviour_mut()
+                    .identity_exchange
+                    .send_response(channel, response)
+                {
                     warn!("Failed to send identity response: {:?}", e);
                 }
             }
@@ -518,7 +589,10 @@ impl NetworkService {
         if let Some(ref contacts_service) = self.contacts_service {
             // Verify the response peer ID matches the peer we received from
             if response.peer_id != peer.to_string() {
-                warn!("Identity response peer ID mismatch: expected {}, got {}", peer, response.peer_id);
+                warn!(
+                    "Identity response peer ID mismatch: expected {}, got {}",
+                    peer, response.peer_id
+                );
                 return;
             }
 
@@ -534,7 +608,10 @@ impl NetworkService {
                 response.bio.as_deref(),
             ) {
                 Ok(contact_id) => {
-                    info!("Added contact {} with ID {}", response.display_name, contact_id);
+                    info!(
+                        "Added contact {} with ID {}",
+                        response.display_name, contact_id
+                    );
 
                     // Grant chat permission to the new contact
                     if let Some(ref permissions_service) = self.permissions_service {
@@ -579,7 +656,10 @@ impl NetworkService {
 
         let (success, message_id, error) = match msg_result {
             Ok(MessagingMessage::Message(direct_msg)) => {
-                info!("Received direct message {} from {}", direct_msg.message_id, peer);
+                info!(
+                    "Received direct message {} from {}",
+                    direct_msg.message_id, peer
+                );
 
                 // Process the message if we have a messaging service
                 if let Some(ref messaging_service) = self.messaging_service {
@@ -602,12 +682,20 @@ impl NetworkService {
                         }
                         Err(e) => {
                             warn!("Failed to process message {}: {}", direct_msg.message_id, e);
-                            (false, Some(direct_msg.message_id.clone()), Some(e.to_string()))
+                            (
+                                false,
+                                Some(direct_msg.message_id.clone()),
+                                Some(e.to_string()),
+                            )
                         }
                     }
                 } else {
                     warn!("No messaging service configured, cannot process message");
-                    (false, Some(direct_msg.message_id), Some("Messaging service not available".to_string()))
+                    (
+                        false,
+                        Some(direct_msg.message_id),
+                        Some("Messaging service not available".to_string()),
+                    )
                 }
             }
             Ok(MessagingMessage::Ack(ack)) => {
@@ -628,23 +716,34 @@ impl NetworkService {
             error,
         };
 
-        if let Err(e) = self.swarm.behaviour_mut().messaging.send_response(channel, response) {
+        if let Err(e) = self
+            .swarm
+            .behaviour_mut()
+            .messaging
+            .send_response(channel, response)
+        {
             warn!("Failed to send messaging response: {:?}", e);
         }
 
         // Emit event for the application layer (for UI updates)
-        let _ = self.event_tx.send(NetworkEvent::MessageReceived {
-            peer_id: peer.to_string(),
-            protocol: "messaging".to_string(),
-            payload: request.payload,
-        }).await;
+        let _ = self
+            .event_tx
+            .send(NetworkEvent::MessageReceived {
+                peer_id: peer.to_string(),
+                protocol: "messaging".to_string(),
+                payload: request.payload,
+            })
+            .await;
     }
 
     async fn handle_command(&mut self, command: NetworkCommand) -> NetworkResponse {
         match command {
             NetworkCommand::Dial { peer_id, addresses } => {
                 for addr in addresses {
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr.clone());
                 }
                 match self.swarm.dial(peer_id) {
                     Ok(_) => NetworkResponse::Ok,
@@ -659,12 +758,19 @@ impl NetworkService {
                 }
             }
 
-            NetworkCommand::SendMessage { peer_id, protocol, payload } => {
+            NetworkCommand::SendMessage {
+                peer_id,
+                protocol,
+                payload,
+            } => {
                 let request = MessagingRequest {
                     message_type: protocol,
                     payload,
                 };
-                self.swarm.behaviour_mut().messaging.send_request(&peer_id, request);
+                self.swarm
+                    .behaviour_mut()
+                    .messaging
+                    .send_request(&peer_id, request);
                 NetworkResponse::Ok
             }
 
@@ -672,10 +778,15 @@ impl NetworkService {
                 // Create identity request
                 match self.create_identity_request() {
                     Ok(request) => {
-                        self.swarm.behaviour_mut().identity_exchange.send_request(&peer_id, request);
+                        self.swarm
+                            .behaviour_mut()
+                            .identity_exchange
+                            .send_request(&peer_id, request);
                         NetworkResponse::Ok
                     }
-                    Err(e) => NetworkResponse::Error(format!("Failed to create identity request: {}", e)),
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to create identity request: {}", e))
+                    }
                 }
             }
 
@@ -692,7 +803,8 @@ impl NetworkService {
 
             NetworkCommand::GetListeningAddresses => {
                 let local_peer_id = self.swarm.local_peer_id();
-                let addresses: Vec<String> = self.listening_addresses
+                let addresses: Vec<String> = self
+                    .listening_addresses
                     .iter()
                     .map(|addr| format!("{}/p2p/{}", addr, local_peer_id))
                     .collect();
@@ -713,7 +825,10 @@ impl NetworkService {
                         .iter()
                         .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
                         .collect();
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr_without_peer);
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr_without_peer);
                     info!("Added bootstrap node: {} at {}", peer_id, address);
 
                     // Try to dial the bootstrap node
@@ -722,10 +837,14 @@ impl NetworkService {
                             info!("Dialing bootstrap node: {}", address);
                             NetworkResponse::Ok
                         }
-                        Err(e) => NetworkResponse::Error(format!("Failed to dial bootstrap node: {}", e)),
+                        Err(e) => {
+                            NetworkResponse::Error(format!("Failed to dial bootstrap node: {}", e))
+                        }
                     }
                 } else {
-                    NetworkResponse::Error("Multiaddress must contain peer ID (/p2p/...)".to_string())
+                    NetworkResponse::Error(
+                        "Multiaddress must contain peer ID (/p2p/...)".to_string(),
+                    )
                 }
             }
 
@@ -737,9 +856,7 @@ impl NetworkService {
                 }
             }
 
-            NetworkCommand::Shutdown => {
-                NetworkResponse::Ok
-            }
+            NetworkCommand::Shutdown => NetworkResponse::Ok,
         }
     }
 }

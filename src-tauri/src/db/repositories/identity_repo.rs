@@ -31,7 +31,7 @@ impl<'a> IdentityRepository<'a> {
             let mut stmt = conn.prepare(
                 "SELECT peer_id, public_key, x25519_public, private_key_encrypted,
                         display_name, avatar_hash, bio, created_at, updated_at
-                 FROM local_identity WHERE id = 1"
+                 FROM local_identity WHERE id = 1",
             )?;
 
             let result = stmt.query_row([], |row| {

@@ -19,8 +19,8 @@ pub struct LocalIdentity {
 #[serde(rename_all = "camelCase")]
 pub struct IdentityInfo {
     pub peer_id: String,
-    pub public_key: String,  // base64 encoded
-    pub x25519_public: String,  // base64 encoded
+    pub public_key: String,    // base64 encoded
+    pub x25519_public: String, // base64 encoded
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
@@ -66,6 +66,6 @@ pub struct UnlockIdentityRequest {
 /// Contains both Ed25519 (signing) and X25519 (key agreement) private keys
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedKeys {
-    pub ed25519_private: Vec<u8>,  // 32 bytes
-    pub x25519_private: Vec<u8>,   // 32 bytes
+    pub ed25519_private: Vec<u8>, // 32 bytes
+    pub x25519_private: Vec<u8>,  // 32 bytes
 }

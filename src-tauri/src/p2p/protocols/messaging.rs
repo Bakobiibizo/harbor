@@ -103,7 +103,7 @@ impl MessagingCodec {
 
 /// Helper to derive conversation ID from two peer IDs
 pub fn derive_conversation_id(peer_a: &str, peer_b: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     // Sort peer IDs to ensure consistent conversation ID regardless of direction
     let (first, second) = if peer_a < peer_b {
@@ -181,6 +181,9 @@ mod tests {
         let id1 = derive_conversation_id("peer-a", "peer-b");
         let id2 = derive_conversation_id("peer-b", "peer-a");
 
-        assert_eq!(id1, id2, "Conversation ID should be the same regardless of order");
+        assert_eq!(
+            id1, id2,
+            "Conversation ID should be the same regardless of order"
+        );
     }
 }

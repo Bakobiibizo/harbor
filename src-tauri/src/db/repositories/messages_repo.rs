@@ -1,7 +1,7 @@
 //! Messages repository for storing and retrieving direct messages
 
-use rusqlite::{params, Connection, Result as SqliteResult};
 use crate::db::Database;
+use rusqlite::{params, Connection, Result as SqliteResult};
 
 /// Message status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,17 +117,18 @@ impl MessagesRepository {
 
     /// Get a message by ID
     pub fn get_by_message_id(db: &Database, message_id: &str) -> SqliteResult<Option<Message>> {
-        db.with_connection(|conn| {
-            Self::get_by_message_id_inner(conn, message_id)
-        })
+        db.with_connection(|conn| Self::get_by_message_id_inner(conn, message_id))
     }
 
-    fn get_by_message_id_inner(conn: &Connection, message_id: &str) -> SqliteResult<Option<Message>> {
+    fn get_by_message_id_inner(
+        conn: &Connection,
+        message_id: &str,
+    ) -> SqliteResult<Option<Message>> {
         let mut stmt = conn.prepare(
             "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                     content_encrypted, content_type, reply_to_message_id, nonce_counter,
                     lamport_clock, sent_at, received_at, delivered_at, read_at, status
-             FROM messages WHERE message_id = ?"
+             FROM messages WHERE message_id = ?",
         )?;
 
         let mut rows = stmt.query([message_id])?;
@@ -190,7 +191,10 @@ impl MessagesRepository {
             let mut stmt = conn.prepare(query)?;
 
             let rows = if let Some(before) = before_timestamp {
-                stmt.query_map(params![conversation_id, before, limit], Self::row_to_message)?
+                stmt.query_map(
+                    params![conversation_id, before, limit],
+                    Self::row_to_message,
+                )?
             } else {
                 stmt.query_map(params![conversation_id, limit], Self::row_to_message)?
             };
@@ -294,7 +298,7 @@ impl MessagesRepository {
                  FROM messages m
                  WHERE m.sender_peer_id = ? OR m.recipient_peer_id = ?
                  GROUP BY m.conversation_id
-                 ORDER BY last_message_at DESC"
+                 ORDER BY last_message_at DESC",
             )?;
 
             let rows = stmt.query_map(
@@ -343,7 +347,7 @@ impl MessagesRepository {
                         lamport_clock, sent_at, received_at, delivered_at, read_at, status
                  FROM messages
                  WHERE recipient_peer_id = ? AND status = 'pending'
-                 ORDER BY sent_at ASC"
+                 ORDER BY sent_at ASC",
             )?;
 
             let rows = stmt.query_map([recipient_peer_id], Self::row_to_message)?;

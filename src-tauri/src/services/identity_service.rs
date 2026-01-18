@@ -1,8 +1,8 @@
-use crate::db::Database;
 use crate::db::repositories::IdentityRepository;
+use crate::db::Database;
 use crate::error::{AppError, Result};
 use crate::models::{CreateIdentityRequest, IdentityInfo, LocalIdentity};
-use crate::services::{CryptoService, Signable, sign as signing_sign};
+use crate::services::{sign as signing_sign, CryptoService, Signable};
 
 use ed25519_dalek::SigningKey;
 use std::sync::{Arc, RwLock};
@@ -57,7 +57,9 @@ impl IdentityService {
 
         // Check if identity already exists
         if repo.exists()? {
-            return Err(AppError::AlreadyExists("Identity already exists".to_string()));
+            return Err(AppError::AlreadyExists(
+                "Identity already exists".to_string(),
+            ));
         }
 
         // Generate Ed25519 keypair for signing
@@ -68,7 +70,11 @@ impl IdentityService {
 
         // Derive peer ID using libp2p's format for network compatibility
         let peer_id = CryptoService::derive_peer_id_from_signing_key(&ed25519_signing);
-        info!("Derived peer ID from signing key: {} (length: {})", peer_id, peer_id.len());
+        info!(
+            "Derived peer ID from signing key: {} (length: {})",
+            peer_id,
+            peer_id.len()
+        );
 
         // Encrypt private keys
         let encrypted_keys = CryptoService::encrypt_keys(
@@ -110,20 +116,24 @@ impl IdentityService {
     pub fn unlock(&self, passphrase: &str) -> Result<IdentityInfo> {
         let repo = IdentityRepository::new(&self.db);
 
-        let identity = repo.get()?.ok_or_else(|| {
-            AppError::NotFound("No identity found".to_string())
-        })?;
+        let identity = repo
+            .get()?
+            .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
 
         // Decrypt private keys
         let keys = CryptoService::decrypt_keys(&identity.private_key_encrypted, passphrase)?;
 
         // Reconstruct signing key
-        let ed25519_bytes: [u8; 32] = keys.ed25519_private.try_into()
+        let ed25519_bytes: [u8; 32] = keys
+            .ed25519_private
+            .try_into()
             .map_err(|_| AppError::Crypto("Invalid Ed25519 key length".to_string()))?;
         let ed25519_signing = SigningKey::from_bytes(&ed25519_bytes);
 
         // Reconstruct X25519 secret
-        let x25519_bytes: [u8; 32] = keys.x25519_private.try_into()
+        let x25519_bytes: [u8; 32] = keys
+            .x25519_private
+            .try_into()
             .map_err(|_| AppError::Crypto("Invalid X25519 key length".to_string()))?;
         let x25519_secret = X25519Secret::from(x25519_bytes);
 
@@ -150,9 +160,9 @@ impl IdentityService {
     /// Get the unlocked keys (for signing/encryption operations)
     pub fn get_unlocked_keys(&self) -> Result<UnlockedKeys> {
         let unlocked = self.unlocked_keys.read().unwrap();
-        unlocked.clone().ok_or_else(|| {
-            AppError::PermissionDenied("Identity is locked".to_string())
-        })
+        unlocked
+            .clone()
+            .ok_or_else(|| AppError::PermissionDenied("Identity is locked".to_string()))
     }
 
     /// Sign raw data using the unlocked Ed25519 key
@@ -191,9 +201,9 @@ impl IdentityService {
     /// Get the local peer ID
     pub fn get_peer_id(&self) -> Result<String> {
         let repo = IdentityRepository::new(&self.db);
-        let identity = repo.get()?.ok_or_else(|| {
-            AppError::NotFound("No identity found".to_string())
-        })?;
+        let identity = repo
+            .get()?
+            .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
         Ok(identity.peer_id)
     }
 }

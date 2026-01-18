@@ -1,7 +1,7 @@
 //! Contact repository for managing peer contacts
 
-use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 use crate::db::Database;
+use rusqlite::{params, OptionalExtension, Result as SqliteResult};
 
 /// Represents a contact in the database
 #[derive(Debug, Clone)]
@@ -93,7 +93,7 @@ impl ContactsRepository {
                 "SELECT id, peer_id, public_key, x25519_public, display_name, avatar_hash, bio,
                         is_blocked, trust_level, last_seen_at, added_at, updated_at
                  FROM contacts
-                 ORDER BY display_name ASC"
+                 ORDER BY display_name ASC",
             )?;
 
             let contacts = stmt.query_map([], |row| {
@@ -125,7 +125,7 @@ impl ContactsRepository {
                         is_blocked, trust_level, last_seen_at, added_at, updated_at
                  FROM contacts
                  WHERE is_blocked = 0
-                 ORDER BY display_name ASC"
+                 ORDER BY display_name ASC",
             )?;
 
             let contacts = stmt.query_map([], |row| {
@@ -219,10 +219,7 @@ impl ContactsRepository {
     /// Remove a contact
     pub fn remove_contact(db: &Database, peer_id: &str) -> SqliteResult<bool> {
         db.with_connection(|conn| {
-            let rows = conn.execute(
-                "DELETE FROM contacts WHERE peer_id = ?",
-                [peer_id],
-            )?;
+            let rows = conn.execute("DELETE FROM contacts WHERE peer_id = ?", [peer_id])?;
             Ok(rows > 0)
         })
     }
@@ -316,23 +313,31 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Add two contacts
-        ContactsRepository::add_contact(&db, &ContactData {
-            peer_id: "12D3KooWActive".to_string(),
-            public_key: vec![1],
-            x25519_public: vec![2],
-            display_name: "Active".to_string(),
-            avatar_hash: None,
-            bio: None,
-        }).unwrap();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: "12D3KooWActive".to_string(),
+                public_key: vec![1],
+                x25519_public: vec![2],
+                display_name: "Active".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
 
-        ContactsRepository::add_contact(&db, &ContactData {
-            peer_id: "12D3KooWBlocked".to_string(),
-            public_key: vec![3],
-            x25519_public: vec![4],
-            display_name: "Blocked".to_string(),
-            avatar_hash: None,
-            bio: None,
-        }).unwrap();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: "12D3KooWBlocked".to_string(),
+                public_key: vec![3],
+                x25519_public: vec![4],
+                display_name: "Blocked".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
 
         // Block one
         ContactsRepository::block_contact(&db, "12D3KooWBlocked").unwrap();
@@ -351,14 +356,18 @@ mod tests {
     fn test_remove_contact() {
         let db = Database::in_memory().unwrap();
 
-        ContactsRepository::add_contact(&db, &ContactData {
-            peer_id: "12D3KooWTest".to_string(),
-            public_key: vec![1],
-            x25519_public: vec![2],
-            display_name: "Test".to_string(),
-            avatar_hash: None,
-            bio: None,
-        }).unwrap();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: "12D3KooWTest".to_string(),
+                public_key: vec![1],
+                x25519_public: vec![2],
+                display_name: "Test".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
 
         assert!(ContactsRepository::is_contact(&db, "12D3KooWTest").unwrap());
 

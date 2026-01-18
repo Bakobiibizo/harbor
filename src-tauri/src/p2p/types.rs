@@ -67,11 +67,18 @@ pub enum NetworkEvent {
 #[derive(Debug)]
 pub enum NetworkCommand {
     /// Connect to a specific peer
-    Dial { peer_id: PeerId, addresses: Vec<Multiaddr> },
+    Dial {
+        peer_id: PeerId,
+        addresses: Vec<Multiaddr>,
+    },
     /// Disconnect from a peer
     Disconnect { peer_id: PeerId },
     /// Send a message to a peer
-    SendMessage { peer_id: PeerId, protocol: String, payload: Vec<u8> },
+    SendMessage {
+        peer_id: PeerId,
+        protocol: String,
+        payload: Vec<u8>,
+    },
     /// Request identity from a peer
     RequestIdentity { peer_id: PeerId },
     /// Get current network stats

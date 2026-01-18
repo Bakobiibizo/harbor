@@ -1,8 +1,8 @@
 /** Call state */
-export type CallState = "ringing" | "incoming" | "connected" | "ended";
+export type CallState = 'ringing' | 'incoming' | 'connected' | 'ended';
 
 /** Hangup reason */
-export type HangupReason = "normal" | "busy" | "declined" | "error";
+export type HangupReason = 'normal' | 'busy' | 'declined' | 'error';
 
 /** An outgoing offer result */
 export interface OfferResult {

@@ -1,2 +1,2 @@
-export { CreateIdentity } from "./CreateIdentity";
-export { UnlockIdentity } from "./UnlockIdentity";
+export { CreateIdentity } from './CreateIdentity';
+export { UnlockIdentity } from './UnlockIdentity';

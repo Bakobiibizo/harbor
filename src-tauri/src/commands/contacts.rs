@@ -32,17 +32,20 @@ pub async fn get_contacts(
     contacts_service: State<'_, Arc<ContactsService>>,
 ) -> Result<Vec<ContactInfo>, AppError> {
     let contacts = contacts_service.get_all_contacts()?;
-    Ok(contacts.into_iter().map(|c| ContactInfo {
-        id: c.id,
-        peer_id: c.peer_id,
-        display_name: c.display_name,
-        avatar_hash: c.avatar_hash,
-        bio: c.bio,
-        is_blocked: c.is_blocked,
-        trust_level: c.trust_level,
-        last_seen_at: c.last_seen_at,
-        added_at: c.added_at,
-    }).collect())
+    Ok(contacts
+        .into_iter()
+        .map(|c| ContactInfo {
+            id: c.id,
+            peer_id: c.peer_id,
+            display_name: c.display_name,
+            avatar_hash: c.avatar_hash,
+            bio: c.bio,
+            is_blocked: c.is_blocked,
+            trust_level: c.trust_level,
+            last_seen_at: c.last_seen_at,
+            added_at: c.added_at,
+        })
+        .collect())
 }
 
 /// Get active (non-blocked) contacts
@@ -51,17 +54,20 @@ pub async fn get_active_contacts(
     contacts_service: State<'_, Arc<ContactsService>>,
 ) -> Result<Vec<ContactInfo>, AppError> {
     let contacts = contacts_service.get_active_contacts()?;
-    Ok(contacts.into_iter().map(|c| ContactInfo {
-        id: c.id,
-        peer_id: c.peer_id,
-        display_name: c.display_name,
-        avatar_hash: c.avatar_hash,
-        bio: c.bio,
-        is_blocked: c.is_blocked,
-        trust_level: c.trust_level,
-        last_seen_at: c.last_seen_at,
-        added_at: c.added_at,
-    }).collect())
+    Ok(contacts
+        .into_iter()
+        .map(|c| ContactInfo {
+            id: c.id,
+            peer_id: c.peer_id,
+            display_name: c.display_name,
+            avatar_hash: c.avatar_hash,
+            bio: c.bio,
+            is_blocked: c.is_blocked,
+            trust_level: c.trust_level,
+            last_seen_at: c.last_seen_at,
+            added_at: c.added_at,
+        })
+        .collect())
 }
 
 /// Get a single contact by peer ID

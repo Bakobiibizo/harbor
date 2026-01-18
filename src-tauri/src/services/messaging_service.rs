@@ -1,18 +1,18 @@
 //! Messaging service for sending and receiving direct messages
 
+use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
-use ed25519_dalek::VerifyingKey;
 use x25519_dalek::PublicKey as X25519Public;
 
 use crate::db::{
-    Database, Capability, MessagesRepository, MessageData, MessageStatus, Conversation,
+    Capability, Conversation, Database, MessageData, MessageStatus, MessagesRepository,
 };
 use crate::error::{AppError, Result};
 use crate::p2p::protocols::messaging::derive_conversation_id;
 use crate::services::{
-    ContactsService, CryptoService, IdentityService, PermissionsService,
-    verify, Signable, SignableDirectMessage, SignableMessageAck,
+    verify, ContactsService, CryptoService, IdentityService, PermissionsService, Signable,
+    SignableDirectMessage, SignableMessageAck,
 };
 
 /// Service for managing direct messages
@@ -81,18 +81,25 @@ impl MessagingService {
         reply_to: Option<&str>,
     ) -> Result<OutgoingMessage> {
         // Get our identity
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Check we have chat permission with this peer
-        if !self.permissions_service.peer_has_capability(recipient_peer_id, Capability::Chat)? {
+        if !self
+            .permissions_service
+            .peer_has_capability(recipient_peer_id, Capability::Chat)?
+        {
             return Err(AppError::PermissionDenied(
-                "No chat permission with this peer".to_string()
+                "No chat permission with this peer".to_string(),
             ));
         }
 
         // Get recipient's X25519 public key for encryption
-        let x25519_public = self.contacts_service.get_x25519_public(recipient_peer_id)?
+        let x25519_public = self
+            .contacts_service
+            .get_x25519_public(recipient_peer_id)?
             .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;
 
         // Get our X25519 keys
@@ -102,7 +109,7 @@ impl MessagingService {
         let conversation_id = derive_conversation_id(&identity.peer_id, recipient_peer_id);
         let their_public = X25519Public::from(
             <[u8; 32]>::try_from(x25519_public.as_slice())
-                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?
+                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?,
         );
         let shared_secret = CryptoService::x25519_dh(&our_keys.x25519_secret, &their_public);
         let conv_key = CryptoService::derive_conversation_key(
@@ -113,7 +120,9 @@ impl MessagingService {
         );
 
         // Get next nonce counter
-        let nonce_counter = self.db.next_send_counter(&conversation_id)
+        let nonce_counter = self
+            .db
+            .next_send_counter(&conversation_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Encrypt content
@@ -125,8 +134,10 @@ impl MessagingService {
 
         // Create message
         let message_id = Uuid::new_v4().to_string();
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let timestamp = chrono::Utc::now().timestamp();
 
         // Create signable and sign
@@ -186,7 +197,8 @@ impl MessagingService {
             timestamp,
             &payload_cbor,
             &signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(OutgoingMessage {
             message_id,
@@ -219,7 +231,9 @@ impl MessagingService {
         signature: &[u8],
     ) -> Result<()> {
         // Verify we are the recipient
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         tracing::info!(
@@ -240,18 +254,19 @@ impl MessagingService {
         }
 
         // Check for replay (BEFORE decryption)
-        if !self.db.check_and_record_nonce(conversation_id, sender_peer_id, nonce_counter)
+        if !self
+            .db
+            .check_and_record_nonce(conversation_id, sender_peer_id, nonce_counter)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
         {
             return Err(AppError::Crypto("Replay attack detected".to_string()));
         }
 
         // Get sender's public key for verification
-        tracing::info!(
-            "Looking up sender {} in contacts",
-            sender_peer_id
-        );
-        let sender_public_key = self.contacts_service.get_public_key(sender_peer_id)?
+        tracing::info!("Looking up sender {} in contacts", sender_peer_id);
+        let sender_public_key = self
+            .contacts_service
+            .get_public_key(sender_peer_id)?
             .ok_or_else(|| {
                 tracing::error!(
                     "CONTACT LOOKUP FAILED - sender_peer_id {} not found in contacts",
@@ -275,9 +290,12 @@ impl MessagingService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            sender_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            sender_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid message signature".to_string()));
@@ -291,7 +309,8 @@ impl MessagingService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(sender_peer_id, lamport_clock as i64)
+        self.db
+            .update_lamport_clock(sender_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Store message
@@ -329,14 +348,17 @@ impl MessagingService {
             timestamp,
             &payload_cbor,
             signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(())
     }
 
     /// Create a delivery acknowledgment
     pub fn create_delivery_ack(&self, message_id: &str) -> Result<(SignableMessageAck, Vec<u8>)> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let message = MessagesRepository::get_by_message_id(&self.db, message_id)
@@ -360,7 +382,9 @@ impl MessagingService {
 
     /// Create a read acknowledgment
     pub fn create_read_ack(&self, message_id: &str) -> Result<(SignableMessageAck, Vec<u8>)> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let message = MessagesRepository::get_by_message_id(&self.db, message_id)
@@ -397,7 +421,9 @@ impl MessagingService {
         signature: &[u8],
     ) -> Result<()> {
         // Get the ack sender's public key
-        let sender_public_key = self.contacts_service.get_public_key(ack_sender_peer_id)?
+        let sender_public_key = self
+            .contacts_service
+            .get_public_key(ack_sender_peer_id)?
             .ok_or_else(|| AppError::NotFound("Ack sender not in contacts".to_string()))?;
 
         // Verify signature
@@ -410,9 +436,12 @@ impl MessagingService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            sender_public_key.as_slice().try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            sender_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid ack signature".to_string()));
@@ -429,7 +458,10 @@ impl MessagingService {
                     .map_err(|e| AppError::DatabaseString(e.to_string()))?;
             }
             _ => {
-                return Err(AppError::Validation(format!("Invalid ack status: {}", status)));
+                return Err(AppError::Validation(format!(
+                    "Invalid ack status: {}",
+                    status
+                )));
             }
         }
 
@@ -443,7 +475,9 @@ impl MessagingService {
         limit: i64,
         before_timestamp: Option<i64>,
     ) -> Result<Vec<DecryptedMessage>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
@@ -454,10 +488,13 @@ impl MessagingService {
             &conversation_id,
             limit,
             before_timestamp,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Get peer's X25519 key for decryption
-        let x25519_public = self.contacts_service.get_x25519_public(peer_id)?
+        let x25519_public = self
+            .contacts_service
+            .get_x25519_public(peer_id)?
             .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;
 
         let our_keys = self.identity_service.get_unlocked_keys()?;
@@ -465,7 +502,7 @@ impl MessagingService {
         // Derive conversation key
         let their_public = X25519Public::from(
             <[u8; 32]>::try_from(x25519_public.as_slice())
-                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?
+                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?,
         );
         let shared_secret = CryptoService::x25519_dh(&our_keys.x25519_secret, &their_public);
         let conv_key = CryptoService::derive_conversation_key(
@@ -508,7 +545,9 @@ impl MessagingService {
 
     /// Get all conversations
     pub fn get_conversations(&self) -> Result<Vec<Conversation>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         MessagesRepository::get_conversations(&self.db, &identity.peer_id)
@@ -517,7 +556,9 @@ impl MessagingService {
 
     /// Mark a conversation as read
     pub fn mark_conversation_read(&self, peer_id: &str) -> Result<i64> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
@@ -528,12 +569,15 @@ impl MessagingService {
             &conversation_id,
             &identity.peer_id,
             timestamp,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 
     /// Get unread count for a conversation
     pub fn get_unread_count(&self, peer_id: &str) -> Result<i64> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);

@@ -15,7 +15,7 @@ export interface Message {
 }
 
 /** Message delivery status */
-export type MessageStatus = "pending" | "sent" | "delivered" | "read" | "failed";
+export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 /** A conversation summary */
 export interface Conversation {

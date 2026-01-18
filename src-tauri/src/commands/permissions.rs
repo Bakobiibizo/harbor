@@ -1,8 +1,8 @@
 //! Tauri commands for permission management
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use std::sync::Arc;
+use tauri::State;
 
 use crate::db::Capability;
 use crate::error::AppError;
@@ -44,11 +44,8 @@ pub async fn grant_permission(
     expires_in_seconds: Option<i64>,
 ) -> Result<GrantResult, AppError> {
     let cap = capability_from_str(&capability)?;
-    let grant = permissions_service.create_permission_grant(
-        &subject_peer_id,
-        cap,
-        expires_in_seconds,
-    )?;
+    let grant =
+        permissions_service.create_permission_grant(&subject_peer_id, cap, expires_in_seconds)?;
 
     Ok(GrantResult {
         grant_id: grant.grant_id,
@@ -97,18 +94,21 @@ pub async fn get_granted_permissions(
     permissions_service: State<'_, Arc<PermissionsService>>,
 ) -> Result<Vec<PermissionInfo>, AppError> {
     let perms = permissions_service.get_granted_permissions()?;
-    Ok(perms.into_iter().map(|p| {
-        let is_valid = p.is_valid();
-        PermissionInfo {
-            grant_id: p.grant_id,
-            issuer_peer_id: p.issuer_peer_id,
-            subject_peer_id: p.subject_peer_id,
-            capability: p.capability,
-            issued_at: p.issued_at,
-            expires_at: p.expires_at,
-            is_valid,
-        }
-    }).collect())
+    Ok(perms
+        .into_iter()
+        .map(|p| {
+            let is_valid = p.is_valid();
+            PermissionInfo {
+                grant_id: p.grant_id,
+                issuer_peer_id: p.issuer_peer_id,
+                subject_peer_id: p.subject_peer_id,
+                capability: p.capability,
+                issued_at: p.issued_at,
+                expires_at: p.expires_at,
+                is_valid,
+            }
+        })
+        .collect())
 }
 
 /// Get all permissions granted to us
@@ -117,18 +117,21 @@ pub async fn get_received_permissions(
     permissions_service: State<'_, Arc<PermissionsService>>,
 ) -> Result<Vec<PermissionInfo>, AppError> {
     let perms = permissions_service.get_received_permissions()?;
-    Ok(perms.into_iter().map(|p| {
-        let is_valid = p.is_valid();
-        PermissionInfo {
-            grant_id: p.grant_id,
-            issuer_peer_id: p.issuer_peer_id,
-            subject_peer_id: p.subject_peer_id,
-            capability: p.capability,
-            issued_at: p.issued_at,
-            expires_at: p.expires_at,
-            is_valid,
-        }
-    }).collect())
+    Ok(perms
+        .into_iter()
+        .map(|p| {
+            let is_valid = p.is_valid();
+            PermissionInfo {
+                grant_id: p.grant_id,
+                issuer_peer_id: p.issuer_peer_id,
+                subject_peer_id: p.subject_peer_id,
+                capability: p.capability,
+                issued_at: p.issued_at,
+                expires_at: p.expires_at,
+                is_valid,
+            }
+        })
+        .collect())
 }
 
 /// Get all peers we can chat with
@@ -148,11 +151,7 @@ pub async fn grant_all_permissions(
     let mut results = Vec::new();
 
     for cap in [Capability::Chat, Capability::WallRead, Capability::Call] {
-        let grant = permissions_service.create_permission_grant(
-            &subject_peer_id,
-            cap,
-            None,
-        )?;
+        let grant = permissions_service.create_permission_grant(&subject_peer_id, cap, None)?;
 
         results.push(GrantResult {
             grant_id: grant.grant_id,

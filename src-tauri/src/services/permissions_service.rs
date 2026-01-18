@@ -1,14 +1,14 @@
 //! Permissions service for managing capability grants
 
+use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
-use ed25519_dalek::VerifyingKey;
 
-use crate::db::{Database, Capability, GrantData, Permission, PermissionsRepository};
+use crate::db::{Capability, Database, GrantData, Permission, PermissionsRepository};
 use crate::error::{AppError, Result};
 use crate::services::{
-    IdentityService, verify, Signable,
-    SignablePermissionRequest, SignablePermissionGrant, SignablePermissionRevoke,
+    verify, IdentityService, Signable, SignablePermissionGrant, SignablePermissionRequest,
+    SignablePermissionRevoke,
 };
 
 /// Service for managing permissions
@@ -57,7 +57,10 @@ pub struct PermissionRevokeMessage {
 impl PermissionsService {
     /// Create a new permissions service
     pub fn new(db: Arc<Database>, identity_service: Arc<IdentityService>) -> Self {
-        Self { db, identity_service }
+        Self {
+            db,
+            identity_service,
+        }
     }
 
     // ============================================================
@@ -70,12 +73,16 @@ impl PermissionsService {
         capability: Capability,
         message: Option<&str>,
     ) -> Result<PermissionRequestMessage> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let request_id = Uuid::new_v4().to_string();
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let timestamp = chrono::Utc::now().timestamp();
 
         let signable = SignablePermissionRequest {
@@ -107,12 +114,16 @@ impl PermissionsService {
         capability: Capability,
         expires_in_seconds: Option<i64>,
     ) -> Result<PermissionGrantMessage> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let grant_id = Uuid::new_v4().to_string();
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let issued_at = chrono::Utc::now().timestamp();
         let expires_at = expires_in_seconds.map(|s| issued_at + s);
 
@@ -165,7 +176,8 @@ impl PermissionsService {
             expires_at,
             &payload_cbor,
             &signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(PermissionGrantMessage {
             grant_id,
@@ -183,7 +195,9 @@ impl PermissionsService {
 
     /// Revoke a previously granted permission
     pub fn revoke_permission(&self, grant_id: &str) -> Result<PermissionRevokeMessage> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify we issued this grant
@@ -192,11 +206,15 @@ impl PermissionsService {
             .ok_or_else(|| AppError::NotFound("Grant not found".to_string()))?;
 
         if grant.issuer_peer_id != identity.peer_id {
-            return Err(AppError::Unauthorized("Not the issuer of this grant".to_string()));
+            return Err(AppError::Unauthorized(
+                "Not the issuer of this grant".to_string(),
+            ));
         }
 
-        let lamport_clock = self.db.next_lamport_clock(&identity.peer_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
+        let lamport_clock =
+            self.db
+                .next_lamport_clock(&identity.peer_id)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let revoked_at = chrono::Utc::now().timestamp();
 
         let signable = SignablePermissionRevoke {
@@ -230,7 +248,8 @@ impl PermissionsService {
             None,
             &payload_cbor,
             &signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(PermissionRevokeMessage {
             grant_id: grant_id.to_string(),
@@ -264,9 +283,11 @@ impl PermissionsService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            issuer_public_key.try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            issuer_public_key
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, &grant.signature)? {
             return Err(AppError::Crypto("Invalid grant signature".to_string()));
@@ -281,7 +302,8 @@ impl PermissionsService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(&grant.issuer_peer_id, grant.lamport_clock as i64)
+        self.db
+            .update_lamport_clock(&grant.issuer_peer_id, grant.lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Store grant
@@ -317,7 +339,8 @@ impl PermissionsService {
             grant.expires_at,
             &grant.payload_cbor,
             &grant.signature,
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         Ok(())
     }
@@ -337,9 +360,11 @@ impl PermissionsService {
         };
 
         let verifying_key = VerifyingKey::from_bytes(
-            issuer_public_key.try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?
-        ).map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+            issuer_public_key
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
         if !verify(&verifying_key, &signable, &revoke.signature)? {
             return Err(AppError::Crypto("Invalid revoke signature".to_string()));
@@ -354,7 +379,8 @@ impl PermissionsService {
         }
 
         // Update lamport clock
-        self.db.update_lamport_clock(&revoke.issuer_peer_id, revoke.lamport_clock as i64)
+        self.db
+            .update_lamport_clock(&revoke.issuer_peer_id, revoke.lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Apply revocation
@@ -383,7 +409,8 @@ impl PermissionsService {
                 None,
                 &payload_cbor,
                 &revoke.signature,
-            ).map_err(|e| AppError::DatabaseString(e.to_string()))?;
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
         }
 
         Ok(())
@@ -394,8 +421,14 @@ impl PermissionsService {
     // ============================================================
 
     /// Check if a peer has a specific capability from us
-    pub fn peer_has_capability(&self, subject_peer_id: &str, capability: Capability) -> Result<bool> {
-        let identity = self.identity_service.get_identity()?
+    pub fn peer_has_capability(
+        &self,
+        subject_peer_id: &str,
+        capability: Capability,
+    ) -> Result<bool> {
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PermissionsRepository::has_capability(
@@ -403,12 +436,15 @@ impl PermissionsService {
             &identity.peer_id,
             subject_peer_id,
             capability.as_str(),
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 
     /// Check if we have a capability from another peer
     pub fn we_have_capability(&self, issuer_peer_id: &str, capability: Capability) -> Result<bool> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PermissionsRepository::has_capability(
@@ -416,12 +452,15 @@ impl PermissionsService {
             issuer_peer_id,
             &identity.peer_id,
             capability.as_str(),
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 
     /// Get all permissions we've granted
     pub fn get_granted_permissions(&self) -> Result<Vec<Permission>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_permissions_by_issuer(&self.db, &identity.peer_id)
@@ -430,7 +469,9 @@ impl PermissionsService {
 
     /// Get all permissions granted to us
     pub fn get_received_permissions(&self) -> Result<Vec<Permission>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_permissions_for_subject(&self.db, &identity.peer_id)
@@ -439,7 +480,9 @@ impl PermissionsService {
 
     /// Get all peers we can chat with (we granted them chat)
     pub fn get_chat_peers(&self) -> Result<Vec<String>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_chat_contacts(&self.db, &identity.peer_id)
@@ -452,7 +495,9 @@ impl PermissionsService {
         issuer_peer_id: &str,
         capability: Capability,
     ) -> Result<Option<Permission>> {
-        let identity = self.identity_service.get_identity()?
+        let identity = self
+            .identity_service
+            .get_identity()?
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_capability_grant(
@@ -460,7 +505,8 @@ impl PermissionsService {
             issuer_peer_id,
             &identity.peer_id,
             capability.as_str(),
-        ).map_err(|e| AppError::DatabaseString(e.to_string()))
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 }
 
@@ -481,51 +527,59 @@ mod tests {
         let (_, identity_service, permissions_service) = create_test_service();
 
         // Create identity first
-        identity_service.create_identity(CreateIdentityRequest {
-            display_name: "Test User".to_string(),
-            passphrase: "password123".to_string(),
-            bio: None,
-        }).unwrap();
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test User".to_string(),
+                passphrase: "password123".to_string(),
+                bio: None,
+            })
+            .unwrap();
         identity_service.unlock("password123").unwrap();
 
         // Create a grant
-        let grant = permissions_service.create_permission_grant(
-            "12D3KooWSubject",
-            Capability::Chat,
-            None,
-        ).unwrap();
+        let grant = permissions_service
+            .create_permission_grant("12D3KooWSubject", Capability::Chat, None)
+            .unwrap();
 
         assert!(!grant.grant_id.is_empty());
         assert_eq!(grant.capability, "chat");
 
         // Verify it's stored
-        assert!(permissions_service.peer_has_capability("12D3KooWSubject", Capability::Chat).unwrap());
+        assert!(permissions_service
+            .peer_has_capability("12D3KooWSubject", Capability::Chat)
+            .unwrap());
     }
 
     #[test]
     fn test_revoke_grant() {
         let (_, identity_service, permissions_service) = create_test_service();
 
-        identity_service.create_identity(CreateIdentityRequest {
-            display_name: "Test User".to_string(),
-            passphrase: "password123".to_string(),
-            bio: None,
-        }).unwrap();
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test User".to_string(),
+                passphrase: "password123".to_string(),
+                bio: None,
+            })
+            .unwrap();
         identity_service.unlock("password123").unwrap();
 
-        let grant = permissions_service.create_permission_grant(
-            "12D3KooWSubject",
-            Capability::Chat,
-            None,
-        ).unwrap();
+        let grant = permissions_service
+            .create_permission_grant("12D3KooWSubject", Capability::Chat, None)
+            .unwrap();
 
         // Verify capability exists
-        assert!(permissions_service.peer_has_capability("12D3KooWSubject", Capability::Chat).unwrap());
+        assert!(permissions_service
+            .peer_has_capability("12D3KooWSubject", Capability::Chat)
+            .unwrap());
 
         // Revoke
-        permissions_service.revoke_permission(&grant.grant_id).unwrap();
+        permissions_service
+            .revoke_permission(&grant.grant_id)
+            .unwrap();
 
         // Verify capability is gone
-        assert!(!permissions_service.peer_has_capability("12D3KooWSubject", Capability::Chat).unwrap());
+        assert!(!permissions_service
+            .peer_has_capability("12D3KooWSubject", Capability::Chat)
+            .unwrap());
     }
 }

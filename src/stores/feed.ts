@@ -1,6 +1,6 @@
-import { create } from "zustand";
-import { feedService } from "../services/feed";
-import type { FeedItem } from "../types";
+import { create } from 'zustand';
+import { feedService } from '../services/feed';
+import type { FeedItem } from '../types';
 
 interface FeedState {
   // State
@@ -33,7 +33,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         hasMore: feedItems.length === limit,
       });
     } catch (error) {
-      console.error("Failed to load feed:", error);
+      console.error('Failed to load feed:', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -55,7 +55,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         hasMore: newItems.length === limit,
       });
     } catch (error) {
-      console.error("Failed to load more feed items:", error);
+      console.error('Failed to load more feed items:', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -71,7 +71,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         hasMore: feedItems.length === 50,
       });
     } catch (error) {
-      console.error("Failed to refresh feed:", error);
+      console.error('Failed to refresh feed:', error);
       set({ error: String(error), isLoading: false });
     }
   },
