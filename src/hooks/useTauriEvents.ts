@@ -91,6 +91,32 @@ export function useTauriEvents() {
           refreshContacts();
           toast.success(`Added ${event.displayName} to contacts!`);
           break;
+
+        case 'nat_status_changed':
+          console.log(`[Network] NAT status changed: ${event.status}`);
+          // Update NAT status in store
+          useNetworkStore.getState().setNatStatus(event.status);
+          // Show toast for important status changes
+          if (event.status === 'public') {
+            toast.success('Public IP detected - direct connections possible');
+          } else if (event.status === 'private') {
+            toast('Behind NAT - using relay for remote connections', { icon: '🔄' });
+          }
+          break;
+
+        case 'relay_connected':
+          console.log(`[Network] Relay connected: ${event.relayAddress}`);
+          // Add relay address to store
+          useNetworkStore.getState().addRelayAddress(event.relayAddress);
+          // Refresh addresses to update the UI
+          useNetworkStore.getState().refreshAddresses();
+          toast.success('Connected to relay server');
+          break;
+
+        case 'hole_punch_succeeded':
+          console.log(`[Network] Hole punch succeeded with: ${event.peerId}`);
+          toast.success('Direct connection established!');
+          break;
       }
     }
 

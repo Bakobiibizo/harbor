@@ -10,6 +10,21 @@ pub enum ConnectionStatus {
     Connected,
 }
 
+/// NAT status detected by AutoNAT
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NatStatus {
+    /// NAT status not yet determined
+    #[default]
+    Unknown,
+    /// We appear to have a public IP address
+    Public,
+    /// We are behind NAT but have relay connectivity
+    Private,
+    /// We are behind strict NAT, relay may not work
+    BehindNat,
+}
+
 /// Information about a discovered or connected peer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +45,12 @@ pub struct NetworkStats {
     pub total_bytes_in: u64,
     pub total_bytes_out: u64,
     pub uptime_seconds: u64,
+    /// Current NAT status
+    pub nat_status: NatStatus,
+    /// Relay addresses we can be reached at (via relay)
+    pub relay_addresses: Vec<String>,
+    /// External addresses discovered via AutoNAT
+    pub external_addresses: Vec<String>,
 }
 
 /// Events emitted by the network layer to the application
@@ -61,6 +82,12 @@ pub enum NetworkEvent {
         peer_id: String,
         display_name: String,
     },
+    /// NAT status changed
+    NatStatusChanged { status: NatStatus },
+    /// Successfully connected to a relay and have a relay address
+    RelayConnected { relay_address: String },
+    /// Direct connection established via hole-punching
+    HolePunchSucceeded { peer_id: String },
 }
 
 /// Commands that can be sent to the network service

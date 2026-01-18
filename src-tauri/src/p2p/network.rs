@@ -1,7 +1,7 @@
 use base64::Engine;
 use futures::StreamExt;
 use libp2p::{
-    identify, kad, mdns, ping,
+    autonat, dcutr, identify, kad, mdns, ping, relay,
     request_response::{self, ResponseChannel},
     swarm::SwarmEvent,
     Multiaddr, PeerId, Swarm,
@@ -10,6 +10,15 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
+
+/// Public relay servers that support libp2p relay v2
+/// These are IPFS bootstrap nodes that run relay servers
+const PUBLIC_RELAYS: &[&str] = &[
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+];
 
 use super::behaviour::{
     ChatBehaviour, ChatBehaviourEvent, IdentityExchangeRequest, IdentityExchangeResponse,
@@ -173,6 +182,8 @@ impl NetworkHandle {
     }
 }
 
+use super::types::NatStatus;
+
 /// The network service manages the libp2p swarm
 pub struct NetworkService {
     swarm: Swarm<ChatBehaviour>,
@@ -188,6 +199,14 @@ pub struct NetworkService {
     listening_addresses: Vec<Multiaddr>,
     stats: NetworkStats,
     start_time: Instant,
+    /// Current NAT status
+    nat_status: NatStatus,
+    /// Relay addresses we're reachable at
+    relay_addresses: Vec<Multiaddr>,
+    /// External addresses discovered via AutoNAT
+    external_addresses: Vec<Multiaddr>,
+    /// Whether we've attempted to connect to relays
+    relay_connection_attempted: bool,
 }
 
 impl NetworkService {
@@ -218,6 +237,10 @@ impl NetworkService {
             listening_addresses: Vec::new(),
             stats: NetworkStats::default(),
             start_time: Instant::now(),
+            nat_status: NatStatus::Unknown,
+            relay_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            relay_connection_attempted: false,
         };
 
         Ok((service, handle, event_rx))
@@ -498,7 +521,208 @@ impl NetworkService {
                 }
             }
 
+            // Relay client events for NAT traversal
+            ChatBehaviourEvent::RelayClient(event) => {
+                self.handle_relay_client_event(event).await;
+            }
+
+            // DCUtR events for hole punching
+            ChatBehaviourEvent::Dcutr(event) => {
+                self.handle_dcutr_event(event).await;
+            }
+
+            // AutoNAT events for NAT detection
+            ChatBehaviourEvent::Autonat(event) => {
+                self.handle_autonat_event(event).await;
+            }
+
             _ => {}
+        }
+    }
+
+    /// Handle relay client events
+    async fn handle_relay_client_event(&mut self, event: relay::client::Event) {
+        match event {
+            relay::client::Event::ReservationReqAccepted {
+                relay_peer_id,
+                renewal,
+                limit: _,
+            } => {
+                let local_peer_id = *self.swarm.local_peer_id();
+                info!(
+                    "Relay reservation accepted by {} (renewal: {})",
+                    relay_peer_id, renewal
+                );
+
+                // Build relay circuit address: /p2p/RELAY/p2p-circuit/p2p/LOCAL
+                let relay_circuit_addr: Multiaddr = format!(
+                    "/p2p/{}/p2p-circuit/p2p/{}",
+                    relay_peer_id, local_peer_id
+                )
+                .parse()
+                .unwrap();
+
+                // Store the relay address if not already present
+                if !self.relay_addresses.contains(&relay_circuit_addr) {
+                    self.relay_addresses.push(relay_circuit_addr.clone());
+                    info!("Added relay address: {}", relay_circuit_addr);
+
+                    // Emit event to frontend
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::RelayConnected {
+                            relay_address: relay_circuit_addr.to_string(),
+                        })
+                        .await;
+                }
+
+                // Update NAT status to Private (we're behind NAT but reachable via relay)
+                if self.nat_status != NatStatus::Public {
+                    self.nat_status = NatStatus::Private;
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::NatStatusChanged {
+                            status: self.nat_status,
+                        })
+                        .await;
+                }
+            }
+
+            relay::client::Event::OutboundCircuitEstablished {
+                relay_peer_id,
+                limit: _,
+            } => {
+                debug!("Outbound circuit established via relay {}", relay_peer_id);
+            }
+
+            relay::client::Event::InboundCircuitEstablished { src_peer_id, limit: _ } => {
+                debug!("Inbound circuit established from {}", src_peer_id);
+            }
+        }
+    }
+
+    /// Handle DCUtR (hole punching) events
+    /// Note: dcutr::Event is a struct with remote_peer_id and result fields
+    async fn handle_dcutr_event(&mut self, event: dcutr::Event) {
+        let remote_peer_id = event.remote_peer_id;
+        match event.result {
+            Ok(_connection_id) => {
+                info!(
+                    "Direct connection upgrade succeeded with {}",
+                    remote_peer_id
+                );
+                // Emit event to frontend
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::HolePunchSucceeded {
+                        peer_id: remote_peer_id.to_string(),
+                    })
+                    .await;
+            }
+            Err(error) => {
+                debug!(
+                    "Direct connection upgrade failed with {}: {:?}",
+                    remote_peer_id, error
+                );
+                // Connection stays relayed - this is fine
+            }
+        }
+    }
+
+    /// Handle AutoNAT events
+    async fn handle_autonat_event(&mut self, event: autonat::Event) {
+        match event {
+            autonat::Event::StatusChanged { old, new } => {
+                info!("AutoNAT status changed from {:?} to {:?}", old, new);
+
+                let new_nat_status = match new {
+                    autonat::NatStatus::Public(addr) => {
+                        info!("AutoNAT: We have a public address: {}", addr);
+                        // Store the external address
+                        if !self.external_addresses.contains(&addr) {
+                            self.external_addresses.push(addr.clone());
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::ExternalAddressDiscovered {
+                                    address: addr.to_string(),
+                                })
+                                .await;
+                        }
+                        NatStatus::Public
+                    }
+                    autonat::NatStatus::Private => {
+                        info!("AutoNAT: We are behind NAT, attempting relay connection...");
+                        // Try to connect to relays if we haven't already
+                        if !self.relay_connection_attempted {
+                            self.connect_to_relays().await;
+                        }
+                        NatStatus::Private
+                    }
+                    autonat::NatStatus::Unknown => NatStatus::Unknown,
+                };
+
+                if self.nat_status != new_nat_status {
+                    self.nat_status = new_nat_status;
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::NatStatusChanged {
+                            status: self.nat_status,
+                        })
+                        .await;
+                }
+            }
+
+            autonat::Event::InboundProbe(_) | autonat::Event::OutboundProbe(_) => {
+                // These are just probe events, no action needed
+            }
+        }
+    }
+
+    /// Connect to public relay servers for NAT traversal
+    async fn connect_to_relays(&mut self) {
+        self.relay_connection_attempted = true;
+        info!("Attempting to connect to public relay servers...");
+
+        for relay_addr_str in PUBLIC_RELAYS {
+            match relay_addr_str.parse::<Multiaddr>() {
+                Ok(relay_addr) => {
+                    // Extract peer ID from the multiaddress
+                    let peer_id = relay_addr.iter().find_map(|proto| {
+                        if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                            Some(peer_id)
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some(relay_peer_id) = peer_id {
+                        info!("Dialing relay server: {}", relay_addr);
+
+                        // Add to Kademlia for routing
+                        let addr_without_peer: Multiaddr = relay_addr
+                            .iter()
+                            .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+                            .collect();
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&relay_peer_id, addr_without_peer);
+
+                        // Dial the relay
+                        if let Err(e) = self.swarm.dial(relay_addr.clone()) {
+                            warn!("Failed to dial relay {}: {}", relay_addr, e);
+                        } else {
+                            // Request a reservation from the relay
+                            // This happens automatically when we connect to a relay server
+                            // that supports the relay protocol
+                            info!("Dial initiated to relay: {}", relay_peer_id);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse relay address '{}': {}", relay_addr_str, e);
+                }
+            }
         }
     }
 
@@ -793,6 +1017,17 @@ impl NetworkService {
             NetworkCommand::GetStats => {
                 let mut stats = self.stats.clone();
                 stats.uptime_seconds = self.start_time.elapsed().as_secs();
+                stats.nat_status = self.nat_status;
+                stats.relay_addresses = self
+                    .relay_addresses
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect();
+                stats.external_addresses = self
+                    .external_addresses
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect();
                 NetworkResponse::Stats(stats)
             }
 
@@ -803,11 +1038,23 @@ impl NetworkService {
 
             NetworkCommand::GetListeningAddresses => {
                 let local_peer_id = self.swarm.local_peer_id();
-                let addresses: Vec<String> = self
-                    .listening_addresses
-                    .iter()
-                    .map(|addr| format!("{}/p2p/{}", addr, local_peer_id))
-                    .collect();
+                let mut addresses: Vec<String> = Vec::new();
+
+                // Add relay addresses first (most important for remote connections)
+                for addr in &self.relay_addresses {
+                    addresses.push(addr.to_string());
+                }
+
+                // Add external addresses discovered via AutoNAT
+                for addr in &self.external_addresses {
+                    addresses.push(format!("{}/p2p/{}", addr, local_peer_id));
+                }
+
+                // Add local listening addresses
+                for addr in &self.listening_addresses {
+                    addresses.push(format!("{}/p2p/{}", addr, local_peer_id));
+                }
+
                 NetworkResponse::Addresses(addresses)
             }
 

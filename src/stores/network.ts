@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PeerInfo, NetworkStats, ConnectionStatus } from '../types';
+import type { PeerInfo, NetworkStats, ConnectionStatus, NatStatus } from '../types';
 import * as networkService from '../services/network';
 
 interface NetworkState {
@@ -21,6 +21,9 @@ interface NetworkState {
   checkStatus: () => Promise<void>;
   connectToPeer: (multiaddr: string) => Promise<void>;
   addBootstrapNode: (multiaddr: string) => Promise<void>;
+  // NAT status update (called by event handler)
+  setNatStatus: (status: NatStatus) => void;
+  addRelayAddress: (address: string) => void;
 }
 
 const initialStats: NetworkStats = {
@@ -28,6 +31,9 @@ const initialStats: NetworkStats = {
   totalBytesIn: 0,
   totalBytesOut: 0,
   uptimeSeconds: 0,
+  natStatus: 'unknown',
+  relayAddresses: [],
+  externalAddresses: [],
 };
 
 export const useNetworkStore = create<NetworkState>((set, get) => ({
@@ -148,5 +154,31 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({ error: String(error), isLoading: false });
       throw error;
     }
+  },
+
+  // Update NAT status (called by event handler)
+  setNatStatus: (status: NatStatus) => {
+    set((state) => ({
+      stats: { ...state.stats, natStatus: status },
+    }));
+  },
+
+  // Add a relay address (called by event handler)
+  addRelayAddress: (address: string) => {
+    set((state) => {
+      if (state.stats.relayAddresses.includes(address)) {
+        return state;
+      }
+      return {
+        stats: {
+          ...state.stats,
+          relayAddresses: [...state.stats.relayAddresses, address],
+        },
+        // Also add to listening addresses (relay addresses should be first)
+        listeningAddresses: state.listeningAddresses.includes(address)
+          ? state.listeningAddresses
+          : [address, ...state.listeningAddresses],
+      };
+    });
   },
 }));

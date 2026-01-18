@@ -406,7 +406,7 @@ export function NetworkPage() {
 
             {/* Stats grid */}
             {isRunning && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6">
                 <div
                   className="p-3 rounded-xl"
                   style={{ background: 'hsl(var(--harbor-surface-1))' }}
@@ -462,6 +462,54 @@ export function NetworkPage() {
                   >
                     {formatBytes(stats.totalBytesOut)}
                   </p>
+                </div>
+                {/* NAT Status indicator */}
+                <div
+                  className="p-3 rounded-xl"
+                  style={{
+                    background:
+                      stats.natStatus === 'public'
+                        ? 'hsl(var(--harbor-success) / 0.1)'
+                        : stats.natStatus === 'private'
+                          ? 'hsl(var(--harbor-warning) / 0.1)'
+                          : 'hsl(var(--harbor-surface-1))',
+                  }}
+                >
+                  <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    NAT Status
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-2 h-2 rounded-full"
+                      style={{
+                        background:
+                          stats.natStatus === 'public'
+                            ? 'hsl(var(--harbor-success))'
+                            : stats.natStatus === 'private'
+                              ? 'hsl(var(--harbor-warning))'
+                              : 'hsl(var(--harbor-text-tertiary))',
+                      }}
+                    />
+                    <p
+                      className="text-sm font-semibold capitalize"
+                      style={{
+                        color:
+                          stats.natStatus === 'public'
+                            ? 'hsl(var(--harbor-success))'
+                            : stats.natStatus === 'private'
+                              ? 'hsl(var(--harbor-warning))'
+                              : 'hsl(var(--harbor-text-primary))',
+                      }}
+                    >
+                      {stats.natStatus === 'unknown'
+                        ? 'Detecting...'
+                        : stats.natStatus === 'public'
+                          ? 'Public'
+                          : stats.natStatus === 'private'
+                            ? 'Relayed'
+                            : 'Behind NAT'}
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -586,15 +634,72 @@ export function NetworkPage() {
               {/* Your addresses for sharing */}
               {listeningAddresses.length > 0 && (
                 <div>
+                  {/* Show relay addresses prominently if available */}
+                  {stats.relayAddresses && stats.relayAddresses.length > 0 && (
+                    <div className="mb-4">
+                      <label
+                        className="text-xs font-medium block mb-2 flex items-center gap-2"
+                        style={{ color: 'hsl(var(--harbor-success))' }}
+                      >
+                        <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'hsl(var(--harbor-success))' }} />
+                        Relay Address (works anywhere)
+                      </label>
+                      {stats.relayAddresses.map((addr, idx) => (
+                        <div
+                          key={`relay-${idx}`}
+                          className="flex items-center gap-2 p-3 rounded-lg mb-2"
+                          style={{
+                            background: 'hsl(var(--harbor-success) / 0.1)',
+                            border: '1px solid hsl(var(--harbor-success) / 0.2)',
+                          }}
+                        >
+                          <code
+                            className="text-xs flex-1 break-all font-mono"
+                            style={{ color: 'hsl(var(--harbor-success))' }}
+                          >
+                            {addr}
+                          </code>
+                          <button
+                            className="p-1.5 rounded hover:bg-white/10 flex-shrink-0"
+                            onClick={() => {
+                              navigator.clipboard.writeText(addr);
+                              toast.success('Relay address copied! Share this with remote peers.');
+                            }}
+                            title="Copy relay address"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                              style={{ color: 'hsl(var(--harbor-success))' }}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                      <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                        This address works for peers anywhere on the internet, not just your local network.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Show local addresses */}
                   <label
                     className="text-xs font-medium block mb-2"
                     style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                   >
-                    Your shareable addresses (for remote peers)
+                    Local network addresses
                   </label>
                   <div className="space-y-2">
                     {listeningAddresses
-                      .filter((addr) => !addr.includes('127.0.0.1') && !addr.includes('::1'))
+                      .filter((addr) => !addr.includes('127.0.0.1') && !addr.includes('::1') && !addr.includes('p2p-circuit'))
                       .slice(0, 3)
                       .map((addr, idx) => (
                         <div
@@ -635,7 +740,7 @@ export function NetworkPage() {
                       ))}
                   </div>
                   <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                    Share one of these addresses with someone to let them connect to you directly.
+                    These addresses only work for peers on your local network (same WiFi/LAN).
                   </p>
                 </div>
               )}
