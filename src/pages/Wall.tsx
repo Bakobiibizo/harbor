@@ -1,6 +1,6 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import toast from "react-hot-toast";
-import { useIdentityStore, useMockPeersStore } from "../stores";
+import { useIdentityStore, useWallStore } from "../stores";
 import {
   WallIcon,
   EllipsisIcon,
@@ -8,7 +8,7 @@ import {
 
 export function WallPage() {
   const { state } = useIdentityStore();
-  const { userPosts, addUserPost, likeUserPost, deleteUserPost } = useMockPeersStore();
+  const { posts, isLoading, loadPosts, createPost, deletePost, likePost } = useWallStore();
   const [newPost, setNewPost] = useState("");
   const [isComposing, setIsComposing] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<{ type: "image" | "video"; url: string; name: string }[]>([]);
@@ -17,6 +17,13 @@ export function WallPage() {
   const mediaTypeRef = useRef<"image" | "video">("image");
 
   const identity = state.status === "unlocked" ? state.identity : null;
+
+  // Load posts from SQLite on mount
+  useEffect(() => {
+    if (identity) {
+      loadPosts();
+    }
+  }, [identity, loadPosts]);
 
   const formatDate = (date: Date) => {
     const now = new Date();
@@ -43,18 +50,23 @@ export function WallPage() {
       .slice(0, 2);
   };
 
-  const handlePost = () => {
+  const handlePost = async () => {
     if (!newPost.trim() && pendingMedia.length === 0) return;
 
-    addUserPost(newPost.trim(), pendingMedia.length > 0 ? pendingMedia : undefined);
-    setNewPost("");
-    setPendingMedia([]);
-    setIsComposing(false);
-    toast.success("Post published!");
+    try {
+      await createPost(newPost.trim(), pendingMedia.length > 0 ? pendingMedia : undefined);
+      setNewPost("");
+      setPendingMedia([]);
+      setIsComposing(false);
+      toast.success("Post published!");
+    } catch (err) {
+      console.error("Failed to create post:", err);
+      toast.error("Failed to publish post");
+    }
   };
 
   const handleLike = (postId: string) => {
-    likeUserPost(postId);
+    likePost(postId);
   };
 
   const handleAddMedia = (type: "image" | "video") => {
@@ -97,17 +109,22 @@ export function WallPage() {
   };
 
   const handleShare = (postId: string) => {
-    const post = userPosts.find(p => p.id === postId);
+    const post = posts.find(p => p.postId === postId);
     if (post) {
       navigator.clipboard.writeText(post.content.slice(0, 100) + "...");
       toast.success("Post link copied to clipboard");
     }
   };
 
-  const handleDeletePost = (postId: string) => {
-    deleteUserPost(postId);
-    setShowPostMenu(null);
-    toast.success("Post deleted");
+  const handleDeletePost = async (postId: string) => {
+    try {
+      await deletePost(postId);
+      setShowPostMenu(null);
+      toast.success("Post deleted");
+    } catch (err) {
+      console.error("Failed to delete post:", err);
+      toast.error("Failed to delete post");
+    }
   };
 
   return (
@@ -319,7 +336,15 @@ export function WallPage() {
           </div>
 
           {/* Posts - blog style with less rounded corners */}
-          {userPosts.length === 0 ? (
+          {isLoading ? (
+            <div className="text-center py-16">
+              <div
+                className="w-10 h-10 border-2 border-t-transparent rounded-full animate-spin mx-auto mb-4"
+                style={{ borderColor: "hsl(var(--harbor-primary))", borderTopColor: "transparent" }}
+              />
+              <p style={{ color: "hsl(var(--harbor-text-secondary))" }}>Loading posts...</p>
+            </div>
+          ) : posts.length === 0 ? (
             <div className="text-center py-16">
               <div
                 className="w-20 h-20 rounded-lg flex items-center justify-center mx-auto mb-4"
@@ -344,9 +369,9 @@ export function WallPage() {
               </p>
             </div>
           ) : (
-            userPosts.map((post) => (
+            posts.map((post) => (
               <article
-                key={post.id}
+                key={post.postId}
                 className="rounded-lg overflow-hidden"
                 style={{
                   background: "hsl(var(--harbor-bg-elevated))",
@@ -387,7 +412,7 @@ export function WallPage() {
 
                   <div className="relative">
                     <button
-                      onClick={() => setShowPostMenu(showPostMenu === post.id ? null : post.id)}
+                      onClick={() => setShowPostMenu(showPostMenu === post.postId ? null : post.postId)}
                       className="p-2 rounded-lg transition-colors duration-200"
                       style={{ color: "hsl(var(--harbor-text-tertiary))" }}
                     >
@@ -395,7 +420,7 @@ export function WallPage() {
                     </button>
 
                     {/* Post menu dropdown */}
-                    {showPostMenu === post.id && (
+                    {showPostMenu === post.postId && (
                       <div
                         className="absolute right-0 top-full mt-1 w-40 rounded-lg overflow-hidden z-10"
                         style={{
@@ -415,7 +440,7 @@ export function WallPage() {
                           Edit post
                         </button>
                         <button
-                          onClick={() => handleDeletePost(post.id)}
+                          onClick={() => handleDeletePost(post.postId)}
                           className="w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-white/5"
                           style={{ color: "hsl(var(--harbor-error))" }}
                         >
@@ -469,7 +494,7 @@ export function WallPage() {
                   style={{ borderColor: "hsl(var(--harbor-border-subtle))" }}
                 >
                   <button
-                    onClick={() => handleLike(post.id)}
+                    onClick={() => handleLike(post.postId)}
                     className="flex items-center gap-2 transition-colors duration-200"
                     style={{
                       color: post.liked
@@ -500,7 +525,7 @@ export function WallPage() {
                   </button>
 
                   <button
-                    onClick={() => handleShare(post.id)}
+                    onClick={() => handleShare(post.postId)}
                     className="flex items-center gap-2 transition-colors duration-200 ml-auto"
                     style={{ color: "hsl(var(--harbor-text-secondary))" }}
                   >

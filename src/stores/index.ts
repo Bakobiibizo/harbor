@@ -5,4 +5,6 @@ export { useContactsStore } from "./contacts";
 export { useFeedStore } from "./feed";
 export { useMockPeersStore } from "./mockPeers";
 export { useSettingsStore } from "./settings";
+export { useWallStore } from "./wall";
 export type { MockPeer, MockPost, MockConversation, MockMessage, UserPost, SavedPost } from "./mockPeers";
+export type { WallPost } from "./wall";
