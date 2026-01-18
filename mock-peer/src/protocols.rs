@@ -58,3 +58,89 @@ pub struct MessagingResponse {
     pub message_id: Option<String>,
     pub error: Option<String>,
 }
+
+// ============================================================================
+// Direct Message Types (for reply functionality)
+// ============================================================================
+
+/// A direct message between two peers (matches Harbor's DirectMessage)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectMessage {
+    /// Unique message ID (UUID v4)
+    pub message_id: String,
+    /// Conversation ID (derived from sorted peer IDs)
+    pub conversation_id: String,
+    /// Sender's peer ID
+    pub sender_peer_id: String,
+    /// Recipient's peer ID
+    pub recipient_peer_id: String,
+    /// Encrypted message content (AES-256-GCM with counter-based nonce)
+    pub content_encrypted: Vec<u8>,
+    /// Content type (text, image, etc.)
+    pub content_type: String,
+    /// ID of message being replied to (optional)
+    pub reply_to: Option<String>,
+    /// Counter used for AES-GCM nonce generation (for replay protection)
+    pub nonce_counter: u64,
+    /// Lamport timestamp for ordering
+    pub lamport_clock: u64,
+    /// Unix timestamp when message was created
+    pub timestamp: i64,
+    /// Signature over all fields above (excluding signature itself)
+    pub signature: Vec<u8>,
+}
+
+/// Message acknowledgment status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AckStatus {
+    Delivered,
+    Read,
+}
+
+/// Acknowledgment of message delivery/read
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageAck {
+    /// ID of the message being acknowledged
+    pub message_id: String,
+    /// Conversation ID
+    pub conversation_id: String,
+    /// Peer ID of the one sending the ack
+    pub peer_id: String,
+    /// Status: delivered or read
+    pub status: AckStatus,
+    /// Unix timestamp
+    pub timestamp: i64,
+    /// Signature over all fields above
+    pub signature: Vec<u8>,
+}
+
+/// Request/response wrapper for messaging protocol
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagingMessage {
+    /// A direct message
+    Message(DirectMessage),
+    /// An acknowledgment
+    Ack(MessageAck),
+}
+
+/// Helper to derive conversation ID from two peer IDs
+pub fn derive_conversation_id(peer_a: &str, peer_b: &str) -> String {
+    use sha2::{Sha256, Digest};
+
+    // Sort peer IDs to ensure consistent conversation ID regardless of direction
+    let (first, second) = if peer_a < peer_b {
+        (peer_a, peer_b)
+    } else {
+        (peer_b, peer_a)
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(first.as_bytes());
+    hasher.update(b":");
+    hasher.update(second.as_bytes());
+    let result = hasher.finalize();
+
+    hex::encode(&result[..16]) // First 16 bytes = 32 hex chars
+}

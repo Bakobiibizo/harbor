@@ -1038,6 +1038,7 @@ dependencies = [
 name = "harbor-mock-peer"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "chrono",
  "ciborium",
@@ -1052,6 +1053,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "x25519-dalek",
 ]
 

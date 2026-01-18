@@ -16,12 +16,14 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm,
 };
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{info, warn, error, debug};
 
 use protocols::{
     IdentityRequest, IdentityResponse,
     MessagingRequest, MessagingResponse,
+    DirectMessage, MessagingMessage, derive_conversation_id,
 };
 
 /// Protocol strings (must match Harbor)
@@ -55,6 +57,12 @@ struct MockPeerBehaviour {
     messaging: request_response::cbor::Behaviour<MessagingRequest, MessagingResponse>,
 }
 
+/// Stored peer information (from identity exchange)
+struct PeerInfo {
+    display_name: String,
+    x25519_public: [u8; 32],
+}
+
 /// Mock peer state
 struct MockPeer {
     /// Display name
@@ -63,12 +71,18 @@ struct MockPeer {
     bio: String,
     /// Ed25519 signing keypair
     signing_key: ed25519_dalek::SigningKey,
+    /// X25519 secret key (for encryption)
+    x25519_secret: x25519_dalek::StaticSecret,
     /// X25519 public key
     x25519_public: [u8; 32],
     /// libp2p peer ID
     peer_id: PeerId,
     /// Message counter for auto-replies
     message_counter: u64,
+    /// Lamport clock for message ordering
+    lamport_clock: u64,
+    /// Known peers and their X25519 public keys
+    known_peers: HashMap<String, PeerInfo>,
 }
 
 impl MockPeer {
@@ -89,10 +103,22 @@ impl MockPeer {
             name,
             bio,
             signing_key,
+            x25519_secret,
             x25519_public: x25519_public.to_bytes(),
             peer_id: keypair.public().to_peer_id(),
             message_counter: 0,
+            lamport_clock: 0,
+            known_peers: HashMap::new(),
         }
+    }
+
+    /// Store a peer's identity info
+    fn store_peer(&mut self, peer_id: &str, display_name: String, x25519_public: [u8; 32]) {
+        info!("Storing peer info for {}: {}", peer_id, display_name);
+        self.known_peers.insert(peer_id.to_string(), PeerInfo {
+            display_name,
+            x25519_public,
+        });
     }
 
     /// Create identity response for this peer
@@ -146,6 +172,90 @@ impl MockPeer {
         ];
 
         responses[self.message_counter as usize % responses.len()].clone()
+    }
+
+    /// Create a DirectMessage to send as a reply
+    fn create_reply_message(&mut self, recipient_peer_id: &str, content: &str) -> Option<DirectMessage> {
+        use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
+        use aes_gcm::aead::generic_array::GenericArray;
+        use ed25519_dalek::Signer;
+
+        // Look up recipient's X25519 public key
+        let peer_info = self.known_peers.get(recipient_peer_id)?;
+
+        // Compute shared secret via X25519 key exchange
+        let recipient_x25519_public = x25519_dalek::PublicKey::from(peer_info.x25519_public);
+        let shared_secret = self.x25519_secret.diffie_hellman(&recipient_x25519_public);
+
+        // Use shared secret as AES-256-GCM key
+        let cipher = Aes256Gcm::new(GenericArray::from_slice(shared_secret.as_bytes()));
+
+        // Generate nonce from counter (12 bytes: 4 zero bytes + 8 byte counter)
+        self.message_counter += 1;
+        let nonce_counter = self.message_counter;
+        let mut nonce_bytes = [0u8; 12];
+        nonce_bytes[4..12].copy_from_slice(&nonce_counter.to_be_bytes());
+        let nonce = GenericArray::from_slice(&nonce_bytes);
+
+        // Encrypt the message content
+        let content_encrypted = cipher.encrypt(nonce, content.as_bytes()).ok()?;
+
+        // Update lamport clock
+        self.lamport_clock += 1;
+
+        // Build message fields
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let conversation_id = derive_conversation_id(&self.peer_id.to_string(), recipient_peer_id);
+        let timestamp = chrono::Utc::now().timestamp();
+
+        // Create message without signature first
+        let mut msg = DirectMessage {
+            message_id: message_id.clone(),
+            conversation_id: conversation_id.clone(),
+            sender_peer_id: self.peer_id.to_string(),
+            recipient_peer_id: recipient_peer_id.to_string(),
+            content_encrypted,
+            content_type: "text".to_string(),
+            reply_to: None,
+            nonce_counter,
+            lamport_clock: self.lamport_clock,
+            timestamp,
+            signature: vec![],
+        };
+
+        // Sign the message
+        let sign_data = format!(
+            "{}:{}:{}:{}:{}:{}:{:?}:{}:{}:{}",
+            msg.message_id,
+            msg.conversation_id,
+            msg.sender_peer_id,
+            msg.recipient_peer_id,
+            hex::encode(&msg.content_encrypted),
+            msg.content_type,
+            msg.reply_to,
+            msg.nonce_counter,
+            msg.lamport_clock,
+            msg.timestamp,
+        );
+        let signature = self.signing_key.sign(sign_data.as_bytes());
+        msg.signature = signature.to_bytes().to_vec();
+
+        Some(msg)
+    }
+
+    /// Encode a DirectMessage into the MessagingRequest format
+    fn encode_message_request(msg: DirectMessage) -> Option<MessagingRequest> {
+        // Wrap in MessagingMessage enum
+        let wrapped = MessagingMessage::Message(msg);
+
+        // Encode to CBOR
+        let mut payload = Vec::new();
+        ciborium::into_writer(&wrapped, &mut payload).ok()?;
+
+        Some(MessagingRequest {
+            message_type: "direct_message".to_string(),
+            payload,
+        })
     }
 }
 
@@ -258,6 +368,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             request_response::Message::Response { response, .. } => {
                                 info!("Received identity response from {}: {}", peer, response.display_name);
+
+                                // Store the peer's identity info for future encryption
+                                if response.x25519_public.len() == 32 {
+                                    let mut x25519_arr = [0u8; 32];
+                                    x25519_arr.copy_from_slice(&response.x25519_public);
+                                    mock_peer.store_peer(
+                                        &response.peer_id,
+                                        response.display_name.clone(),
+                                        x25519_arr,
+                                    );
+                                } else {
+                                    warn!("Invalid X25519 public key length from {}", peer);
+                                }
                             }
                         }
                     }
@@ -283,14 +406,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     peer, request.message_type, request.payload.len()
                                 );
 
-                                // Generate auto-reply
-                                let reply_content = mock_peer.generate_reply(
-                                    &peer.to_string(),
-                                    "(encrypted content)",
-                                );
-                                info!("Auto-reply: {}", reply_content);
+                                // Get the sender's peer ID string for the reply
+                                let sender_peer_id = peer.to_string();
 
-                                // Send success response
+                                // Get peer name for contextual reply
+                                let sender_name = mock_peer.known_peers
+                                    .get(&sender_peer_id)
+                                    .map(|p| p.display_name.clone())
+                                    .unwrap_or_else(|| sender_peer_id.clone());
+
+                                // Generate auto-reply content
+                                let reply_content = mock_peer.generate_reply(&sender_name, "(encrypted content)");
+                                info!("Auto-reply to {}: {}", sender_name, reply_content);
+
+                                // Send success response first (acknowledge receipt)
                                 let response = MessagingResponse {
                                     success: true,
                                     message_id: Some(format!("mock-{}", mock_peer.message_counter)),
@@ -300,9 +429,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Err(e) = swarm.behaviour_mut().messaging.send_response(channel, response) {
                                     error!("Failed to send messaging response: {:?}", e);
                                 }
+
+                                // Now send the actual reply message (after a short delay)
+                                // Check if we know this peer's X25519 key
+                                if mock_peer.known_peers.contains_key(&sender_peer_id) {
+                                    // Create the reply DirectMessage
+                                    if let Some(reply_msg) = mock_peer.create_reply_message(&sender_peer_id, &reply_content) {
+                                        // Encode into MessagingRequest
+                                        if let Some(reply_request) = MockPeer::encode_message_request(reply_msg) {
+                                            info!("Sending reply message to {}", sender_peer_id);
+                                            swarm.behaviour_mut().messaging.send_request(&peer, reply_request);
+                                        } else {
+                                            warn!("Failed to encode reply message");
+                                        }
+                                    } else {
+                                        warn!("Failed to create reply message for {}", sender_peer_id);
+                                    }
+                                } else {
+                                    info!("No X25519 key known for {} - requesting identity", sender_peer_id);
+                                    // We could request their identity here, but for now just log
+                                    // In a real implementation, we'd queue the reply and send after identity exchange
+                                }
                             }
                             request_response::Message::Response { response, .. } => {
-                                info!("Messaging response from {}: success={}", peer, response.success);
+                                if response.success {
+                                    info!("Reply delivered to peer: message_id={:?}", response.message_id);
+                                } else {
+                                    warn!("Reply failed: {:?}", response.error);
+                                }
                             }
                         }
                     }
