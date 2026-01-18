@@ -199,5 +199,19 @@ npx tsc --noEmit
 cd mock-peer && cargo run --release -- --name "Mock Peer"
 ```
 
+## Project Info
+- **GitHub**: https://github.com/bakobiibizo/harbor
+- **Owner**: bakobiibizo
+
+## AWS Relay Infrastructure
+The `infrastructure/` directory contains CloudFormation templates for deploying a libp2p relay server:
+- `libp2p-relay-cloudformation.yaml` - Full CloudFormation template
+- `README.md` - Deployment instructions with one-click deploy buttons
+
+The Network page has an "Advanced" section that allows users to:
+1. Copy the CloudFormation template
+2. Deploy to AWS (free tier eligible)
+3. Add custom relay addresses
+
 ## Plan File Location
 Detailed implementation plan: `C:\Users\richa\.claude\plans\cached-sparking-backus.md`

@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Harbor libp2p Relay Server - Enables NAT traversal for Harbor chat app users"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Configuration"
+        Parameters:
+          - InstanceType
+          - KeyPairName
+      - Label:
+          default: "Relay Configuration"
+        Parameters:
+          - RelayPort
+          - MaxReservations
+          - MaxCircuits
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t2.small
+      - t3.small
+    Description: "EC2 instance type. t2.micro and t3.micro are free tier eligible (750 hours/month)"
+
+  KeyPairName:
+    Type: String
+    Default: ""
+    Description: "(Optional) EC2 key pair name for SSH access. Leave empty to disable SSH."
+
+  RelayPort:
+    Type: Number
+    Default: 4001
+    MinValue: 1024
+    MaxValue: 65535
+    Description: "Port for the libp2p relay server"
+
+  MaxReservations:
+    Type: Number
+    Default: 128
+    Description: "Maximum number of relay reservations (peers that can use this relay)"
+
+  MaxCircuits:
+    Type: Number
+    Default: 16
+    Description: "Maximum number of active relay circuits per peer"
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+
+Mappings:
+  # Amazon Linux 2023 AMIs by region (ARM64 for better free tier value)
+  RegionAMI:
+    us-east-1:
+      AMI: ami-0c101f26f147fa7fd
+    us-east-2:
+      AMI: ami-0900fe555666598a2
+    us-west-1:
+      AMI: ami-0ce2cb35386fc22e9
+    us-west-2:
+      AMI: ami-008fe2fc65df48dac
+    eu-west-1:
+      AMI: ami-0905a3c97561e0b69
+    eu-west-2:
+      AMI: ami-0e5f882be1900e43b
+    eu-central-1:
+      AMI: ami-0faab6bdbac9486fb
+    ap-northeast-1:
+      AMI: ami-0d52744d6551d851e
+    ap-southeast-1:
+      AMI: ami-0fa377108253bf620
+    ap-southeast-2:
+      AMI: ami-04f5097681773b989
+
+Resources:
+  # VPC for the relay server
+  RelayVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: harbor-relay-vpc
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: harbor-relay-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref RelayVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref RelayVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: harbor-relay-public-subnet
+
+  # Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RelayVPC
+      Tags:
+        - Key: Name
+          Value: harbor-relay-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group
+  RelaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: harbor-relay-sg
+      GroupDescription: Security group for Harbor libp2p relay server
+      VpcId: !Ref RelayVPC
+      SecurityGroupIngress:
+        # libp2p relay port (TCP)
+        - IpProtocol: tcp
+          FromPort: !Ref RelayPort
+          ToPort: !Ref RelayPort
+          CidrIp: 0.0.0.0/0
+          Description: libp2p relay TCP
+        # libp2p relay port (UDP for QUIC)
+        - IpProtocol: udp
+          FromPort: !Ref RelayPort
+          ToPort: !Ref RelayPort
+          CidrIp: 0.0.0.0/0
+          Description: libp2p relay UDP/QUIC
+        # SSH access (only if key pair provided)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: harbor-relay-sg
+
+  # IAM Role for EC2 (for SSM access)
+  RelayInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: harbor-relay-instance-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: harbor-relay-role
+
+  RelayInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: harbor-relay-instance-profile
+      Roles:
+        - !Ref RelayInstanceRole
+
+  # Elastic IP for stable address
+  RelayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: harbor-relay-eip
+
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref RelayInstance
+      EIP: !Ref RelayEIP
+
+  # EC2 Instance
+  RelayInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AMI]
+      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
+      IamInstanceProfile: !Ref RelayInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref RelaySecurityGroup
+          SubnetId: !Ref PublicSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            Encrypted: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+
+          # Update system
+          yum update -y
+
+          # Install Docker
+          yum install -y docker
+          systemctl enable docker
+          systemctl start docker
+
+          # Create relay configuration directory
+          mkdir -p /opt/relay
+
+          # Create a simple relay configuration
+          cat > /opt/relay/config.json << 'EOF'
+          {
+            "Network": {
+              "ListenAddrs": [
+                "/ip4/0.0.0.0/tcp/${RelayPort}",
+                "/ip4/0.0.0.0/udp/${RelayPort}/quic-v1"
+              ]
+            },
+            "RelayService": {
+              "Enabled": true,
+              "Limit": {
+                "Duration": 120,
+                "Data": 131072
+              },
+              "ReservationTTL": 3600,
+              "MaxReservations": ${MaxReservations},
+              "MaxCircuits": ${MaxCircuits},
+              "BufferSize": 4096,
+              "MaxReservationsPerPeer": 4,
+              "MaxReservationsPerIP": 8,
+              "MaxReservationsPerASN": 32
+            },
+            "ACL": {
+              "AllowAll": true
+            }
+          }
+          EOF
+
+          # Create systemd service for the relay
+          cat > /etc/systemd/system/libp2p-relay.service << 'EOF'
+          [Unit]
+          Description=libp2p Relay Server for Harbor
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=simple
+          Restart=always
+          RestartSec=10
+          ExecStartPre=-/usr/bin/docker stop harbor-relay
+          ExecStartPre=-/usr/bin/docker rm harbor-relay
+          ExecStartPre=/usr/bin/docker pull libp2p/go-libp2p-relay-daemon:latest
+          ExecStart=/usr/bin/docker run --rm --name harbor-relay \
+            -p ${RelayPort}:${RelayPort}/tcp \
+            -p ${RelayPort}:${RelayPort}/udp \
+            -v /opt/relay:/config:ro \
+            libp2p/go-libp2p-relay-daemon:latest \
+            -config /config/config.json
+          ExecStop=/usr/bin/docker stop harbor-relay
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          # Enable and start the relay service
+          systemctl daemon-reload
+          systemctl enable libp2p-relay
+          systemctl start libp2p-relay
+
+          # Create a script to get the relay's peer ID and save it
+          cat > /opt/relay/get-peer-id.sh << 'SCRIPT'
+          #!/bin/bash
+          # Wait for the relay to start and get peer ID
+          for i in {1..30}; do
+            PEER_ID=$(docker logs harbor-relay 2>&1 | grep -oP 'Peer ID: \K[a-zA-Z0-9]+' | head -1)
+            if [ -n "$PEER_ID" ]; then
+              echo "$PEER_ID" > /opt/relay/peer-id.txt
+              echo "Peer ID: $PEER_ID"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Failed to get peer ID after 60 seconds"
+          exit 1
+          SCRIPT
+          chmod +x /opt/relay/get-peer-id.sh
+
+          # Create a script that outputs the full relay address
+          cat > /opt/relay/get-relay-address.sh << 'SCRIPT'
+          #!/bin/bash
+          PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+          PEER_ID=$(cat /opt/relay/peer-id.txt 2>/dev/null)
+          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
+            echo "/ip4/$PUBLIC_IP/tcp/4001/p2p/$PEER_ID"
+          else
+            echo "Relay address not yet available. Run: /opt/relay/get-peer-id.sh"
+          fi
+          SCRIPT
+          chmod +x /opt/relay/get-relay-address.sh
+
+          # Wait for relay to start and save peer ID
+          sleep 15
+          /opt/relay/get-peer-id.sh
+
+          # Log startup complete with the full relay address
+          echo "Harbor libp2p relay server started on port ${RelayPort}"
+          echo "=============================================="
+          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+          /opt/relay/get-relay-address.sh
+          echo "=============================================="
+
+      Tags:
+        - Key: Name
+          Value: harbor-relay-server
+        - Key: Application
+          Value: harbor-chat
+
+Outputs:
+  RelayPublicIP:
+    Description: "Public IP address of the relay server"
+    Value: !Ref RelayEIP
+    Export:
+      Name: HarborRelayPublicIP
+
+  RelayMultiaddrTemplate:
+    Description: "Multiaddress template - run get-relay-address.sh on server to get the full address"
+    Value: !Sub "/ip4/${RelayEIP}/tcp/${RelayPort}/p2p/<PEER_ID>"
+
+  GetFullRelayAddress:
+    Description: "Run this command on the server (via SSM) to get the complete relay address"
+    Value: "/opt/relay/get-relay-address.sh"
+
+  SSHCommand:
+    Condition: HasKeyPair
+    Description: "SSH command to connect to the relay server"
+    Value: !Sub "ssh -i ${KeyPairName}.pem ec2-user@${RelayEIP}"
+
+  SSMConnectCommand:
+    Description: "AWS CLI command to connect via Session Manager (no SSH key needed)"
+    Value: !Sub "aws ssm start-session --target ${RelayInstance}"
+
+  RelayInstanceId:
+    Description: "EC2 Instance ID (use with SSM Session Manager for shell access)"
+    Value: !Ref RelayInstance
+
+  QuickStartInstructions:
+    Description: "Quick start: Connect via SSM, then run /opt/relay/get-relay-address.sh to get the address to paste into Harbor"
+    Value: "1) Go to EC2 Console 2) Select harbor-relay-server 3) Click Connect > Session Manager 4) Run: /opt/relay/get-relay-address.sh 5) Copy the output to Harbor"
+
+  EstimatedMonthlyCost:
+    Description: "Estimated monthly cost (free tier: $0 for first 12 months, then ~$8-10/month)"
+    Value: "Free tier eligible for 750 hours/month. After free tier: ~$8-10/month for t2.micro"

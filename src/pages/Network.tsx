@@ -11,6 +11,7 @@ import {
   CheckIcon,
   XIcon,
 } from '../components/icons';
+import { RELAY_CLOUDFORMATION_TEMPLATE } from '../constants/cloudformation-template';
 
 // Adjectives and animals for generating human-friendly peer names
 const ADJECTIVES = [
@@ -1098,42 +1099,56 @@ export function NetworkPage() {
               </div>
             </div>
 
-            {/* One-Click Deploy Buttons */}
+            {/* Deploy to AWS */}
             <div className="mb-6">
               <label
                 className="text-xs font-medium block mb-3"
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               >
-                One-Click Deploy to AWS (Free Tier)
+                Deploy to AWS (Free Tier - 750 hours/month)
               </label>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {[
-                  { region: 'us-east-1', name: 'US East' },
-                  { region: 'us-west-2', name: 'US West' },
-                  { region: 'eu-west-1', name: 'EU Ireland' },
-                  { region: 'ap-northeast-1', name: 'Asia Tokyo' },
-                ].map(({ region, name }) => (
-                  <a
-                    key={region}
-                    href={`https://console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/new?stackName=harbor-relay&templateURL=https://harbor-relay-templates.s3.amazonaws.com/libp2p-relay-cloudformation.yaml`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all hover:scale-105"
-                    style={{
-                      background: 'linear-gradient(135deg, #FF9900, #FF6600)',
-                      color: 'white',
-                    }}
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M18.75 11.35a4.32 4.32 0 01-.79-.08 3.9 3.9 0 01-.73-.23l-.17-.04h-.12l-.15.06-.08.1a4 4 0 01-.53.48 3.6 3.6 0 01-.63.38 3.7 3.7 0 01-.74.25 3.9 3.9 0 01-.82.08 4 4 0 01-1.47-.28 3.8 3.8 0 01-1.23-.8 3.8 3.8 0 01-.83-1.22 3.9 3.9 0 01-.3-1.5 3.9 3.9 0 01.3-1.5 3.8 3.8 0 01.83-1.22 3.8 3.8 0 011.23-.8 4 4 0 011.47-.28c.28 0 .55.03.82.08.26.05.51.13.74.25.23.11.44.24.63.38.19.15.37.31.53.48l.08.1.15.06h.12l.17-.04c.24-.08.48-.17.73-.23.24-.06.51-.08.79-.08a4.5 4.5 0 011.67.3c.5.2.94.5 1.3.88.37.38.66.84.86 1.36.2.52.3 1.1.3 1.72 0 .62-.1 1.2-.3 1.72-.2.52-.49.98-.86 1.36-.36.38-.8.67-1.3.88-.5.2-1.06.3-1.67.3z" />
-                    </svg>
-                    {name}
-                  </a>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(RELAY_CLOUDFORMATION_TEMPLATE);
+                      toast.success('CloudFormation template copied to clipboard!');
+                    } catch {
+                      toast.error('Failed to copy template. Open the infrastructure folder to find it.');
+                    }
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-105"
+                  style={{
+                    background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                    color: 'white',
+                  }}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  Copy CloudFormation Template
+                </button>
+                <a
+                  href="https://console.aws.amazon.com/cloudformation/home#/stacks/create/template"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                  }}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  Open AWS CloudFormation
+                </a>
               </div>
-              <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                Deploys a t2.micro instance (750 free hours/month for 12 months)
-              </p>
+              <div className="mt-3 text-xs space-y-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                <p><strong>Steps:</strong> 1) Copy template → 2) Open AWS → 3) Select "Template is ready" → "Upload a template file" → Paste & deploy</p>
+                <p>Template location: <code className="font-mono bg-black/20 px-1 rounded">infrastructure/libp2p-relay-cloudformation.yaml</code></p>
+              </div>
             </div>
 
             {/* Instructions */}
