@@ -1,12 +1,18 @@
+// Allow common patterns that are design choices in this codebase
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::should_implement_trait)]
+
 pub mod commands;
 pub mod db;
 pub mod error;
+pub mod logging;
 pub mod models;
 pub mod p2p;
 pub mod services;
 
 use commands::NetworkState;
 use db::Database;
+use logging::{init_logging, LogConfig};
 use services::{
     CallingService, ContactsService, FeedService, IdentityService, MessagingService,
     PermissionsService, PostsService,
@@ -15,18 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-/// Initialize logging
-fn init_logging() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "harbor_lib=debug,tauri=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-}
 
 /// Get the profile name from environment variable (for multi-instance support)
 fn get_profile_name() -> Option<String> {
@@ -70,7 +64,9 @@ fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_logging();
+    // Initialize structured logging from environment configuration
+    let log_config = LogConfig::from_env();
+    let _log_guard = init_logging(log_config);
 
     let profile = get_profile_name();
     if let Some(ref p) = profile {
@@ -89,7 +85,7 @@ pub fn run() {
                 }
             }
             // Initialize database
-            let db_path = get_db_path(&app.handle());
+            let db_path = get_db_path(app.handle());
             info!("Database path: {:?}", db_path);
 
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));

@@ -466,10 +466,16 @@ impl NetworkService {
                 debug!("Kademlia routing updated for peer: {}", peer);
             }
 
-            ChatBehaviourEvent::Ping(ping::Event { peer, result, .. }) => {
-                if let Ok(rtt) = result {
-                    debug!("Ping to {} succeeded: {:?}", peer, rtt);
-                }
+            ChatBehaviourEvent::Ping(ping::Event {
+                peer,
+                result: Ok(rtt),
+                ..
+            }) => {
+                debug!("Ping to {} succeeded: {:?}", peer, rtt);
+            }
+
+            ChatBehaviourEvent::Ping(ping::Event { result: Err(_), .. }) => {
+                // Ping failed, ignore
             }
 
             ChatBehaviourEvent::IdentityExchange(request_response::Event::Message {
@@ -555,12 +561,10 @@ impl NetworkService {
                 );
 
                 // Build relay circuit address: /p2p/RELAY/p2p-circuit/p2p/LOCAL
-                let relay_circuit_addr: Multiaddr = format!(
-                    "/p2p/{}/p2p-circuit/p2p/{}",
-                    relay_peer_id, local_peer_id
-                )
-                .parse()
-                .unwrap();
+                let relay_circuit_addr: Multiaddr =
+                    format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id)
+                        .parse()
+                        .unwrap();
 
                 // Store the relay address if not already present
                 if !self.relay_addresses.contains(&relay_circuit_addr) {
@@ -595,7 +599,10 @@ impl NetworkService {
                 debug!("Outbound circuit established via relay {}", relay_peer_id);
             }
 
-            relay::client::Event::InboundCircuitEstablished { src_peer_id, limit: _ } => {
+            relay::client::Event::InboundCircuitEstablished {
+                src_peer_id,
+                limit: _,
+            } => {
                 debug!("Inbound circuit established from {}", src_peer_id);
             }
         }
@@ -854,10 +861,13 @@ impl NetworkService {
                     }
 
                     // Emit event to notify frontend
-                    let _ = self.event_tx.send(NetworkEvent::ContactAdded {
-                        peer_id: response.peer_id.clone(),
-                        display_name: response.display_name.clone(),
-                    });
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::ContactAdded {
+                            peer_id: response.peer_id.clone(),
+                            display_name: response.display_name.clone(),
+                        })
+                        .await;
                 }
                 Err(e) => {
                     warn!("Failed to add contact: {}", e);
@@ -1018,11 +1028,8 @@ impl NetworkService {
                 let mut stats = self.stats.clone();
                 stats.uptime_seconds = self.start_time.elapsed().as_secs();
                 stats.nat_status = self.nat_status;
-                stats.relay_addresses = self
-                    .relay_addresses
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect();
+                stats.relay_addresses =
+                    self.relay_addresses.iter().map(|a| a.to_string()).collect();
                 stats.external_addresses = self
                     .external_addresses
                     .iter()

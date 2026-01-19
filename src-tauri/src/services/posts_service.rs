@@ -111,7 +111,7 @@ impl PostsService {
             author_peer_id: identity.peer_id.clone(),
             content_type: content_type.to_string(),
             content_text: content_text.map(String::from),
-            visibility: visibility.clone(),
+            visibility,
             lamport_clock: lamport_clock as i64,
             created_at,
             signature: signature.clone(),
