@@ -8,8 +8,8 @@ pub mod services;
 use commands::NetworkState;
 use db::Database;
 use services::{
-    CallingService, ContactsService, FeedService, IdentityService, MessagingService,
-    PermissionsService, PostsService,
+    CallingService, ContactsService, ContentSyncService, FeedService, IdentityService,
+    MessagingService, PermissionsService, PostsService,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,7 +89,7 @@ pub fn run() {
                 }
             }
             // Initialize database
-            let db_path = get_db_path(&app.handle());
+            let db_path = get_db_path(app.handle());
             info!("Database path: {:?}", db_path);
 
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
@@ -125,6 +125,12 @@ pub fn run() {
                 contacts_service.clone(),
                 permissions_service.clone(),
             ));
+            let content_sync_service = Arc::new(ContentSyncService::new(
+                db.clone(),
+                identity_service.clone(),
+                contacts_service.clone(),
+                permissions_service.clone(),
+            ));
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
@@ -138,6 +144,7 @@ pub fn run() {
             app.manage(posts_service);
             app.manage(feed_service);
             app.manage(calling_service);
+            app.manage(content_sync_service);
             app.manage(network_state);
 
             info!("Application setup complete");
@@ -212,6 +219,12 @@ pub fn run() {
             commands::process_answer,
             commands::process_ice_candidate,
             commands::process_hangup,
+            // Content sync commands
+            commands::request_content_manifest,
+            commands::request_content_manifest_with_cursor,
+            commands::request_content_fetch,
+            commands::get_sync_cursor,
+            commands::sync_with_all_peers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

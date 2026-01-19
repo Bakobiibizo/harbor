@@ -119,8 +119,8 @@ impl FeedService {
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Check permission if not our own wall
-        if author_peer_id != identity.peer_id {
-            if !self
+        if author_peer_id != identity.peer_id
+            && !self
                 .permissions_service
                 .we_have_capability(author_peer_id, Capability::WallRead)?
             {
@@ -128,7 +128,6 @@ impl FeedService {
                     "No permission to view this wall".to_string(),
                 ));
             }
-        }
 
         let posts =
             PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)

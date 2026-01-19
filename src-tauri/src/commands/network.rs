@@ -1,6 +1,8 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
-use crate::services::{ContactsService, IdentityService, MessagingService, PermissionsService};
+use crate::services::{
+    ContactsService, ContentSyncService, IdentityService, MessagingService, PermissionsService,
+};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
@@ -78,6 +80,7 @@ pub async fn start_network(
     messaging_service: State<'_, Arc<MessagingService>>,
     contacts_service: State<'_, Arc<ContactsService>>,
     permissions_service: State<'_, Arc<PermissionsService>>,
+    content_sync_service: State<'_, Arc<ContentSyncService>>,
 ) -> Result<(), AppError> {
     // Check if identity is unlocked
     if !identity_service.is_unlocked() {
@@ -126,10 +129,11 @@ pub async fn start_network(
     let identity_arc: Arc<IdentityService> = (*identity_service).clone();
     let (mut service, handle, mut event_rx) = NetworkService::new(config, identity_arc, keypair)?;
 
-    // Inject services for message processing, contact storage, and permissions
+    // Inject services for message processing, contact storage, permissions, and content sync
     service.set_messaging_service((*messaging_service).clone());
     service.set_contacts_service((*contacts_service).clone());
     service.set_permissions_service((*permissions_service).clone());
+    service.set_content_sync_service((*content_sync_service).clone());
 
     // Store the handle
     network.set_handle(handle).await;

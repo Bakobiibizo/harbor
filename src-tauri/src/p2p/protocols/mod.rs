@@ -1,6 +1,8 @@
+pub mod content_sync;
 pub mod identity_exchange;
 pub mod messaging;
 
+pub use content_sync::*;
 pub use identity_exchange::*;
 pub use messaging::*;
 

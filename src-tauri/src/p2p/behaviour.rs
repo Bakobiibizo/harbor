@@ -4,9 +4,10 @@ use libp2p::{
     swarm::NetworkBehaviour,
     StreamProtocol,
 };
+use std::collections::HashMap;
 use std::time::Duration;
 
-use super::protocols::{IDENTITY_PROTOCOL, MESSAGING_PROTOCOL};
+use super::protocols::{CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL};
 
 // Duration is used in ping configuration
 
@@ -32,6 +33,8 @@ pub struct ChatBehaviour {
         request_response::cbor::Behaviour<IdentityExchangeRequest, IdentityExchangeResponse>,
     /// Request-response for messaging
     pub messaging: request_response::cbor::Behaviour<MessagingRequest, MessagingResponse>,
+    /// Request-response for content sync
+    pub content_sync: request_response::cbor::Behaviour<ContentSyncRequest, ContentSyncResponse>,
 }
 
 /// Identity exchange request (simplified for request-response)
@@ -67,6 +70,56 @@ pub struct MessagingRequest {
 pub struct MessagingResponse {
     pub success: bool,
     pub message_id: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Post summary for content sync manifest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PostSummaryProto {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub lamport_clock: u64,
+    pub content_type: String,
+    pub has_media: bool,
+    pub media_hashes: Vec<String>,
+    pub created_at: i64,
+}
+
+/// Content sync request (manifest request)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ContentSyncRequest {
+    pub request_type: String, // "manifest" or "fetch"
+    pub requester_peer_id: String,
+    pub cursor: HashMap<String, u64>,
+    pub limit: u32,
+    pub post_id: Option<String>, // For fetch requests
+    pub include_media: bool,
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
+}
+
+/// Content sync response
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ContentSyncResponse {
+    pub response_type: String, // "manifest" or "fetch"
+    pub responder_peer_id: String,
+    // Manifest response fields
+    pub posts: Vec<PostSummaryProto>,
+    pub has_more: bool,
+    pub next_cursor: HashMap<String, u64>,
+    // Fetch response fields
+    pub post_id: Option<String>,
+    pub author_peer_id: Option<String>,
+    pub content_type: Option<String>,
+    pub content_text: Option<String>,
+    pub visibility: Option<String>,
+    pub lamport_clock: Option<u64>,
+    pub created_at: Option<i64>,
+    pub post_signature: Vec<u8>,
+    // Common fields
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
+    pub success: bool,
     pub error: Option<String>,
 }
 
@@ -118,6 +171,15 @@ impl ChatBehaviour {
             request_response::Config::default(),
         );
 
+        // Content sync protocol
+        let content_sync = request_response::cbor::Behaviour::new(
+            [(
+                StreamProtocol::new(CONTENT_SYNC_PROTOCOL),
+                ProtocolSupport::Full,
+            )],
+            request_response::Config::default(),
+        );
+
         Self {
             ping,
             identify,
@@ -128,6 +190,7 @@ impl ChatBehaviour {
             autonat,
             identity_exchange,
             messaging,
+            content_sync,
         }
     }
 }

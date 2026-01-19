@@ -21,8 +21,9 @@ const PUBLIC_RELAYS: &[&str] = &[
 ];
 
 use super::behaviour::{
-    ChatBehaviour, ChatBehaviourEvent, IdentityExchangeRequest, IdentityExchangeResponse,
-    MessagingRequest, MessagingResponse,
+    ChatBehaviour, ChatBehaviourEvent, ContentSyncRequest, ContentSyncResponse,
+    IdentityExchangeRequest, IdentityExchangeResponse, MessagingRequest, MessagingResponse,
+    PostSummaryProto,
 };
 use super::config::NetworkConfig;
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
@@ -30,7 +31,9 @@ use super::swarm::build_swarm;
 use super::types::*;
 use crate::db::Capability;
 use crate::error::{AppError, Result};
-use crate::services::{ContactsService, IdentityService, MessagingService, PermissionsService};
+use crate::services::{
+    ContactsService, ContentSyncService, IdentityService, MessagingService, PermissionsService,
+};
 use std::sync::Arc;
 
 /// Handle to interact with the network service
@@ -180,6 +183,60 @@ impl NetworkHandle {
             _ => Err(AppError::Internal("Unexpected response".into())),
         }
     }
+
+    /// Request content manifest from a peer
+    pub async fn request_content_manifest(
+        &self,
+        peer_id: PeerId,
+        cursor: std::collections::HashMap<String, u64>,
+        limit: u32,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::RequestContentManifest {
+                    peer_id,
+                    cursor,
+                    limit,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Request content fetch from a peer
+    pub async fn request_content_fetch(
+        &self,
+        peer_id: PeerId,
+        post_id: String,
+        include_media: bool,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::RequestContentFetch {
+                    peer_id,
+                    post_id,
+                    include_media,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
 }
 
 use super::types::NatStatus;
@@ -192,6 +249,7 @@ pub struct NetworkService {
     messaging_service: Option<Arc<MessagingService>>,
     contacts_service: Option<Arc<ContactsService>>,
     permissions_service: Option<Arc<PermissionsService>>,
+    content_sync_service: Option<Arc<ContentSyncService>>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
     event_tx: mpsc::Sender<NetworkEvent>,
     connected_peers: HashMap<PeerId, PeerInfo>,
@@ -230,6 +288,7 @@ impl NetworkService {
             messaging_service: None,
             contacts_service: None,
             permissions_service: None,
+            content_sync_service: None,
             command_rx,
             event_tx,
             connected_peers: HashMap::new(),
@@ -259,6 +318,11 @@ impl NetworkService {
     /// Set the permissions service for granting permissions to contacts
     pub fn set_permissions_service(&mut self, service: Arc<PermissionsService>) {
         self.permissions_service = Some(service);
+    }
+
+    /// Set the content sync service for syncing posts between peers
+    pub fn set_content_sync_service(&mut self, service: Arc<ContentSyncService>) {
+        self.content_sync_service = Some(service);
     }
 
     /// Get the local peer ID
@@ -536,6 +600,30 @@ impl NetworkService {
                 self.handle_autonat_event(event).await;
             }
 
+            // Content sync protocol events
+            ChatBehaviourEvent::ContentSync(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => match message {
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                } => {
+                    debug!("Received content sync request from {}", peer);
+                    self.handle_content_sync_request(peer, request_id, request, channel)
+                        .await;
+                }
+                request_response::Message::Response {
+                    request_id: _,
+                    response,
+                } => {
+                    debug!("Received content sync response from {}", peer);
+                    self.handle_content_sync_response(peer, response).await;
+                }
+            },
+
             _ => {}
         }
     }
@@ -555,12 +643,10 @@ impl NetworkService {
                 );
 
                 // Build relay circuit address: /p2p/RELAY/p2p-circuit/p2p/LOCAL
-                let relay_circuit_addr: Multiaddr = format!(
-                    "/p2p/{}/p2p-circuit/p2p/{}",
-                    relay_peer_id, local_peer_id
-                )
-                .parse()
-                .unwrap();
+                let relay_circuit_addr: Multiaddr =
+                    format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id)
+                        .parse()
+                        .unwrap();
 
                 // Store the relay address if not already present
                 if !self.relay_addresses.contains(&relay_circuit_addr) {
@@ -595,7 +681,10 @@ impl NetworkService {
                 debug!("Outbound circuit established via relay {}", relay_peer_id);
             }
 
-            relay::client::Event::InboundCircuitEstablished { src_peer_id, limit: _ } => {
+            relay::client::Event::InboundCircuitEstablished {
+                src_peer_id,
+                limit: _,
+            } => {
                 debug!("Inbound circuit established from {}", src_peer_id);
             }
         }
@@ -960,6 +1049,290 @@ impl NetworkService {
             .await;
     }
 
+    async fn handle_content_sync_request(
+        &mut self,
+        peer: PeerId,
+        _request_id: request_response::InboundRequestId,
+        request: ContentSyncRequest,
+        channel: request_response::ResponseChannel<ContentSyncResponse>,
+    ) {
+        let local_peer_id = self.swarm.local_peer_id().to_string();
+
+        let response = if request.request_type == "manifest" {
+            // Handle manifest request
+            if let Some(ref content_sync_service) = self.content_sync_service {
+                match content_sync_service.process_manifest_request(
+                    &request.requester_peer_id,
+                    &request.cursor,
+                    request.limit,
+                    request.timestamp,
+                    &request.signature,
+                ) {
+                    Ok(manifest_response) => {
+                        info!(
+                            "Sending manifest response with {} posts to {}",
+                            manifest_response.posts.len(),
+                            peer
+                        );
+                        ContentSyncResponse {
+                            response_type: "manifest".to_string(),
+                            responder_peer_id: local_peer_id,
+                            posts: manifest_response
+                                .posts
+                                .into_iter()
+                                .map(|p| PostSummaryProto {
+                                    post_id: p.post_id,
+                                    author_peer_id: p.author_peer_id,
+                                    lamport_clock: p.lamport_clock,
+                                    content_type: p.content_type,
+                                    has_media: p.has_media,
+                                    media_hashes: p.media_hashes,
+                                    created_at: p.created_at,
+                                })
+                                .collect(),
+                            has_more: manifest_response.has_more,
+                            next_cursor: manifest_response.next_cursor,
+                            post_id: None,
+                            author_peer_id: None,
+                            content_type: None,
+                            content_text: None,
+                            visibility: None,
+                            lamport_clock: None,
+                            created_at: None,
+                            post_signature: manifest_response.signature.clone(),
+                            timestamp: manifest_response.timestamp,
+                            signature: manifest_response.signature,
+                            success: true,
+                            error: None,
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to process manifest request: {}", e);
+                        ContentSyncResponse {
+                            response_type: "manifest".to_string(),
+                            responder_peer_id: local_peer_id,
+                            posts: Vec::new(),
+                            has_more: false,
+                            next_cursor: HashMap::new(),
+                            post_id: None,
+                            author_peer_id: None,
+                            content_type: None,
+                            content_text: None,
+                            visibility: None,
+                            lamport_clock: None,
+                            created_at: None,
+                            post_signature: Vec::new(),
+                            timestamp: chrono::Utc::now().timestamp(),
+                            signature: Vec::new(),
+                            success: false,
+                            error: Some(e.to_string()),
+                        }
+                    }
+                }
+            } else {
+                warn!("No content sync service configured");
+                ContentSyncResponse {
+                    response_type: "manifest".to_string(),
+                    responder_peer_id: local_peer_id,
+                    posts: Vec::new(),
+                    has_more: false,
+                    next_cursor: HashMap::new(),
+                    post_id: None,
+                    author_peer_id: None,
+                    content_type: None,
+                    content_text: None,
+                    visibility: None,
+                    lamport_clock: None,
+                    created_at: None,
+                    post_signature: Vec::new(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    signature: Vec::new(),
+                    success: false,
+                    error: Some("Content sync service not available".to_string()),
+                }
+            }
+        } else {
+            // Handle fetch request - for now return an error as fetch is not fully implemented
+            warn!("Fetch request not implemented yet");
+            ContentSyncResponse {
+                response_type: "fetch".to_string(),
+                responder_peer_id: local_peer_id,
+                posts: Vec::new(),
+                has_more: false,
+                next_cursor: HashMap::new(),
+                post_id: request.post_id,
+                author_peer_id: None,
+                content_type: None,
+                content_text: None,
+                visibility: None,
+                lamport_clock: None,
+                created_at: None,
+                post_signature: Vec::new(),
+                timestamp: chrono::Utc::now().timestamp(),
+                signature: Vec::new(),
+                success: false,
+                error: Some("Fetch not implemented yet".to_string()),
+            }
+        };
+
+        if let Err(e) = self
+            .swarm
+            .behaviour_mut()
+            .content_sync
+            .send_response(channel, response)
+        {
+            warn!("Failed to send content sync response: {:?}", e);
+        }
+    }
+
+    async fn handle_content_sync_response(&mut self, peer: PeerId, response: ContentSyncResponse) {
+        if !response.success {
+            let _ = self
+                .event_tx
+                .send(NetworkEvent::ContentSyncError {
+                    peer_id: peer.to_string(),
+                    error: response
+                        .error
+                        .unwrap_or_else(|| "Unknown error".to_string()),
+                })
+                .await;
+            return;
+        }
+
+        if response.response_type == "manifest" {
+            info!(
+                "Received manifest with {} posts from {}",
+                response.posts.len(),
+                peer
+            );
+
+            // Process the manifest response if we have the content sync service
+            if let Some(ref content_sync_service) = self.content_sync_service {
+                let summaries: Vec<_> = response
+                    .posts
+                    .iter()
+                    .map(|p| crate::services::PostSummary {
+                        post_id: p.post_id.clone(),
+                        author_peer_id: p.author_peer_id.clone(),
+                        lamport_clock: p.lamport_clock,
+                        content_type: p.content_type.clone(),
+                        has_media: p.has_media,
+                        media_hashes: p.media_hashes.clone(),
+                        created_at: p.created_at,
+                    })
+                    .collect();
+
+                match content_sync_service.process_manifest_response(
+                    &response.responder_peer_id,
+                    &summaries,
+                    response.has_more,
+                    &response.next_cursor,
+                    response.timestamp,
+                    &response.signature,
+                ) {
+                    Ok(posts_to_fetch) => {
+                        info!("Need to fetch {} posts from {}", posts_to_fetch.len(), peer);
+
+                        // Emit event to notify frontend
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContentManifestReceived {
+                                peer_id: peer.to_string(),
+                                post_count: response.posts.len(),
+                                has_more: response.has_more,
+                            })
+                            .await;
+
+                        // TODO: Queue fetch requests for posts_to_fetch
+                    }
+                    Err(e) => {
+                        warn!("Failed to process manifest response: {}", e);
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContentSyncError {
+                                peer_id: peer.to_string(),
+                                error: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            }
+        } else if response.response_type == "fetch" {
+            // Handle fetch response
+            if let (Some(post_id), Some(author_peer_id)) =
+                (response.post_id, response.author_peer_id)
+            {
+                info!("Received post {} from {}", post_id, peer);
+
+                if let Some(ref content_sync_service) = self.content_sync_service {
+                    match content_sync_service.store_remote_post(
+                        &post_id,
+                        &author_peer_id,
+                        response.content_type.as_deref().unwrap_or("text"),
+                        response.content_text.as_deref(),
+                        response.visibility.as_deref().unwrap_or("contacts"),
+                        response.lamport_clock.unwrap_or(0),
+                        response.created_at.unwrap_or(0),
+                        &response.post_signature,
+                    ) {
+                        Ok(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::ContentFetched {
+                                    peer_id: peer.to_string(),
+                                    post_id,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            warn!("Failed to store remote post: {}", e);
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::ContentSyncError {
+                                    peer_id: peer.to_string(),
+                                    error: e.to_string(),
+                                })
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Create a content sync request
+    fn create_content_sync_request(
+        &self,
+        request_type: &str,
+        cursor: HashMap<String, u64>,
+        limit: u32,
+        post_id: Option<String>,
+        include_media: bool,
+    ) -> Result<ContentSyncRequest> {
+        let info = self
+            .identity_service
+            .get_identity_info()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        let timestamp = chrono::Utc::now().timestamp();
+
+        // Sign the request
+        let signature = self.identity_service.sign_raw(
+            format!("{}:{}:{}:{}", info.peer_id, request_type, limit, timestamp).as_bytes(),
+        )?;
+
+        Ok(ContentSyncRequest {
+            request_type: request_type.to_string(),
+            requester_peer_id: info.peer_id,
+            cursor,
+            limit,
+            post_id,
+            include_media,
+            timestamp,
+            signature,
+        })
+    }
+
     async fn handle_command(&mut self, command: NetworkCommand) -> NetworkResponse {
         match command {
             NetworkCommand::Dial { peer_id, addresses } => {
@@ -1018,11 +1391,8 @@ impl NetworkService {
                 let mut stats = self.stats.clone();
                 stats.uptime_seconds = self.start_time.elapsed().as_secs();
                 stats.nat_status = self.nat_status;
-                stats.relay_addresses = self
-                    .relay_addresses
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect();
+                stats.relay_addresses =
+                    self.relay_addresses.iter().map(|a| a.to_string()).collect();
                 stats.external_addresses = self
                     .external_addresses
                     .iter()
@@ -1100,6 +1470,49 @@ impl NetworkService {
                     NetworkResponse::Error(format!("Bootstrap failed: {:?}", e))
                 } else {
                     NetworkResponse::Ok
+                }
+            }
+
+            NetworkCommand::RequestContentManifest {
+                peer_id,
+                cursor,
+                limit,
+            } => match self.create_content_sync_request("manifest", cursor, limit, None, false) {
+                Ok(request) => {
+                    self.swarm
+                        .behaviour_mut()
+                        .content_sync
+                        .send_request(&peer_id, request);
+                    NetworkResponse::Ok
+                }
+                Err(e) => {
+                    NetworkResponse::Error(format!("Failed to create content sync request: {}", e))
+                }
+            },
+
+            NetworkCommand::RequestContentFetch {
+                peer_id,
+                post_id,
+                include_media,
+            } => {
+                match self.create_content_sync_request(
+                    "fetch",
+                    HashMap::new(),
+                    1,
+                    Some(post_id),
+                    include_media,
+                ) {
+                    Ok(request) => {
+                        self.swarm
+                            .behaviour_mut()
+                            .content_sync
+                            .send_request(&peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to create content fetch request: {}",
+                        e
+                    )),
                 }
             }
 
