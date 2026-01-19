@@ -217,6 +217,17 @@ pub struct SignablePostDelete {
 
 impl Signable for SignablePostDelete {}
 
+/// Signable version of PostLike (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignablePostLike {
+    pub post_id: String,
+    pub liker_peer_id: String,
+    pub reaction_type: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignablePostLike {}
+
 // ============================================================
 // SIGNALING (Voice Calls)
 // ============================================================
