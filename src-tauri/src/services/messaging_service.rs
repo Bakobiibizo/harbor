@@ -592,3 +592,225 @@ impl MessagingService {
             .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CreateIdentityRequest;
+    use crate::services::CryptoService;
+
+    fn create_test_services() -> (
+        Arc<Database>,
+        Arc<IdentityService>,
+        Arc<ContactsService>,
+        Arc<PermissionsService>,
+        MessagingService,
+    ) {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service =
+            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let messaging_service = MessagingService::new(
+            db.clone(),
+            identity_service.clone(),
+            contacts_service.clone(),
+            permissions_service.clone(),
+        );
+
+        (
+            db,
+            identity_service,
+            contacts_service,
+            permissions_service,
+            messaging_service,
+        )
+    }
+
+    fn create_identity_and_unlock(identity_service: &IdentityService, passphrase: &str) {
+        let request = CreateIdentityRequest {
+            passphrase: passphrase.to_string(),
+            display_name: "Test User".to_string(),
+            bio: None,
+        };
+        identity_service.create_identity(request).unwrap();
+        identity_service.unlock(passphrase).unwrap();
+    }
+
+    fn add_peer_contact_with_permission(
+        identity_service: &IdentityService,
+        contacts_service: &ContactsService,
+        permissions_service: &PermissionsService,
+    ) -> (String, Vec<u8>, Vec<u8>) {
+        // Generate a peer's keys
+        let (peer_signing, _peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let (_, peer_x25519_public) = CryptoService::generate_x25519_keypair();
+        let peer_id = CryptoService::derive_peer_id_from_signing_key(&peer_signing);
+
+        // Add as contact
+        contacts_service
+            .add_contact(
+                &peer_id,
+                &peer_signing.verifying_key().to_bytes(),
+                &peer_x25519_public.to_bytes(),
+                "Test Peer",
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Grant chat permission to peer
+        permissions_service
+            .create_permission_grant(&peer_id, Capability::Chat, None)
+            .unwrap();
+
+        (
+            peer_id,
+            peer_signing.verifying_key().to_bytes().to_vec(),
+            peer_x25519_public.to_bytes().to_vec(),
+        )
+    }
+
+    #[test]
+    fn test_send_message_requires_identity() {
+        let (_, _, _, _, messaging_service) = create_test_services();
+
+        let result = messaging_service.send_message("peer123", "Hello", "text/plain", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_message_requires_permission() {
+        let (_, identity_service, contacts_service, _, messaging_service) = create_test_services();
+
+        create_identity_and_unlock(&identity_service, "password");
+
+        // Add peer as contact without permission
+        let (peer_signing, _) = CryptoService::generate_ed25519_keypair();
+        let (_, peer_x25519_public) = CryptoService::generate_x25519_keypair();
+        let peer_id = CryptoService::derive_peer_id_from_signing_key(&peer_signing);
+
+        contacts_service
+            .add_contact(
+                &peer_id,
+                &peer_signing.verifying_key().to_bytes(),
+                &peer_x25519_public.to_bytes(),
+                "Test Peer",
+                None,
+                None,
+            )
+            .unwrap();
+
+        let result = messaging_service.send_message(&peer_id, "Hello", "text/plain", None);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AppError::PermissionDenied(_)));
+    }
+
+    #[test]
+    fn test_send_message_success() {
+        let (_, identity_service, contacts_service, permissions_service, messaging_service) =
+            create_test_services();
+
+        create_identity_and_unlock(&identity_service, "password");
+        let (peer_id, _, _) = add_peer_contact_with_permission(
+            &identity_service,
+            &contacts_service,
+            &permissions_service,
+        );
+
+        let result = messaging_service.send_message(&peer_id, "Hello, world!", "text/plain", None);
+        assert!(result.is_ok());
+
+        let outgoing = result.unwrap();
+        assert!(!outgoing.message_id.is_empty());
+        assert!(!outgoing.signature.is_empty());
+        assert_eq!(outgoing.recipient_peer_id, peer_id);
+    }
+
+    #[test]
+    fn test_get_conversations_empty() {
+        let (_, identity_service, _, _, messaging_service) = create_test_services();
+
+        create_identity_and_unlock(&identity_service, "password");
+
+        let conversations = messaging_service.get_conversations().unwrap();
+        assert!(conversations.is_empty());
+    }
+
+    #[test]
+    fn test_send_and_get_conversations() {
+        let (_, identity_service, contacts_service, permissions_service, messaging_service) =
+            create_test_services();
+
+        create_identity_and_unlock(&identity_service, "password");
+        let (peer_id, _, _) = add_peer_contact_with_permission(
+            &identity_service,
+            &contacts_service,
+            &permissions_service,
+        );
+
+        // Send a message
+        messaging_service
+            .send_message(&peer_id, "Hello!", "text/plain", None)
+            .unwrap();
+
+        // Get conversations
+        let conversations = messaging_service.get_conversations().unwrap();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].peer_id, peer_id);
+    }
+
+    #[test]
+    fn test_message_nonce_uniqueness() {
+        let (_, identity_service, contacts_service, permissions_service, messaging_service) =
+            create_test_services();
+
+        create_identity_and_unlock(&identity_service, "password");
+        let (peer_id, _, _) = add_peer_contact_with_permission(
+            &identity_service,
+            &contacts_service,
+            &permissions_service,
+        );
+
+        // Send multiple messages
+        let msg1 = messaging_service
+            .send_message(&peer_id, "Hello 1", "text/plain", None)
+            .unwrap();
+        let msg2 = messaging_service
+            .send_message(&peer_id, "Hello 2", "text/plain", None)
+            .unwrap();
+        let msg3 = messaging_service
+            .send_message(&peer_id, "Hello 3", "text/plain", None)
+            .unwrap();
+
+        // All nonces should be unique and incrementing
+        assert_eq!(msg1.nonce_counter, 1);
+        assert_eq!(msg2.nonce_counter, 2);
+        assert_eq!(msg3.nonce_counter, 3);
+    }
+
+    #[test]
+    fn test_unread_count() {
+        let (_, identity_service, contacts_service, permissions_service, messaging_service) =
+            create_test_services();
+
+        create_identity_and_unlock(&identity_service, "password");
+        let (peer_id, _, _) = add_peer_contact_with_permission(
+            &identity_service,
+            &contacts_service,
+            &permissions_service,
+        );
+
+        // Initially no unread
+        let count = messaging_service.get_unread_count(&peer_id).unwrap();
+        assert_eq!(count, 0);
+
+        // Send a message (outgoing, so still 0 unread)
+        messaging_service
+            .send_message(&peer_id, "Hello!", "text/plain", None)
+            .unwrap();
+
+        let count = messaging_service.get_unread_count(&peer_id).unwrap();
+        assert_eq!(count, 0);
+    }
+}
