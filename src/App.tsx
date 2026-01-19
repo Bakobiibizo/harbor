@@ -1,12 +1,13 @@
-import { useEffect, Component, type ReactNode } from 'react';
+import { useEffect, useState, Component, type ReactNode } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { useIdentityStore, useNetworkStore, useSettingsStore } from './stores';
+import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore } from './stores';
 import { useTauriEvents } from './hooks';
 import { MainLayout } from './components/layout';
-import { CreateIdentity, UnlockIdentity } from './components/onboarding';
+import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/onboarding';
 import { HarborIcon } from './components/icons';
 import { ChatPage, WallPage, FeedPage, NetworkPage, SettingsPage } from './pages';
+import type { AccountInfo } from './types';
 
 // Error boundary to catch and display React errors
 interface ErrorBoundaryState {
@@ -154,13 +155,26 @@ function AppContent() {
   const { state, initialize } = useIdentityStore();
   const { checkStatus, startNetwork } = useNetworkStore();
   const { autoStartNetwork } = useSettingsStore();
+  const { accounts, loading: accountsLoading, loadAccounts } = useAccountsStore();
+
+  // UI state for account flow
+  const [showCreateAccount, setShowCreateAccount] = useState(false);
+  const [selectedAccount, setSelectedAccount] = useState<AccountInfo | null>(null);
 
   // Set up Tauri event listeners for real-time updates from backend
   useTauriEvents();
 
+  // Load accounts on mount
   useEffect(() => {
-    initialize();
-  }, [initialize]);
+    loadAccounts();
+  }, [loadAccounts]);
+
+  // Initialize identity after accounts are loaded
+  useEffect(() => {
+    if (!accountsLoading) {
+      initialize();
+    }
+  }, [accountsLoading, initialize]);
 
   // Auto-start network when identity is unlocked (if enabled in settings)
   useEffect(() => {
@@ -192,18 +206,51 @@ function AppContent() {
   }, [state.status, checkStatus, autoStartNetwork, startNetwork]);
 
   // Loading state
-  if (state.status === 'loading') {
+  if (accountsLoading || state.status === 'loading') {
     return <LoadingScreen />;
   }
 
-  // No identity - show create screen
+  // Show create account screen if user chose to create new or no accounts exist
+  if (showCreateAccount || (accounts.length === 0 && state.status === 'no_identity')) {
+    return (
+      <CreateIdentity
+        onBack={accounts.length > 0 ? () => setShowCreateAccount(false) : undefined}
+      />
+    );
+  }
+
+  // Multiple accounts exist - show account selection
+  if (accounts.length > 1 && state.status !== 'unlocked' && !selectedAccount) {
+    return (
+      <AccountSelection
+        onSelectAccount={(account) => {
+          setSelectedAccount(account);
+          // Re-initialize identity to load the selected account's data
+          initialize();
+        }}
+        onCreateAccount={() => setShowCreateAccount(true)}
+      />
+    );
+  }
+
+  // No identity in current profile - show create screen
   if (state.status === 'no_identity') {
     return <CreateIdentity />;
   }
 
   // Identity locked - show unlock screen
   if (state.status === 'locked') {
-    return <UnlockIdentity />;
+    return (
+      <UnlockIdentity
+        onSwitchAccount={
+          accounts.length > 1
+            ? () => {
+                setSelectedAccount(null);
+              }
+            : undefined
+        }
+      />
+    );
   }
 
   // Identity unlocked - show main app

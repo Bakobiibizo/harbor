@@ -1,8 +1,9 @@
 use crate::error::AppError;
 use crate::models::{CreateIdentityRequest, IdentityInfo};
-use crate::services::IdentityService;
+use crate::services::{AccountsService, IdentityService};
 use std::sync::Arc;
 use tauri::State;
+use tracing::info;
 
 /// Check if an identity has been created
 #[tauri::command]
@@ -32,9 +33,31 @@ pub async fn get_identity_info(
 #[tauri::command]
 pub async fn create_identity(
     identity_service: State<'_, Arc<IdentityService>>,
+    accounts_service: State<'_, Arc<AccountsService>>,
     request: CreateIdentityRequest,
 ) -> Result<IdentityInfo, AppError> {
-    identity_service.create_identity(request)
+    let display_name = request.display_name.clone();
+    let bio = request.bio.clone();
+
+    let identity = identity_service.create_identity(request)?;
+
+    // Register the new identity in the accounts registry
+    match accounts_service.register_account(
+        identity.peer_id.clone(),
+        display_name,
+        bio,
+        identity.avatar_hash.clone(),
+    ) {
+        Ok(account) => {
+            info!("Registered new account in registry: {}", account.id);
+        }
+        Err(e) => {
+            // Don't fail identity creation if account registration fails
+            info!("Could not register account (may already exist): {}", e);
+        }
+    }
+
+    Ok(identity)
 }
 
 /// Unlock the identity with passphrase

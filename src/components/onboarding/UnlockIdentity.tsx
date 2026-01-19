@@ -1,9 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
-import { HarborIcon, LockIcon, UnlockIcon } from '../icons';
+import { HarborIcon, LockIcon, UnlockIcon, UsersIcon } from '../icons';
 
-export function UnlockIdentity() {
+interface UnlockIdentityProps {
+  onSwitchAccount?: () => void;
+}
+
+export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
   const { state, unlock, error, clearError } = useIdentityStore();
 
   const [passphrase, setPassphrase] = useState('');
@@ -256,6 +260,22 @@ export function UnlockIdentity() {
               </span>
             </p>
           </div>
+
+          {/* Switch account button */}
+          {onSwitchAccount && (
+            <button
+              onClick={onSwitchAccount}
+              className="w-full mt-4 p-3 rounded-xl flex items-center justify-center gap-2 text-sm transition-colors duration-200"
+              style={{
+                background: 'hsl(var(--harbor-surface-1))',
+                color: 'hsl(var(--harbor-text-secondary))',
+                border: '1px solid hsl(var(--harbor-border-subtle))',
+              }}
+            >
+              <UsersIcon className="w-4 h-4" />
+              Switch Account
+            </button>
+          )}
         </div>
 
         {/* Footer */}

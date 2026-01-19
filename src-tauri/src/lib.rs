@@ -8,8 +8,8 @@ pub mod services;
 use commands::NetworkState;
 use db::Database;
 use services::{
-    CallingService, ContactsService, FeedService, IdentityService, MessagingService,
-    PermissionsService, PostsService,
+    AccountsService, CallingService, ContactsService, FeedService, IdentityService,
+    MessagingService, PermissionsService, PostsService,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,9 +88,24 @@ pub fn run() {
                     let _ = window.set_title(&format!("Harbor - {}", profile_name));
                 }
             }
+
+            // Get app data directory for accounts registry
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data directory");
+
+            // Initialize accounts service (manages multi-account registry)
+            let accounts_service = Arc::new(AccountsService::new(app_data.clone()));
+
             // Initialize database
             let db_path = get_db_path(&app.handle());
             info!("Database path: {:?}", db_path);
+
+            // Migrate legacy single-account setup if needed
+            if let Ok(Some(account)) = accounts_service.migrate_legacy_account(&db_path) {
+                info!("Migrated legacy account: {}", account.display_name);
+            }
 
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
 
@@ -131,6 +146,7 @@ pub fn run() {
 
             // Register state
             app.manage(db);
+            app.manage(accounts_service);
             app.manage(identity_service);
             app.manage(contacts_service);
             app.manage(permissions_service);
@@ -144,6 +160,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Account commands (multi-user support)
+            commands::list_accounts,
+            commands::get_account,
+            commands::get_active_account,
+            commands::has_accounts,
+            commands::set_active_account,
+            commands::remove_account,
+            commands::update_account_metadata,
             // Identity commands
             commands::has_identity,
             commands::is_identity_unlocked,

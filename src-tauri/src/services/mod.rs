@@ -1,3 +1,4 @@
+pub mod accounts_service;
 pub mod calling_service;
 pub mod contacts_service;
 pub mod content_sync_service;
@@ -9,6 +10,7 @@ pub mod permissions_service;
 pub mod posts_service;
 pub mod signing;
 
+pub use accounts_service::AccountsService;
 pub use calling_service::{
     Call, CallState, CallingService, OutgoingAnswer, OutgoingHangup, OutgoingIce, OutgoingOffer,
 };
