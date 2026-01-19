@@ -1,0 +1,39 @@
+[package]
+name = "harbor-relay-server"
+version = "0.1.0"
+edition = "2021"
+description = "libp2p relay server for Harbor chat app - enables NAT traversal"
+
+[[bin]]
+name = "harbor-relay"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# libp2p with relay server support
+libp2p = { version = "0.56", features = [
+    "tokio",
+    "tcp",
+    "quic",
+    "noise",
+    "yamux",
+    "relay",
+    "identify",
+    "ping",
+    "macros",
+] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
