@@ -14,10 +14,22 @@ use tracing::{debug, error, info, warn};
 /// Public relay servers that support libp2p relay v2
 /// These are IPFS bootstrap nodes that run relay servers
 const PUBLIC_RELAYS: &[&str] = &[
+    // IPFS/libp2p bootstrap nodes - globally distributed
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+    // Additional IPFS bootstrap nodes with direct addresses for better connectivity
+    "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+    "/ip4/104.131.131.82/udp/4001/quic-v1/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+];
+
+/// Public relay servers specifically for relay circuits (if available)
+/// These can be used as fallback when the bootstrap nodes don't provide relay service
+#[allow(dead_code)]
+const FALLBACK_RELAYS: &[&str] = &[
+    // Placeholder for future Harbor-specific relay servers
+    // Users can deploy their own using the AWS CloudFormation template
 ];
 
 use super::behaviour::{
@@ -171,6 +183,36 @@ impl NetworkHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send((NetworkCommand::AddBootstrapNode { address }, Some(tx)))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Add a custom relay server and attempt to get a relay reservation
+    pub async fn add_relay_server(&self, address: Multiaddr) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::AddRelayServer { address }, Some(tx)))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Connect to public relay servers for NAT traversal
+    pub async fn connect_to_public_relays(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::ConnectToPublicRelays, Some(tx)))
             .await
             .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
 
@@ -555,12 +597,10 @@ impl NetworkService {
                 );
 
                 // Build relay circuit address: /p2p/RELAY/p2p-circuit/p2p/LOCAL
-                let relay_circuit_addr: Multiaddr = format!(
-                    "/p2p/{}/p2p-circuit/p2p/{}",
-                    relay_peer_id, local_peer_id
-                )
-                .parse()
-                .unwrap();
+                let relay_circuit_addr: Multiaddr =
+                    format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id)
+                        .parse()
+                        .unwrap();
 
                 // Store the relay address if not already present
                 if !self.relay_addresses.contains(&relay_circuit_addr) {
@@ -595,7 +635,10 @@ impl NetworkService {
                 debug!("Outbound circuit established via relay {}", relay_peer_id);
             }
 
-            relay::client::Event::InboundCircuitEstablished { src_peer_id, limit: _ } => {
+            relay::client::Event::InboundCircuitEstablished {
+                src_peer_id,
+                limit: _,
+            } => {
                 debug!("Inbound circuit established from {}", src_peer_id);
             }
         }
@@ -1018,11 +1061,8 @@ impl NetworkService {
                 let mut stats = self.stats.clone();
                 stats.uptime_seconds = self.start_time.elapsed().as_secs();
                 stats.nat_status = self.nat_status;
-                stats.relay_addresses = self
-                    .relay_addresses
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect();
+                stats.relay_addresses =
+                    self.relay_addresses.iter().map(|a| a.to_string()).collect();
                 stats.external_addresses = self
                     .external_addresses
                     .iter()
@@ -1103,7 +1143,63 @@ impl NetworkService {
                 }
             }
 
+            NetworkCommand::AddRelayServer { address } => {
+                // Parse the multiaddress to extract peer ID if present
+                if let Some(relay_peer_id) = address.iter().find_map(|proto| {
+                    if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                        Some(peer_id)
+                    } else {
+                        None
+                    }
+                }) {
+                    // Add to Kademlia routing table
+                    let addr_without_peer: Multiaddr = address
+                        .iter()
+                        .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+                        .collect();
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&relay_peer_id, addr_without_peer);
+                    info!("Added relay server: {} at {}", relay_peer_id, address);
+
+                    // Try to dial the relay server
+                    match self.swarm.dial(address.clone()) {
+                        Ok(_) => {
+                            info!("Dialing relay server: {}", address);
+                            NetworkResponse::Ok
+                        }
+                        Err(e) => {
+                            NetworkResponse::Error(format!("Failed to dial relay server: {}", e))
+                        }
+                    }
+                } else {
+                    NetworkResponse::Error(
+                        "Relay address must contain peer ID (/p2p/...)".to_string(),
+                    )
+                }
+            }
+
+            NetworkCommand::ConnectToPublicRelays => {
+                // Reset the flag to allow reconnection
+                self.relay_connection_attempted = false;
+                // Trigger connection to public relays
+                // This is done in a non-blocking way, actual connection happens asynchronously
+                info!("Manually triggering connection to public relay servers...");
+                NetworkResponse::Ok
+            }
+
             NetworkCommand::Shutdown => NetworkResponse::Ok,
         }
+    }
+
+    /// Attempt to connect to public relay servers
+    /// This is called when we detect we're behind NAT or when manually requested
+    pub async fn try_connect_to_relays(&mut self) {
+        if self.relay_connection_attempted {
+            info!("Already attempted to connect to relays, skipping");
+            return;
+        }
+        self.connect_to_relays().await;
     }
 }

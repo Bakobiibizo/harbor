@@ -118,6 +118,10 @@ pub enum NetworkCommand {
     AddBootstrapNode { address: Multiaddr },
     /// Bootstrap the DHT
     Bootstrap,
+    /// Add a custom relay server address
+    AddRelayServer { address: Multiaddr },
+    /// Connect to public relay servers
+    ConnectToPublicRelays,
     /// Shutdown the network
     Shutdown,
 }

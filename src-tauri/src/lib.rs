@@ -164,6 +164,9 @@ pub fn run() {
             commands::get_listening_addresses,
             commands::connect_to_peer,
             commands::add_bootstrap_node,
+            commands::add_relay_server,
+            commands::connect_to_public_relays,
+            commands::get_nat_status,
             // Contact commands
             commands::get_contacts,
             commands::get_active_contacts,
