@@ -81,6 +81,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             // Update window title if running with a profile
             if let Some(ref profile_name) = profile {

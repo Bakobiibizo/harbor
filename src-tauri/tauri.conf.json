@@ -32,6 +32,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "endpoints": [
+        "https://github.com/bakobiibizo/harbor/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   }
 }
