@@ -1348,6 +1348,10 @@ impl NetworkService {
             }
 
             NetworkCommand::SyncFeed { limit } => {
+                // Clamp the limit to avoid pathological or abusive requests.
+                const MAX_MANIFEST_LIMIT: u32 = 1000;
+                let limit = limit.min(MAX_MANIFEST_LIMIT);
+
                 let Some(ref content_sync_service) = self.content_sync_service else {
                     return NetworkResponse::Error("Content sync service unavailable".to_string());
                 };
