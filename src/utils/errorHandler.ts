@@ -29,9 +29,8 @@ export async function safeInvoke<T>(
   options?: InvokeOptions
 ): Promise<T> {
   const opts = { ...defaultOptions, ...options };
-  let lastError: unknown;
 
-  for (let attempt = 0; attempt <= (opts.retryCount ?? 0); attempt++) {
+  for (let attempt = 0; attempt <= opts.retryCount; attempt++) {
     try {
       if (attempt > 0) {
         logger.info(`Retrying ${command} (attempt ${attempt + 1})`);
@@ -41,12 +40,11 @@ export async function safeInvoke<T>(
       const result = await invoke<T>(command, args);
       return result;
     } catch (error) {
-      lastError = error;
       logger.error(`Command ${command} failed`, error);
 
       const harborError = HarborError.fromUnknown(error);
 
-      if (!harborError.isRecoverable() || attempt >= (opts.retryCount ?? 0)) {
+      if (!harborError.isRecoverable() || attempt >= opts.retryCount) {
         if (opts.showToast) {
           showErrorToast(harborError);
         }
@@ -55,7 +53,9 @@ export async function safeInvoke<T>(
     }
   }
 
-  throw lastError;
+  // All paths in the loop either return or throw; this is unreachable.
+  // Added only to satisfy TypeScript's control flow analysis, if needed.
+  throw new Error("safeInvoke reached an unreachable state after retries");
 }
 
 export function showErrorToast(error: unknown): void {
