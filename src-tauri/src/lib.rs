@@ -99,7 +99,7 @@ pub fn run() {
             let accounts_service = Arc::new(AccountsService::new(app_data.clone()));
 
             // Initialize database
-            let db_path = get_db_path(&app.handle());
+            let db_path = get_db_path(app.handle());
             info!("Database path: {:?}", db_path);
 
             // Migrate legacy single-account setup if needed

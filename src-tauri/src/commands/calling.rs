@@ -184,6 +184,7 @@ pub async fn process_answer(
 
 /// Process an incoming ICE candidate (validate it)
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn process_ice_candidate(
     calling_service: State<'_, Arc<CallingService>>,
     call_id: String,
