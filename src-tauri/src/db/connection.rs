@@ -7,7 +7,7 @@ const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
 const MIGRATION_002: &str = include_str!("migrations/002_schema_fixes.sql");
 const MIGRATION_003: &str = include_str!("migrations/003_lamport_sync_cursor.sql");
 const MIGRATION_004: &str = include_str!("migrations/004_messages_nonce.sql");
-const MIGRATION_005: &str = include_str!("migrations/005_bootstrap_nodes.sql");
+const MIGRATION_005: &str = include_str!("migrations/005_post_likes.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {

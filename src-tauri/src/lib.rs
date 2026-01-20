@@ -245,6 +245,12 @@ pub fn run() {
             // Feed commands
             commands::get_feed,
             commands::get_wall,
+            // Like commands
+            commands::like_post,
+            commands::unlike_post,
+            commands::get_post_likes,
+            commands::get_posts_likes_batch,
+            commands::get_my_liked_posts,
             // Calling commands
             commands::start_call,
             commands::answer_call,
