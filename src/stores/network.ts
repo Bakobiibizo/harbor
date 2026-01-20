@@ -58,7 +58,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       await get().refreshAddresses();
     } catch (error) {
       set({
-        error: String(error),
+        error: error instanceof Error ? error.message : String(error),
         isLoading: false,
         status: 'disconnected',
       });
@@ -79,7 +79,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         isLoading: false,
       });
     } catch (error) {
-      set({ error: String(error), isLoading: false });
+      set({ error: error instanceof Error ? error.message : String(error), isLoading: false });
     }
   },
 
@@ -92,7 +92,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         status: isRunning ? 'connected' : 'disconnected',
       });
     } catch (error) {
-      set({ error: String(error) });
+      set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
@@ -137,7 +137,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       // Refresh peers after connecting
       await get().refreshPeers();
     } catch (error) {
-      set({ error: String(error), isLoading: false });
+      set({ error: error instanceof Error ? error.message : String(error), isLoading: false });
       throw error;
     }
   },
@@ -151,7 +151,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       // Refresh peers after adding bootstrap
       await get().refreshPeers();
     } catch (error) {
-      set({ error: String(error), isLoading: false });
+      set({ error: error instanceof Error ? error.message : String(error), isLoading: false });
       throw error;
     }
   },

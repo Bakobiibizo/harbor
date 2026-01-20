@@ -8,8 +8,8 @@ pub mod services;
 use commands::NetworkState;
 use db::Database;
 use services::{
-    CallingService, ContactsService, FeedService, IdentityService, MessagingService,
-    PermissionsService, PostsService,
+    AccountsService, CallingService, ContactsService, ContentSyncService, FeedService,
+    IdentityService, MessagingService, PermissionsService, PostsService,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,9 +88,24 @@ pub fn run() {
                     let _ = window.set_title(&format!("Harbor - {}", profile_name));
                 }
             }
+
+            // Get app data directory for accounts registry
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data directory");
+
+            // Initialize accounts service (manages multi-account registry)
+            let accounts_service = Arc::new(AccountsService::new(app_data.clone()));
+
             // Initialize database
             let db_path = get_db_path(app.handle());
             info!("Database path: {:?}", db_path);
+
+            // Migrate legacy single-account setup if needed
+            if let Ok(Some(account)) = accounts_service.migrate_legacy_account(&db_path) {
+                info!("Migrated legacy account: {}", account.display_name);
+            }
 
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
 
@@ -125,17 +140,25 @@ pub fn run() {
                 contacts_service.clone(),
                 permissions_service.clone(),
             ));
+            let content_sync_service = Arc::new(ContentSyncService::new(
+                db.clone(),
+                identity_service.clone(),
+                contacts_service.clone(),
+                permissions_service.clone(),
+            ));
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
 
             // Register state
             app.manage(db);
+            app.manage(accounts_service);
             app.manage(identity_service);
             app.manage(contacts_service);
             app.manage(permissions_service);
             app.manage(messaging_service);
             app.manage(posts_service);
+            app.manage(content_sync_service);
             app.manage(feed_service);
             app.manage(calling_service);
             app.manage(network_state);
@@ -144,6 +167,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Account commands (multi-user support)
+            commands::list_accounts,
+            commands::get_account,
+            commands::get_active_account,
+            commands::has_accounts,
+            commands::set_active_account,
+            commands::remove_account,
+            commands::update_account_metadata,
             // Identity commands
             commands::has_identity,
             commands::is_identity_unlocked,
@@ -163,7 +194,11 @@ pub fn run() {
             commands::stop_network,
             commands::get_listening_addresses,
             commands::connect_to_peer,
+            commands::sync_feed,
             commands::add_bootstrap_node,
+            commands::add_relay_server,
+            commands::connect_to_public_relays,
+            commands::get_nat_status,
             // Contact commands
             commands::get_contacts,
             commands::get_active_contacts,
@@ -214,6 +249,12 @@ pub fn run() {
             commands::process_answer,
             commands::process_ice_candidate,
             commands::process_hangup,
+            // Content sync commands
+            commands::request_content_manifest,
+            commands::request_content_manifest_with_cursor,
+            commands::request_content_fetch,
+            commands::get_sync_cursor,
+            commands::sync_with_all_peers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

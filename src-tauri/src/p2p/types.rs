@@ -1,5 +1,6 @@
 use libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Network connection status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +89,16 @@ pub enum NetworkEvent {
     RelayConnected { relay_address: String },
     /// Direct connection established via hole-punching
     HolePunchSucceeded { peer_id: String },
+    /// Content manifest received from a peer
+    ContentManifestReceived {
+        peer_id: String,
+        post_count: usize,
+        has_more: bool,
+    },
+    /// Content fetched from a peer
+    ContentFetched { peer_id: String, post_id: String },
+    /// Content sync error
+    ContentSyncError { peer_id: String, error: String },
 }
 
 /// Commands that can be sent to the network service
@@ -118,6 +129,24 @@ pub enum NetworkCommand {
     AddBootstrapNode { address: Multiaddr },
     /// Bootstrap the DHT
     Bootstrap,
+    /// Add a custom relay server address
+    AddRelayServer { address: Multiaddr },
+    /// Connect to public relay servers
+    ConnectToPublicRelays,
+    /// Request content manifest from a peer
+    RequestContentManifest {
+        peer_id: PeerId,
+        cursor: HashMap<String, u64>,
+        limit: u32,
+    },
+    /// Request content fetch from a peer
+    RequestContentFetch {
+        peer_id: PeerId,
+        post_id: String,
+        include_media: bool,
+    },
+    /// Sync feed content from connected peers
+    SyncFeed { limit: u32 },
     /// Shutdown the network
     Shutdown,
 }
