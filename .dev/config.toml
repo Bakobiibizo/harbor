@@ -19,6 +19,9 @@ commands = [["./node_modules/.bin/eslint", "src"]]
 commands = [["./node_modules/.bin/tsc", "--noEmit"]]
 
 [tasks.ts_test]
+commands = [["npm", "run", "test"]]
+
+[tasks.ts_build]
 commands = [["npm", "run", "build"]]
 
 [tasks.ts_fix]
@@ -37,7 +40,8 @@ commands = [
 commands = [
   "ts_type",
   "ts_lint_check",
-  "ts_test"
+  "ts_test",
+  "ts_build"
 ]
 
 # ===================== Rust/Backend ========================

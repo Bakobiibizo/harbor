@@ -690,7 +690,11 @@ impl NetworkService {
                 debug!("Kademlia routing updated for peer: {}", peer);
             }
 
-            ChatBehaviourEvent::Ping(ping::Event { peer, result: Ok(rtt), .. }) => {
+            ChatBehaviourEvent::Ping(ping::Event {
+                peer,
+                result: Ok(rtt),
+                ..
+            }) => {
                 debug!("Ping to {} succeeded: {:?}", peer, rtt);
             }
             ChatBehaviourEvent::Ping(_) => {}
