@@ -1,12 +1,14 @@
 pub mod commands;
 pub mod db;
 pub mod error;
+pub mod logging;
 pub mod models;
 pub mod p2p;
 pub mod services;
 
 use commands::NetworkState;
 use db::Database;
+use logging::{get_log_directory, LogConfig};
 use services::{
     CallingService, ContactsService, ContentSyncService, FeedService, IdentityService,
     MessagingService, PermissionsService, PostsService,
@@ -15,18 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Initialize logging
-fn init_logging() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "harbor_lib=debug,tauri=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-}
+pub struct LogDirectory(pub PathBuf);
 
 /// Get the profile name from environment variable (for multi-instance support)
 fn get_profile_name() -> Option<String> {
@@ -70,7 +62,8 @@ fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_logging();
+    let log_config = LogConfig::development();
+    logging::init_logging(log_config);
 
     let profile = get_profile_name();
     if let Some(ref p) = profile {
@@ -88,6 +81,15 @@ pub fn run() {
                     let _ = window.set_title(&format!("Harbor - {}", profile_name));
                 }
             }
+
+            // Set up log directory for production
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data directory");
+            let log_dir = get_log_directory(&app_data_dir);
+            app.manage(LogDirectory(log_dir));
+
             // Initialize database
             let db_path = get_db_path(app.handle());
             info!("Database path: {:?}", db_path);
@@ -220,6 +222,10 @@ pub fn run() {
             commands::process_answer,
             commands::process_ice_candidate,
             commands::process_hangup,
+            // Logging commands
+            commands::export_logs,
+            commands::get_log_path,
+            commands::cleanup_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
