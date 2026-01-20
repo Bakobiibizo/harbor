@@ -90,7 +90,7 @@ pub fn run() {
                 }
             }
             // Initialize database
-            let db_path = get_db_path(&app.handle());
+            let db_path = get_db_path(app.handle());
             info!("Database path: {:?}", db_path);
 
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));

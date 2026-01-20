@@ -24,6 +24,7 @@ impl MessageStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(MessageStatus::Pending),
