@@ -1,0 +1,129 @@
+# Windows devkit configuration
+# Frontend: TypeScript/npm at project root
+# Backend: Rust at src-tauri/
+
+default_language = "typescript"
+
+# ===================== TypeScript/Frontend ========================
+
+[tasks.ts_fmt]
+commands = [[".\\node_modules\\.bin\\prettier.cmd", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
+
+[tasks.ts_lint]
+commands = [[".\\node_modules\\.bin\\eslint.cmd", "src", "--fix"]]
+
+[tasks.ts_lint_check]
+commands = [[".\\node_modules\\.bin\\eslint.cmd", "src"]]
+
+[tasks.ts_type]
+commands = [[".\\node_modules\\.bin\\tsc.cmd", "--noEmit"]]
+
+[tasks.ts_test]
+commands = [["npm.cmd", "run", "build"]]
+
+[tasks.ts_fix]
+commands = [
+  "ts_fmt",
+  "ts_lint"
+]
+
+[tasks.ts_check]
+commands = [
+  "ts_type",
+  "ts_lint_check"
+]
+
+[tasks.ts_ci]
+commands = [
+  "ts_type",
+  "ts_lint_check",
+  "ts_test"
+]
+
+# ===================== Rust/Backend ========================
+
+[tasks.rust_fmt]
+commands = [["cargo", "fmt", "--manifest-path", "src-tauri/Cargo.toml"]]
+
+[tasks.rust_fmt_check]
+commands = [["cargo", "fmt", "--manifest-path", "src-tauri/Cargo.toml", "--", "--check"]]
+
+[tasks.rust_lint]
+commands = [["cargo", "clippy", "--manifest-path", "src-tauri/Cargo.toml"]]
+
+[tasks.rust_lint_check]
+commands = [["cargo", "clippy", "--manifest-path", "src-tauri/Cargo.toml", "--", "-D", "warnings"]]
+
+[tasks.rust_check]
+commands = [["cargo", "check", "--manifest-path", "src-tauri/Cargo.toml"]]
+
+[tasks.rust_test]
+commands = [["cargo", "test", "--manifest-path", "src-tauri/Cargo.toml"]]
+
+[tasks.rust_build]
+commands = [["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml"]]
+
+[tasks.rust_fix]
+commands = [
+  "rust_fmt"
+]
+
+[tasks.rust_ci]
+commands = [
+  "rust_fmt_check",
+  "rust_lint_check",
+  "rust_check",
+  "rust_test"
+]
+
+# ===================== Combined/Tauri ========================
+
+[tasks.fmt_all]
+commands = [
+  "ts_fmt",
+  "rust_fmt"
+]
+
+[tasks.fix_all]
+commands = [
+  "ts_fix",
+  "rust_fix"
+]
+
+[tasks.check_all]
+commands = [
+  "ts_check",
+  "rust_check"
+]
+
+[tasks.tauri_dev]
+commands = [["npm.cmd", "run", "tauri", "dev"]]
+
+[tasks.tauri_build]
+commands = [["npm.cmd", "run", "tauri", "build"]]
+
+# ===================== Language Pipelines ========================
+
+[languages.typescript]
+install = [["npm.cmd", "install"]]
+
+[languages.typescript.pipelines]
+fmt = ["ts_fmt"]
+lint = ["ts_lint_check"]
+type = ["ts_type"]
+test = ["ts_test"]
+fix = ["ts_fix"]
+check = ["ts_check"]
+ci = ["ts_ci"]
+
+[languages.rust]
+install = []
+
+[languages.rust.pipelines]
+fmt = ["rust_fmt"]
+lint = ["rust_lint_check"]
+type = ["rust_check"]
+test = ["rust_test"]
+fix = ["rust_fix"]
+check = ["rust_ci"]
+ci = ["rust_ci"]

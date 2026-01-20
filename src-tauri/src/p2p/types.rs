@@ -141,6 +141,8 @@ pub enum NetworkCommand {
         post_id: String,
         include_media: bool,
     },
+    /// Sync feed content from connected peers
+    SyncFeed { limit: u32 },
     /// Shutdown the network
     Shutdown,
 }

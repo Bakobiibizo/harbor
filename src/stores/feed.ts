@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { feedService } from '../services/feed';
+import * as networkService from '../services/network';
 import type { FeedItem } from '../types';
 
 interface FeedState {
@@ -64,6 +65,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
   refreshFeed: async () => {
     set({ isLoading: true, error: null });
     try {
+      await networkService.syncFeed(50);
       const feedItems = await feedService.getFeed(50);
       set({
         feedItems,

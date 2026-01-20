@@ -33,7 +33,7 @@ pub struct ChatBehaviour {
         request_response::cbor::Behaviour<IdentityExchangeRequest, IdentityExchangeResponse>,
     /// Request-response for messaging
     pub messaging: request_response::cbor::Behaviour<MessagingRequest, MessagingResponse>,
-    /// Request-response for content sync
+    /// Request-response for content sync (feed/wall)
     pub content_sync: request_response::cbor::Behaviour<ContentSyncRequest, ContentSyncResponse>,
 }
 
@@ -87,6 +87,7 @@ pub struct PostSummaryProto {
 
 /// Content sync request (manifest request)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub struct ContentSyncRequest {
     pub request_type: String, // "manifest" or "fetch"
     pub requester_peer_id: String,
@@ -96,11 +97,29 @@ pub struct ContentSyncRequest {
     pub include_media: bool,
     pub timestamp: i64,
     pub signature: Vec<u8>,
+    /// Request a manifest of posts newer than the provided cursor
+    Manifest {
+        requester_peer_id: String,
+        cursor: std::collections::HashMap<String, u64>,
+        limit: u32,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
+    /// Fetch a full post by ID
+    FetchPost {
+        post_id: String,
+        include_media: bool,
+        requester_peer_id: String,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
 }
 
 /// Content sync response
+#[serde(tag = "type", rename_all = "snake_case")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ContentSyncResponse {
+pub enum ContentSyncResponse {
+
     pub response_type: String, // "manifest" or "fetch"
     pub responder_peer_id: String,
     // Manifest response fields
@@ -121,6 +140,27 @@ pub struct ContentSyncResponse {
     pub signature: Vec<u8>,
     pub success: bool,
     pub error: Option<String>,
+    Manifest {
+        responder_peer_id: String,
+        posts: Vec<crate::services::PostSummary>,
+        has_more: bool,
+        next_cursor: std::collections::HashMap<String, u64>,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
+    Post {
+        post_id: String,
+        author_peer_id: String,
+        content_type: String,
+        content_text: Option<String>,
+        visibility: String,
+        lamport_clock: u64,
+        created_at: i64,
+        signature: Vec<u8>,
+    },
+    Error {
+        error: String,
+    },
 }
 
 impl ChatBehaviour {

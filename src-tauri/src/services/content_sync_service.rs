@@ -361,16 +361,33 @@ impl ContentSyncService {
     }
 
     /// Store sync cursor for a peer
-    fn store_sync_cursor(&self, _peer_id: &str, _cursor: &HashMap<String, u64>) -> Result<()> {
-        // For now, we don't persist the cursor - it's ephemeral
-        // TODO: Persist cursor to database for resumable syncs
+    fn store_sync_cursor(&self, peer_id: &str, cursor: &HashMap<String, u64>) -> Result<()> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        // We are syncing *from* peer_id, so the cursor is keyed by (source_peer_id=peer_id)
+        // for our local identity.
+        self.db
+            .update_sync_cursors_batch(peer_id, "posts", cursor)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        // Also update last_sync_at even if cursor is empty.
+        // We do this by recording our own peer as author with existing clock 0 if needed.
+        if cursor.is_empty() {
+            self.db
+                .update_sync_cursor(peer_id, "posts", &identity.peer_id, 0)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        }
+
         Ok(())
     }
 
     /// Get stored sync cursor for a peer
-    pub fn get_sync_cursor(&self, _peer_id: &str) -> Result<HashMap<String, u64>> {
-        // For now, return empty cursor
-        // TODO: Load from database
-        Ok(HashMap::new())
+    pub fn get_sync_cursor(&self, peer_id: &str) -> Result<HashMap<String, u64>> {
+        self.db
+            .get_sync_cursor(peer_id, "posts")
+            .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 }

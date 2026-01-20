@@ -672,7 +672,10 @@ export function NetworkPage() {
                         className="text-xs font-medium block mb-2 flex items-center gap-2"
                         style={{ color: 'hsl(var(--harbor-success))' }}
                       >
-                        <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'hsl(var(--harbor-success))' }} />
+                        <span
+                          className="w-2 h-2 rounded-full animate-pulse"
+                          style={{ background: 'hsl(var(--harbor-success))' }}
+                        />
                         Relay Address (works anywhere)
                       </label>
                       {stats.relayAddresses.map((addr, idx) => (
@@ -716,7 +719,8 @@ export function NetworkPage() {
                         </div>
                       ))}
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                        This address works for peers anywhere on the internet, not just your local network.
+                        This address works for peers anywhere on the internet, not just your local
+                        network.
                       </p>
                     </div>
                   )}
@@ -730,7 +734,12 @@ export function NetworkPage() {
                   </label>
                   <div className="space-y-2">
                     {listeningAddresses
-                      .filter((addr) => !addr.includes('127.0.0.1') && !addr.includes('::1') && !addr.includes('p2p-circuit'))
+                      .filter(
+                        (addr) =>
+                          !addr.includes('127.0.0.1') &&
+                          !addr.includes('::1') &&
+                          !addr.includes('p2p-circuit'),
+                      )
                       .slice(0, 3)
                       .map((addr, idx) => (
                         <div
@@ -1025,397 +1034,565 @@ export function NetworkPage() {
                 stroke="currentColor"
                 viewBox="0 0 24 24"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 5l7 7-7 7"
+                />
               </svg>
               Advanced: Deploy Your Own Relay Server
             </button>
 
             {showAdvanced && (
               <div className="mt-4">
-            <div className="flex items-start gap-4 mb-6">
-              <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-                style={{ background: 'hsl(var(--harbor-primary) / 0.15)' }}
-              >
-                <svg
-                  className="w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  style={{ color: 'hsl(var(--harbor-primary))' }}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h3
-                  className="text-lg font-semibold mb-1"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  Deploy Your Own Relay Server
-                </h3>
-                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Run your own relay server on AWS for better connectivity. Free tier eligible!
-                </p>
-              </div>
-            </div>
-
-            {/* Warning about existing deployments */}
-            <div
-              className="mb-6 p-3 rounded-lg flex items-start gap-3"
-              style={{ background: 'hsl(var(--harbor-warning) / 0.1)' }}
-            >
-              <svg
-                className="w-5 h-5 flex-shrink-0 mt-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                style={{ color: 'hsl(var(--harbor-warning))' }}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                />
-              </svg>
-              <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                <strong style={{ color: 'hsl(var(--harbor-warning))' }}>Before deploying:</strong>{' '}
-                Check if you already have a relay running to avoid duplicate charges.{' '}
-                <a
-                  href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline font-medium"
-                  style={{ color: 'hsl(var(--harbor-primary))' }}
-                >
-                  Check existing stacks →
-                </a>
-              </div>
-            </div>
-
-            {/* Deploy to AWS - Step by Step */}
-            <div className="mb-6">
-              <label
-                className="text-xs font-medium block mb-3"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
-                Deploy to AWS (Free for 12 months)
-              </label>
-
-              {/* Step 1: Download */}
-              <div className="mb-4 p-4 rounded-xl" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
-                <div className="flex items-center gap-3 mb-3">
-                  <span
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
-                    style={{
-                      background: 'linear-gradient(135deg, #FF9900, #FF6600)',
-                      color: 'white',
-                    }}
+                <div className="flex items-start gap-4 mb-6">
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'hsl(var(--harbor-primary) / 0.15)' }}
                   >
-                    1
-                  </span>
-                  <span className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    Download the template file
-                  </span>
-                </div>
-                <button
-                  onClick={() => {
-                    const blob = new Blob([RELAY_CLOUDFORMATION_TEMPLATE], { type: 'application/x-yaml' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'harbor-relay-cloudformation.yaml';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    toast.success('Template downloaded! Continue to Step 2.');
-                  }}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-105"
-                  style={{
-                    background: 'linear-gradient(135deg, #FF9900, #FF6600)',
-                    color: 'white',
-                  }}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download Template File
-                </button>
-              </div>
-
-              {/* Step 2: Open AWS */}
-              <div className="mb-4 p-4 rounded-xl" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
-                <div className="flex items-center gap-3 mb-3">
-                  <span
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
-                    style={{
-                      background: 'linear-gradient(135deg, #FF9900, #FF6600)',
-                      color: 'white',
-                    }}
-                  >
-                    2
-                  </span>
-                  <span className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    Open AWS and upload the template
-                  </span>
-                </div>
-                <a
-                  href="https://console.aws.amazon.com/cloudformation/home#/stacks/create/template"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors mb-3"
-                  style={{
-                    background: 'hsl(var(--harbor-primary))',
-                    color: 'white',
-                  }}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                  Open AWS CloudFormation
-                </a>
-                <div className="text-xs space-y-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  <p>• Select <strong>"Upload a template file"</strong></p>
-                  <p>• Click <strong>"Choose file"</strong> and select the downloaded file</p>
-                  <p>• Click <strong>"Next"</strong></p>
-                </div>
-              </div>
-
-              {/* Step 3: Configure Stack */}
-              <div className="mb-4 p-4 rounded-xl" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
-                <div className="flex items-center gap-3 mb-3">
-                  <span
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
-                    style={{
-                      background: 'linear-gradient(135deg, #FF9900, #FF6600)',
-                      color: 'white',
-                    }}
-                  >
-                    3
-                  </span>
-                  <span className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    Fill in the settings (easy!)
-                  </span>
-                </div>
-                <div className="text-xs space-y-2" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  <div className="p-2 rounded" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-                    <p><strong>Stack name:</strong> <code className="font-mono px-1 rounded" style={{ background: 'hsl(var(--harbor-surface-2))' }}>harbor-relay</code></p>
-                    <p className="text-xs opacity-75 mt-1">This is just a label to identify your server in AWS</p>
+                    <svg
+                      className="w-6 h-6"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      style={{ color: 'hsl(var(--harbor-primary))' }}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"
+                      />
+                    </svg>
                   </div>
-                  <div className="p-2 rounded" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-                    <p><strong>InstanceType:</strong> Leave as <code className="font-mono px-1 rounded" style={{ background: 'hsl(var(--harbor-surface-2))' }}>t2.micro</code> (free!)</p>
+                  <div>
+                    <h3
+                      className="text-lg font-semibold mb-1"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      Deploy Your Own Relay Server
+                    </h3>
+                    <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                      Run your own relay server on AWS for better connectivity. Free tier eligible!
+                    </p>
                   </div>
-                  <div className="p-2 rounded" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-                    <p><strong>KeyPairName:</strong> <span className="font-medium" style={{ color: 'hsl(var(--harbor-success))' }}>Leave empty</span></p>
-                    <p className="text-xs opacity-75 mt-1">You don't need SSH access - we'll use AWS's built-in browser terminal</p>
-                  </div>
-                  <div className="p-2 rounded" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-                    <p><strong>All other settings:</strong> Leave as default</p>
-                  </div>
-                  <p className="pt-2">Click <strong>"Next"</strong> to continue</p>
-                </div>
-              </div>
-
-              {/* Step 4: Review and Create */}
-              <div className="mb-4 p-4 rounded-xl" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
-                <div className="flex items-center gap-3 mb-3">
-                  <span
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
-                    style={{
-                      background: 'linear-gradient(135deg, #FF9900, #FF6600)',
-                      color: 'white',
-                    }}
-                  >
-                    4
-                  </span>
-                  <span className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    Review and create
-                  </span>
-                </div>
-                <div className="text-xs space-y-2" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  <p>• On the "Configure stack options" page: just click <strong>"Next"</strong></p>
-                  <p>• On the "Review" page: scroll to the bottom</p>
-                  <div className="p-2 rounded flex items-start gap-2" style={{ background: 'hsl(var(--harbor-warning) / 0.1)' }}>
-                    <input type="checkbox" disabled className="mt-0.5" />
-                    <p><strong>Check the box</strong> that says "I acknowledge that AWS CloudFormation might create IAM resources with custom names"</p>
-                  </div>
-                  <p>• Click <strong>"Submit"</strong> or <strong>"Create stack"</strong></p>
-                  <p className="pt-2" style={{ color: 'hsl(var(--harbor-success))' }}>
-                    <strong>Wait 3-5 minutes</strong> for the server to start up. You'll see "CREATE_COMPLETE" when ready!
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Step 5: Get Your Relay Address (after deployment) */}
-            <div className="mb-4 p-4 rounded-xl" style={{ background: 'hsl(var(--harbor-success) / 0.1)', border: '1px solid hsl(var(--harbor-success) / 0.2)' }}>
-              <div className="flex items-center gap-3 mb-3">
-                <span
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
-                  style={{
-                    background: 'hsl(var(--harbor-success))',
-                    color: 'white',
-                  }}
-                >
-                  5
-                </span>
-                <span className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-success))' }}>
-                  Get your relay address (after 5 minutes)
-                </span>
-              </div>
-              <div className="text-xs space-y-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                <p>After deployment completes, your relay address is automatically saved to AWS Parameter Store.</p>
-
-                <div className="p-3 rounded-lg" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-                  <p className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>To find your relay address:</p>
-                  <ol className="space-y-1 list-decimal list-inside">
-                    <li>Go to your CloudFormation stack's <strong>"Outputs"</strong> tab</li>
-                    <li>Click the link next to <strong>"Step2GetYourRelayAddress"</strong></li>
-                    <li>Copy the <strong>"Value"</strong> field (starts with <code className="font-mono">/ip4/...</code>)</li>
-                  </ol>
                 </div>
 
-                <a
-                  href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                  style={{
-                    background: 'hsl(var(--harbor-success))',
-                    color: 'white',
-                  }}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                  </svg>
-                  Open Your CloudFormation Stack
-                </a>
-
-                <p className="pt-1">Once you have the address, paste it below and click <strong>"Add Relay"</strong></p>
-              </div>
-            </div>
-
-            {/* Add Custom Relay */}
-            <div>
-              <label
-                className="text-xs font-medium block mb-2"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
-                Add Your Custom Relay
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={customRelayAddress}
-                  onChange={(e) => setCustomRelayAddress(e.target.value)}
-                  placeholder="/ip4/YOUR_IP/tcp/4001/p2p/YOUR_PEER_ID"
-                  className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
-                  style={{
-                    background: 'hsl(var(--harbor-surface-1))',
-                    border: '1px solid hsl(var(--harbor-border-subtle))',
-                    color: 'hsl(var(--harbor-text-primary))',
-                  }}
-                  disabled={isAddingRelay || !isRunning}
-                />
-                <button
-                  onClick={handleAddCustomRelay}
-                  disabled={isAddingRelay || !customRelayAddress.trim() || !isRunning}
-                  className="px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
-                  style={{
-                    background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                    color: 'white',
-                  }}
-                >
-                  {isAddingRelay ? 'Adding...' : 'Add Relay'}
-                </button>
-              </div>
-              {!isRunning && (
-                <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-warning))' }}>
-                  Start the network first to add a custom relay.
-                </p>
-              )}
-              <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                Format: <code className="font-mono">/ip4/PUBLIC_IP/tcp/4001/p2p/PEER_ID</code>
-              </p>
-            </div>
-
-            {/* Cost Info */}
-            <div
-              className="mt-6 p-3 rounded-lg flex items-start gap-3"
-              style={{ background: 'hsl(var(--harbor-success) / 0.1)' }}
-            >
-              <svg
-                className="w-5 h-5 flex-shrink-0 mt-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                style={{ color: 'hsl(var(--harbor-success))' }}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                <strong style={{ color: 'hsl(var(--harbor-success))' }}>Free for 12 months!</strong>{' '}
-                AWS Free Tier includes 750 hours/month of t2.micro - enough to run one relay 24/7.
-                After the free tier: ~$9-12/month.
-              </div>
-            </div>
-
-            {/* Cleanup Section */}
-            <div
-              className="mt-4 pt-4 border-t"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
-              <div className="flex items-center justify-between">
-                <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                  <strong>Need to delete your relay?</strong> Remove all resources to stop charges.
-                </div>
-                <a
-                  href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                  style={{
-                    background: 'hsl(var(--harbor-error) / 0.1)',
-                    color: 'hsl(var(--harbor-error))',
-                  }}
+                {/* Warning about existing deployments */}
+                <div
+                  className="mb-6 p-3 rounded-lg flex items-start gap-3"
+                  style={{ background: 'hsl(var(--harbor-warning) / 0.1)' }}
                 >
                   <svg
-                    className="w-3.5 h-3.5"
+                    className="w-5 h-5 flex-shrink-0 mt-0.5"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
+                    style={{ color: 'hsl(var(--harbor-warning))' }}
                   >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                     />
                   </svg>
-                  Manage Stacks
-                </a>
+                  <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                    <strong style={{ color: 'hsl(var(--harbor-warning))' }}>
+                      Before deploying:
+                    </strong>{' '}
+                    Check if you already have a relay running to avoid duplicate charges.{' '}
+                    <a
+                      href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline font-medium"
+                      style={{ color: 'hsl(var(--harbor-primary))' }}
+                    >
+                      Check existing stacks →
+                    </a>
+                  </div>
+                </div>
+
+                {/* Deploy to AWS - Step by Step */}
+                <div className="mb-6">
+                  <label
+                    className="text-xs font-medium block mb-3"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  >
+                    Deploy to AWS (Free for 12 months)
+                  </label>
+
+                  {/* Step 1: Download */}
+                  <div
+                    className="mb-4 p-4 rounded-xl"
+                    style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <span
+                        className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                        style={{
+                          background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                          color: 'white',
+                        }}
+                      >
+                        1
+                      </span>
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        Download the template file
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const blob = new Blob([RELAY_CLOUDFORMATION_TEMPLATE], {
+                          type: 'application/x-yaml',
+                        });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'harbor-relay-cloudformation.yaml';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        toast.success('Template downloaded! Continue to Step 2.');
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-105"
+                      style={{
+                        background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                        color: 'white',
+                      }}
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                        />
+                      </svg>
+                      Download Template File
+                    </button>
+                  </div>
+
+                  {/* Step 2: Open AWS */}
+                  <div
+                    className="mb-4 p-4 rounded-xl"
+                    style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <span
+                        className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                        style={{
+                          background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                          color: 'white',
+                        }}
+                      >
+                        2
+                      </span>
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        Open AWS and upload the template
+                      </span>
+                    </div>
+                    <a
+                      href="https://console.aws.amazon.com/cloudformation/home#/stacks/create/template"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors mb-3"
+                      style={{
+                        background: 'hsl(var(--harbor-primary))',
+                        color: 'white',
+                      }}
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                        />
+                      </svg>
+                      Open AWS CloudFormation
+                    </a>
+                    <div
+                      className="text-xs space-y-1"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      <p>
+                        • Select <strong>"Upload a template file"</strong>
+                      </p>
+                      <p>
+                        • Click <strong>"Choose file"</strong> and select the downloaded file
+                      </p>
+                      <p>
+                        • Click <strong>"Next"</strong>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 3: Configure Stack */}
+                  <div
+                    className="mb-4 p-4 rounded-xl"
+                    style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <span
+                        className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                        style={{
+                          background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                          color: 'white',
+                        }}
+                      >
+                        3
+                      </span>
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        Fill in the settings (easy!)
+                      </span>
+                    </div>
+                    <div
+                      className="text-xs space-y-2"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      <div
+                        className="p-2 rounded"
+                        style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+                      >
+                        <p>
+                          <strong>Stack name:</strong>{' '}
+                          <code
+                            className="font-mono px-1 rounded"
+                            style={{ background: 'hsl(var(--harbor-surface-2))' }}
+                          >
+                            harbor-relay
+                          </code>
+                        </p>
+                        <p className="text-xs opacity-75 mt-1">
+                          This is just a label to identify your server in AWS
+                        </p>
+                      </div>
+                      <div
+                        className="p-2 rounded"
+                        style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+                      >
+                        <p>
+                          <strong>InstanceType:</strong> Leave as{' '}
+                          <code
+                            className="font-mono px-1 rounded"
+                            style={{ background: 'hsl(var(--harbor-surface-2))' }}
+                          >
+                            t2.micro
+                          </code>{' '}
+                          (free!)
+                        </p>
+                      </div>
+                      <div
+                        className="p-2 rounded"
+                        style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+                      >
+                        <p>
+                          <strong>KeyPairName:</strong>{' '}
+                          <span
+                            className="font-medium"
+                            style={{ color: 'hsl(var(--harbor-success))' }}
+                          >
+                            Leave empty
+                          </span>
+                        </p>
+                        <p className="text-xs opacity-75 mt-1">
+                          You don't need SSH access - we'll use AWS's built-in browser terminal
+                        </p>
+                      </div>
+                      <div
+                        className="p-2 rounded"
+                        style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+                      >
+                        <p>
+                          <strong>All other settings:</strong> Leave as default
+                        </p>
+                      </div>
+                      <p className="pt-2">
+                        Click <strong>"Next"</strong> to continue
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 4: Review and Create */}
+                  <div
+                    className="mb-4 p-4 rounded-xl"
+                    style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <span
+                        className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                        style={{
+                          background: 'linear-gradient(135deg, #FF9900, #FF6600)',
+                          color: 'white',
+                        }}
+                      >
+                        4
+                      </span>
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        Review and create
+                      </span>
+                    </div>
+                    <div
+                      className="text-xs space-y-2"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      <p>
+                        • On the "Configure stack options" page: just click <strong>"Next"</strong>
+                      </p>
+                      <p>• On the "Review" page: scroll to the bottom</p>
+                      <div
+                        className="p-2 rounded flex items-start gap-2"
+                        style={{ background: 'hsl(var(--harbor-warning) / 0.1)' }}
+                      >
+                        <input type="checkbox" disabled className="mt-0.5" />
+                        <p>
+                          <strong>Check the box</strong> that says "I acknowledge that AWS
+                          CloudFormation might create IAM resources with custom names"
+                        </p>
+                      </div>
+                      <p>
+                        • Click <strong>"Submit"</strong> or <strong>"Create stack"</strong>
+                      </p>
+                      <p className="pt-2" style={{ color: 'hsl(var(--harbor-success))' }}>
+                        <strong>Wait 3-5 minutes</strong> for the server to start up. You'll see
+                        "CREATE_COMPLETE" when ready!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step 5: Get Your Relay Address (after deployment) */}
+                <div
+                  className="mb-4 p-4 rounded-xl"
+                  style={{
+                    background: 'hsl(var(--harbor-success) / 0.1)',
+                    border: '1px solid hsl(var(--harbor-success) / 0.2)',
+                  }}
+                >
+                  <div className="flex items-center gap-3 mb-3">
+                    <span
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                      style={{
+                        background: 'hsl(var(--harbor-success))',
+                        color: 'white',
+                      }}
+                    >
+                      5
+                    </span>
+                    <span
+                      className="text-sm font-medium"
+                      style={{ color: 'hsl(var(--harbor-success))' }}
+                    >
+                      Get your relay address (after 5 minutes)
+                    </span>
+                  </div>
+                  <div
+                    className="text-xs space-y-3"
+                    style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                  >
+                    <p>
+                      After deployment completes, your relay address is automatically saved to AWS
+                      Parameter Store.
+                    </p>
+
+                    <div
+                      className="p-3 rounded-lg"
+                      style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+                    >
+                      <p
+                        className="font-medium mb-2"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        To find your relay address:
+                      </p>
+                      <ol className="space-y-1 list-decimal list-inside">
+                        <li>
+                          Go to your CloudFormation stack's <strong>"Outputs"</strong> tab
+                        </li>
+                        <li>
+                          Click the link next to <strong>"Step2GetYourRelayAddress"</strong>
+                        </li>
+                        <li>
+                          Copy the <strong>"Value"</strong> field (starts with{' '}
+                          <code className="font-mono">/ip4/...</code>)
+                        </li>
+                      </ol>
+                    </div>
+
+                    <a
+                      href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                      style={{
+                        background: 'hsl(var(--harbor-success))',
+                        color: 'white',
+                      }}
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                        />
+                      </svg>
+                      Open Your CloudFormation Stack
+                    </a>
+
+                    <p className="pt-1">
+                      Once you have the address, paste it below and click{' '}
+                      <strong>"Add Relay"</strong>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Add Custom Relay */}
+                <div>
+                  <label
+                    className="text-xs font-medium block mb-2"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  >
+                    Add Your Custom Relay
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customRelayAddress}
+                      onChange={(e) => setCustomRelayAddress(e.target.value)}
+                      placeholder="/ip4/YOUR_IP/tcp/4001/p2p/YOUR_PEER_ID"
+                      className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
+                      style={{
+                        background: 'hsl(var(--harbor-surface-1))',
+                        border: '1px solid hsl(var(--harbor-border-subtle))',
+                        color: 'hsl(var(--harbor-text-primary))',
+                      }}
+                      disabled={isAddingRelay || !isRunning}
+                    />
+                    <button
+                      onClick={handleAddCustomRelay}
+                      disabled={isAddingRelay || !customRelayAddress.trim() || !isRunning}
+                      className="px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+                      style={{
+                        background:
+                          'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                        color: 'white',
+                      }}
+                    >
+                      {isAddingRelay ? 'Adding...' : 'Add Relay'}
+                    </button>
+                  </div>
+                  {!isRunning && (
+                    <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-warning))' }}>
+                      Start the network first to add a custom relay.
+                    </p>
+                  )}
+                  <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    Format: <code className="font-mono">/ip4/PUBLIC_IP/tcp/4001/p2p/PEER_ID</code>
+                  </p>
+                </div>
+
+                {/* Cost Info */}
+                <div
+                  className="mt-6 p-3 rounded-lg flex items-start gap-3"
+                  style={{ background: 'hsl(var(--harbor-success) / 0.1)' }}
+                >
+                  <svg
+                    className="w-5 h-5 flex-shrink-0 mt-0.5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    style={{ color: 'hsl(var(--harbor-success))' }}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                    <strong style={{ color: 'hsl(var(--harbor-success))' }}>
+                      Free for 12 months!
+                    </strong>{' '}
+                    AWS Free Tier includes 750 hours/month of t2.micro - enough to run one relay
+                    24/7. After the free tier: ~$9-12/month.
+                  </div>
+                </div>
+
+                {/* Cleanup Section */}
+                <div
+                  className="mt-4 pt-4 border-t"
+                  style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                      <strong>Need to delete your relay?</strong> Remove all resources to stop
+                      charges.
+                    </div>
+                    <a
+                      href="https://console.aws.amazon.com/cloudformation/home#/stacks?filteringStatus=active&filteringText=harbor-relay"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                      style={{
+                        background: 'hsl(var(--harbor-error) / 0.1)',
+                        color: 'hsl(var(--harbor-error))',
+                      }}
+                    >
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                        />
+                      </svg>
+                      Manage Stacks
+                    </a>
+                  </div>
+                  <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    Select your stack and click "Delete" to remove all resources.
+                  </p>
+                </div>
               </div>
-              <p
-                className="text-xs mt-2"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
-                Select your stack and click "Delete" to remove all resources.
-              </p>
-            </div>
-          </div>
-        )}
+            )}
           </div>
         </div>
       </div>

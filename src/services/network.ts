@@ -43,5 +43,9 @@ export async function connectToPeer(multiaddr: string): Promise<void> {
 
 /** Add a bootstrap node address */
 export async function addBootstrapNode(multiaddr: string): Promise<void> {
-  return invoke('add_bootstrap_node', { multiaddr });
+  return invoke<void>('add_bootstrap_node', { multiaddr });
+}
+
+export async function syncFeed(limit?: number): Promise<void> {
+  return invoke<void>('sync_feed', { limit });
 }

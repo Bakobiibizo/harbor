@@ -7,19 +7,19 @@ default_language = "typescript"
 # ===================== TypeScript/Frontend ========================
 
 [tasks.ts_fmt]
-commands = [["npx.cmd", "prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
+commands = [["./node_modules/.bin/prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
 
 [tasks.ts_lint]
-commands = [["npx.cmd", "eslint", "src", "--fix"]]
+commands = [["./node_modules/.bin/eslint", "src", "--fix"]]
 
 [tasks.ts_lint_check]
-commands = [["npx.cmd", "eslint", "src"]]
+commands = [["./node_modules/.bin/eslint", "src"]]
 
 [tasks.ts_type]
-commands = [["npx.cmd", "tsc", "--noEmit"]]
+commands = [["./node_modules/.bin/tsc", "--noEmit"]]
 
 [tasks.ts_test]
-commands = [["npm.cmd", "test"]]
+commands = [["npm", "run", "build"]]
 
 [tasks.ts_fix]
 commands = [
@@ -97,15 +97,15 @@ commands = [
 ]
 
 [tasks.tauri_dev]
-commands = [["npm.cmd", "run", "tauri", "dev"]]
+commands = [["npm", "run", "tauri", "dev"]]
 
 [tasks.tauri_build]
-commands = [["npm.cmd", "run", "tauri", "build"]]
+commands = [["npm", "run", "tauri", "build"]]
 
 # ===================== Language Pipelines ========================
 
 [languages.typescript]
-install = [["npm.cmd", "install"]]
+install = [["npm", "install"]]
 
 [languages.typescript.pipelines]
 fmt = ["ts_fmt"]

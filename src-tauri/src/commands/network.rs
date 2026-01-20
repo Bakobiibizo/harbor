@@ -2,6 +2,7 @@ use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::{
     ContactsService, ContentSyncService, IdentityService, MessagingService, PermissionsService,
+    PostsService,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -72,6 +73,7 @@ pub async fn bootstrap_network(network: State<'_, NetworkState>) -> Result<(), A
 }
 
 /// Start the P2P network (called after identity is unlocked)
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_network(
     app: AppHandle,
@@ -80,6 +82,7 @@ pub async fn start_network(
     messaging_service: State<'_, Arc<MessagingService>>,
     contacts_service: State<'_, Arc<ContactsService>>,
     permissions_service: State<'_, Arc<PermissionsService>>,
+    posts_service: State<'_, Arc<PostsService>>,
     content_sync_service: State<'_, Arc<ContentSyncService>>,
 ) -> Result<(), AppError> {
     // Check if identity is unlocked
@@ -133,6 +136,7 @@ pub async fn start_network(
     service.set_messaging_service((*messaging_service).clone());
     service.set_contacts_service((*contacts_service).clone());
     service.set_permissions_service((*permissions_service).clone());
+    service.set_posts_service((*posts_service).clone());
     service.set_content_sync_service((*content_sync_service).clone());
 
     // Store the handle
@@ -217,4 +221,14 @@ pub async fn add_bootstrap_node(
         .map_err(|e| AppError::Validation(format!("Invalid multiaddress: {}", e)))?;
 
     handle.add_bootstrap_node(addr).await
+}
+
+/// Trigger feed sync from connected peers
+#[tauri::command]
+pub async fn sync_feed(
+    network: State<'_, NetworkState>,
+    limit: Option<u32>,
+) -> Result<(), AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+    handle.sync_feed(limit.unwrap_or(50)).await
 }

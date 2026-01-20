@@ -132,7 +132,7 @@ export function FeedPage() {
     try {
       await refreshFeed();
       toast.success('Feed refreshed!');
-    } catch (error) {
+    } catch {
       toast.error('Failed to refresh feed');
     } finally {
       setIsRefreshing(false);
