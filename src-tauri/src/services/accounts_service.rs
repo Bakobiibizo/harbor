@@ -280,6 +280,7 @@ impl AccountsService {
 
         let conn = Connection::open(legacy_db_path).map_err(AppError::Database)?;
 
+        #[allow(clippy::type_complexity)]
         let result: rusqlite::Result<(String, String, Option<String>, Option<String>, i64)> = conn.query_row(
             "SELECT peer_id, display_name, bio, avatar_hash, created_at FROM local_identity WHERE id = 1",
             [],

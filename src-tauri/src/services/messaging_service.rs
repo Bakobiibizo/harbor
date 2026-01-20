@@ -216,6 +216,7 @@ impl MessagingService {
     }
 
     /// Process an incoming message from the network
+    #[allow(clippy::too_many_arguments)]
     pub fn process_incoming_message(
         &self,
         message_id: &str,
