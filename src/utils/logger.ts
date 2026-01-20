@@ -1,6 +1,6 @@
-type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-const LOG_PREFIX = "[Harbor]";
+const LOG_PREFIX = '[Harbor]';
 
 const isDev = import.meta.env.DEV;
 
@@ -11,13 +11,13 @@ function formatMessage(level: LogLevel, module: string, message: string): string
 
 function shouldLog(level: LogLevel): boolean {
   if (isDev) return true;
-  return level === "warn" || level === "error";
+  return level === 'warn' || level === 'error';
 }
 
 export const logger = {
   debug(module: string, message: string, data?: unknown): void {
-    if (!shouldLog("debug")) return;
-    const formatted = formatMessage("debug", module, message);
+    if (!shouldLog('debug')) return;
+    const formatted = formatMessage('debug', module, message);
     if (data !== undefined) {
       console.debug(formatted, data);
     } else {
@@ -26,8 +26,8 @@ export const logger = {
   },
 
   info(module: string, message: string, data?: unknown): void {
-    if (!shouldLog("info")) return;
-    const formatted = formatMessage("info", module, message);
+    if (!shouldLog('info')) return;
+    const formatted = formatMessage('info', module, message);
     if (data !== undefined) {
       console.info(formatted, data);
     } else {
@@ -36,8 +36,8 @@ export const logger = {
   },
 
   warn(module: string, message: string, data?: unknown): void {
-    if (!shouldLog("warn")) return;
-    const formatted = formatMessage("warn", module, message);
+    if (!shouldLog('warn')) return;
+    const formatted = formatMessage('warn', module, message);
     if (data !== undefined) {
       console.warn(formatted, data);
     } else {
@@ -46,8 +46,8 @@ export const logger = {
   },
 
   error(module: string, message: string, error?: unknown): void {
-    if (!shouldLog("error")) return;
-    const formatted = formatMessage("error", module, message);
+    if (!shouldLog('error')) return;
+    const formatted = formatMessage('error', module, message);
     if (error !== undefined) {
       console.error(formatted, error);
     } else {

@@ -142,9 +142,7 @@ export const useWallStore = create<WallState>((set) => ({
 
       // Update local state
       set((state) => ({
-        posts: state.posts.map((post) =>
-          post.postId === postId ? { ...post, content } : post,
-        ),
+        posts: state.posts.map((post) => (post.postId === postId ? { ...post, content } : post)),
         editingPostId: null,
       }));
     } catch (err) {
