@@ -1151,18 +1151,27 @@ impl NetworkService {
                         None
                     }
                 }) {
-                    // Add to Kademlia routing table
+                    // Add to Kademlia routing table, but only if there is a non-P2p component
                     let addr_without_peer: Multiaddr = address
                         .iter()
                         .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
                         .collect();
-                    self.swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&relay_peer_id, addr_without_peer);
-                    info!("Added relay server: {} at {}", relay_peer_id, address);
 
-                    // Try to dial the relay server
+                    if addr_without_peer.is_empty() {
+                        // No transport components (e.g. address is just /p2p/<peer_id>), so skip Kademlia
+                        info!(
+                            "Relay server {} has no non-P2p components in address {}; skipping Kademlia add_address",
+                            relay_peer_id, address
+                        );
+                    } else {
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&relay_peer_id, addr_without_peer);
+                        info!("Added relay server: {} at {}", relay_peer_id, address);
+                    }
+
+                    // Try to dial the relay server using the full multiaddr (including /p2p)
                     match self.swarm.dial(address.clone()) {
                         Ok(_) => {
                             info!("Dialing relay server: {}", address);
