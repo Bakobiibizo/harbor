@@ -1,3 +1,4 @@
+export * from './accounts';
 export * from './identity';
 export * from './network';
 export * from './contacts';
