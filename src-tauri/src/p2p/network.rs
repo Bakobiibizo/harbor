@@ -12,9 +12,11 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 /// Public relay servers that support libp2p relay v2
-/// These are IPFS bootstrap nodes that run relay servers
+/// Harbor's own relay is listed first for priority, followed by IPFS bootstrap nodes
 const PUBLIC_RELAYS: &[&str] = &[
-    // IPFS/libp2p bootstrap nodes - globally distributed
+    // Harbor community relay (primary)
+    "/ip4/154.5.126.219/tcp/4001/p2p/12D3KooWBNWtWMxJCeP6LDFK5qzhSCkvF34kV1kCEGAobjAnvYSN",
+    // IPFS bootstrap relays (fallback)
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",

@@ -52,30 +52,6 @@ Parameters:
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
 
-Mappings:
-  # Amazon Linux 2023 AMIs by region (ARM64 for better free tier value)
-  RegionAMI:
-    us-east-1:
-      AMI: ami-0c101f26f147fa7fd
-    us-east-2:
-      AMI: ami-0900fe555666598a2
-    us-west-1:
-      AMI: ami-0ce2cb35386fc22e9
-    us-west-2:
-      AMI: ami-008fe2fc65df48dac
-    eu-west-1:
-      AMI: ami-0905a3c97561e0b69
-    eu-west-2:
-      AMI: ami-0e5f882be1900e43b
-    eu-central-1:
-      AMI: ami-0faab6bdbac9486fb
-    ap-northeast-1:
-      AMI: ami-0d52744d6551d851e
-    ap-southeast-1:
-      AMI: ami-0fa377108253bf620
-    ap-southeast-2:
-      AMI: ami-04f5097681773b989
-
 Resources:
   # VPC for the relay server
   RelayVPC:
@@ -236,7 +212,8 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AMI]
+      # Use SSM Parameter to always get the latest Amazon Linux 2023 AMI
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
       KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
       IamInstanceProfile: !Ref RelayInstanceProfile
       NetworkInterfaces:
@@ -254,133 +231,147 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+          echo "=== Starting Harbor Relay Setup ==="
+          echo "Region: ${AWS::Region}"
+          echo "RelayPort: ${RelayPort}"
 
           # Update system
+          echo "Updating system packages..."
           yum update -y
 
-          # Install Docker
-          yum install -y docker
-          systemctl enable docker
-          systemctl start docker
+          # Install Rust
+          echo "Installing Rust..."
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source /root/.cargo/env
 
-          # Create relay configuration directory
+          # Install build dependencies
+          echo "Installing build dependencies..."
+          yum install -y gcc gcc-c++ make git
+
+          # Create relay directory
+          echo "Creating /opt/relay directory..."
           mkdir -p /opt/relay
 
-          # Create a simple relay configuration
-          cat > /opt/relay/config.json << 'EOF'
-          {
-            "Network": {
-              "ListenAddrs": [
-                "/ip4/0.0.0.0/tcp/${RelayPort}",
-                "/ip4/0.0.0.0/udp/${RelayPort}/quic-v1"
-              ]
-            },
-            "RelayService": {
-              "Enabled": true,
-              "Limit": {
-                "Duration": 120,
-                "Data": 131072
-              },
-              "ReservationTTL": 3600,
-              "MaxReservations": ${MaxReservations},
-              "MaxCircuits": ${MaxCircuits},
-              "BufferSize": 4096,
-              "MaxReservationsPerPeer": 4,
-              "MaxReservationsPerIP": 8,
-              "MaxReservationsPerASN": 32
-            },
-            "ACL": {
-              "AllowAll": true
-            }
-          }
-          EOF
+          # Get public IP using IMDSv2 (required on newer Amazon Linux AMIs)
+          echo "Getting public IP using IMDSv2..."
+          IMDS_TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+          PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null)
 
-          # Create systemd service for the relay
-          cat > /etc/systemd/system/libp2p-relay.service << 'EOF'
+          # Fallback to external IP service if IMDS fails
+          if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -q "<?xml"; then
+            echo "IMDSv2 failed, trying external IP service..."
+            PUBLIC_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\n')
+          fi
+
+          echo "Public IP: $PUBLIC_IP"
+
+          # Clone Harbor repo and build relay server
+          echo "Cloning Harbor repository..."
+          cd /opt/relay
+          git clone --depth 1 https://github.com/bakobiibizo/harbor.git
+
+          echo "Building relay server (this may take a few minutes)..."
+          cd /opt/relay/harbor/relay-server
+          source /root/.cargo/env
+          cargo build --release
+
+          # Copy binary to /usr/local/bin
+          cp /opt/relay/harbor/relay-server/target/release/harbor-relay /usr/local/bin/
+          chmod +x /usr/local/bin/harbor-relay
+
+          # Create systemd service
+          echo "Creating systemd service..."
+          cat > /etc/systemd/system/libp2p-relay.service << SERVICEEOF
           [Unit]
-          Description=libp2p Relay Server for Harbor
-          After=docker.service
-          Requires=docker.service
+          Description=Harbor libp2p Relay Server
+          After=network.target
 
           [Service]
           Type=simple
           Restart=always
           RestartSec=10
-          ExecStartPre=-/usr/bin/docker stop harbor-relay
-          ExecStartPre=-/usr/bin/docker rm harbor-relay
-          ExecStartPre=/usr/bin/docker pull libp2p/go-libp2p-relay-daemon:latest
-          ExecStart=/usr/bin/docker run --rm --name harbor-relay \
-            -p ${RelayPort}:${RelayPort}/tcp \
-            -p ${RelayPort}:${RelayPort}/udp \
-            -v /opt/relay:/config:ro \
-            libp2p/go-libp2p-relay-daemon:latest \
-            -config /config/config.json
-          ExecStop=/usr/bin/docker stop harbor-relay
+          Environment=RUST_LOG=info
+          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --max-reservations ${MaxReservations} --max-circuits-per-peer ${MaxCircuits}
+          StandardOutput=journal
+          StandardError=journal
 
           [Install]
           WantedBy=multi-user.target
-          EOF
+          SERVICEEOF
 
           # Enable and start the relay service
+          echo "Starting relay service..."
           systemctl daemon-reload
           systemctl enable libp2p-relay
           systemctl start libp2p-relay
 
-          # Create a script to get the relay's peer ID and save it
-          cat > /opt/relay/get-peer-id.sh << 'SCRIPT'
-          #!/bin/bash
-          # Wait for the relay to start and get peer ID
+          # Wait for the relay to fully start
+          echo "Waiting for relay to start (30 seconds)..."
+          sleep 30
+
+          # Check relay service status
+          echo "Checking relay service status..."
+          systemctl status libp2p-relay --no-pager || true
+
+          # Get the peer ID from journalctl logs
+          # The Rust relay server logs "Local Peer ID: 12D3KooW..."
+          echo "Getting peer ID from logs..."
+          PEER_ID=""
           for i in {1..30}; do
-            PEER_ID=$(docker logs harbor-relay 2>&1 | grep -oP 'Peer ID: \K[a-zA-Z0-9]+' | head -1)
+            echo "Attempt $i to get peer ID..."
+            PEER_ID=$(journalctl -u libp2p-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
             if [ -n "$PEER_ID" ]; then
+              echo "Found Peer ID: $PEER_ID"
               echo "$PEER_ID" > /opt/relay/peer-id.txt
-              echo "Peer ID: $PEER_ID"
-              exit 0
+              break
             fi
             sleep 2
           done
-          echo "Failed to get peer ID after 60 seconds"
-          exit 1
-          SCRIPT
-          chmod +x /opt/relay/get-peer-id.sh
 
-          # Create a script that outputs the full relay address
-          cat > /opt/relay/get-relay-address.sh << 'SCRIPT'
-          #!/bin/bash
-          PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-          PEER_ID=$(cat /opt/relay/peer-id.txt 2>/dev/null)
-          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
-            echo "/ip4/$PUBLIC_IP/tcp/4001/p2p/$PEER_ID"
-          else
-            echo "Relay address not yet available. Run: /opt/relay/get-peer-id.sh"
+          if [ -z "$PEER_ID" ]; then
+            echo "WARNING: Could not extract peer ID from logs"
+            echo "Journal logs:"
+            journalctl -u libp2p-relay --no-pager | tail -50
           fi
-          SCRIPT
-          chmod +x /opt/relay/get-relay-address.sh
 
-          # Wait for relay to start and save peer ID
-          sleep 15
-          /opt/relay/get-peer-id.sh
+          # PUBLIC_IP was already retrieved earlier
 
-          # Get the full relay address
-          RELAY_ADDRESS=$(/opt/relay/get-relay-address.sh)
+          # Build relay address
+          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
+            RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/${RelayPort}/p2p/$PEER_ID"
+            echo "Relay address: $RELAY_ADDRESS"
 
-          # Write the relay address to SSM Parameter Store so users can easily find it
-          aws ssm put-parameter \
-            --name "/harbor/relay-address" \
-            --value "$RELAY_ADDRESS" \
-            --type String \
-            --overwrite \
-            --region ${AWS::Region}
+            # Write to SSM Parameter Store
+            echo "Writing to SSM Parameter Store..."
+            aws ssm put-parameter \
+              --name "/harbor/relay-address" \
+              --value "$RELAY_ADDRESS" \
+              --type String \
+              --overwrite \
+              --region ${AWS::Region}
 
-          # Log startup complete with the full relay address
-          echo "Harbor libp2p relay server started on port ${RelayPort}"
-          echo "=============================================="
-          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
-          echo "$RELAY_ADDRESS"
-          echo "=============================================="
-          echo ""
-          echo "This address has been saved to AWS Parameter Store."
-          echo "Find it at: AWS Console > Systems Manager > Parameter Store > /harbor/relay-address"
+            echo "=== SUCCESS ==="
+            echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+            echo "$RELAY_ADDRESS"
+          else
+            echo "=== PARTIAL FAILURE ==="
+            echo "Could not build complete relay address"
+            echo "Public IP: $PUBLIC_IP"
+            echo "Peer ID: $PEER_ID"
+
+            # Write error to SSM so user knows something went wrong
+            aws ssm put-parameter \
+              --name "/harbor/relay-address" \
+              --value "ERROR: Setup incomplete. Check /var/log/user-data.log on EC2 instance" \
+              --type String \
+              --overwrite \
+              --region ${AWS::Region}
+          fi
+
+          echo "=== Setup Complete ==="
+          echo "Log file: /var/log/user-data.log"
 
       Tags:
         - Key: Name
