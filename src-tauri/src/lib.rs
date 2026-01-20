@@ -196,9 +196,16 @@ pub fn run() {
             commands::connect_to_peer,
             commands::sync_feed,
             commands::add_bootstrap_node,
+            commands::get_shareable_addresses,
             commands::add_relay_server,
             commands::connect_to_public_relays,
             commands::get_nat_status,
+            // Bootstrap configuration commands
+            commands::get_bootstrap_nodes,
+            commands::add_bootstrap_node_config,
+            commands::update_bootstrap_node,
+            commands::remove_bootstrap_node,
+            commands::get_enabled_bootstrap_addresses,
             // Contact commands
             commands::get_contacts,
             commands::get_active_contacts,
@@ -242,6 +249,12 @@ pub fn run() {
             commands::generate_rss_feed,
             commands::get_peer_rss_feed,
             commands::get_rss_feed_url,
+            // Like commands
+            commands::like_post,
+            commands::unlike_post,
+            commands::get_post_likes,
+            commands::get_posts_likes_batch,
+            commands::get_my_liked_posts,
             // Calling commands
             commands::start_call,
             commands::answer_call,

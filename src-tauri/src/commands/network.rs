@@ -223,6 +223,47 @@ pub async fn add_bootstrap_node(
     handle.add_bootstrap_node(addr).await
 }
 
+/// Get shareable addresses for remote peers to connect to us
+/// Returns external addresses discovered via AutoNAT or relay addresses if behind NAT
+#[tauri::command]
+pub async fn get_shareable_addresses(
+    network: State<'_, NetworkState>,
+    identity_service: State<'_, Arc<IdentityService>>,
+) -> Result<Vec<String>, AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+    let stats = handle.get_stats().await?;
+
+    // Get our peer ID
+    let peer_id = if let Ok(Some(identity)) = identity_service.get_identity_info() {
+        identity.peer_id
+    } else {
+        return Err(AppError::NotFound("Identity not found".to_string()));
+    };
+
+    let mut addresses = Vec::new();
+
+    // First, prefer external addresses (direct connectivity)
+    for addr in &stats.external_addresses {
+        if !addr.contains("127.0.0.1") && !addr.contains("::1") {
+            // Ensure address includes peer ID
+            if addr.contains("/p2p/") {
+                addresses.push(addr.clone());
+            } else {
+                addresses.push(format!("{}/p2p/{}", addr, peer_id));
+            }
+        }
+    }
+
+    // If no external addresses, use relay addresses
+    if addresses.is_empty() {
+        for addr in &stats.relay_addresses {
+            addresses.push(addr.clone());
+        }
+    }
+
+    Ok(addresses)
+}
+
 /// Add a custom relay server address
 #[tauri::command]
 pub async fn add_relay_server(
