@@ -5,13 +5,24 @@ import { WallIcon, EllipsisIcon } from '../components/icons';
 
 export function WallPage() {
   const { state } = useIdentityStore();
-  const { posts, isLoading, loadPosts, createPost, deletePost, likePost } = useWallStore();
+  const {
+    posts,
+    isLoading,
+    loadPosts,
+    createPost,
+    updatePost,
+    deletePost,
+    likePost,
+    editingPostId,
+    setEditingPost,
+  } = useWallStore();
   const [newPost, setNewPost] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<
     { type: 'image' | 'video'; url: string; name: string }[]
   >([]);
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaTypeRef = useRef<'image' | 'video'>('image');
 
@@ -126,6 +137,33 @@ export function WallPage() {
     } catch (err) {
       console.error('Failed to delete post:', err);
       toast.error('Failed to delete post');
+    }
+  };
+
+  const handleStartEdit = (postId: string, content: string) => {
+    setEditContent(content);
+    setEditingPost(postId);
+    setShowPostMenu(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditContent('');
+    setEditingPost(null);
+  };
+
+  const handleSaveEdit = async (postId: string) => {
+    if (!editContent.trim()) {
+      toast.error('Post cannot be empty');
+      return;
+    }
+
+    try {
+      await updatePost(postId, editContent.trim());
+      setEditContent('');
+      toast.success('Post updated!');
+    } catch (err) {
+      console.error('Failed to update post:', err);
+      toast.error('Failed to update post');
     }
   };
 
@@ -440,10 +478,7 @@ export function WallPage() {
                         }}
                       >
                         <button
-                          onClick={() => {
-                            toast('Edit feature coming soon!');
-                            setShowPostMenu(null);
-                          }}
+                          onClick={() => handleStartEdit(post.postId, post.content)}
                           className="w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-white/5"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
@@ -463,12 +498,51 @@ export function WallPage() {
 
                 {/* Post content */}
                 <div className="px-5 py-5">
-                  <p
-                    className="text-base leading-relaxed whitespace-pre-wrap"
-                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                  >
-                    {post.content}
-                  </p>
+                  {editingPostId === post.postId ? (
+                    <div className="space-y-3">
+                      <textarea
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        rows={4}
+                        className="w-full resize-none text-base leading-relaxed p-3 rounded-lg"
+                        style={{
+                          background: 'hsl(var(--harbor-surface-1))',
+                          border: '1px solid hsl(var(--harbor-border-subtle))',
+                          outline: 'none',
+                          color: 'hsl(var(--harbor-text-primary))',
+                        }}
+                        autoFocus
+                      />
+                      <div className="flex items-center gap-2 justify-end">
+                        <button
+                          onClick={handleCancelEdit}
+                          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
+                          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleSaveEdit(post.postId)}
+                          className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+                          style={{
+                            background:
+                              'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                            color: 'white',
+                            boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
+                          }}
+                        >
+                          Save changes
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p
+                      className="text-base leading-relaxed whitespace-pre-wrap"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      {post.content}
+                    </p>
+                  )}
 
                   {/* Post media */}
                   {post.media && post.media.length > 0 && (
