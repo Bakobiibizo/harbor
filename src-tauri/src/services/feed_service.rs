@@ -123,11 +123,11 @@ impl FeedService {
             && !self
                 .permissions_service
                 .we_have_capability(author_peer_id, Capability::WallRead)?
-            {
-                return Err(AppError::PermissionDenied(
-                    "No permission to view this wall".to_string(),
-                ));
-            }
+        {
+            return Err(AppError::PermissionDenied(
+                "No permission to view this wall".to_string(),
+            ));
+        }
 
         let posts =
             PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
