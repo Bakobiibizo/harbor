@@ -23,6 +23,7 @@ impl Capability {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "chat" => Some(Capability::Chat),
@@ -112,6 +113,7 @@ impl PermissionsRepository {
     // ============================================================
 
     /// Record a permission event (request, grant, or revoke)
+    #[allow(clippy::too_many_arguments)]
     pub fn record_event(
         db: &Database,
         event_id: &str,

@@ -216,6 +216,7 @@ impl MessagingService {
     }
 
     /// Process an incoming message from the network
+    #[allow(clippy::too_many_arguments)]
     pub fn process_incoming_message(
         &self,
         message_id: &str,
@@ -638,7 +639,7 @@ mod tests {
     }
 
     fn add_peer_contact_with_permission(
-        identity_service: &IdentityService,
+        _identity_service: &IdentityService,
         contacts_service: &ContactsService,
         permissions_service: &PermissionsService,
     ) -> (String, Vec<u8>, Vec<u8>) {
