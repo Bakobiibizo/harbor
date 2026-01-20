@@ -10,6 +10,7 @@ pub mod messaging;
 pub mod network;
 pub mod permissions;
 pub mod posts;
+pub mod rss;
 
 pub use accounts::*;
 pub use bootstrap::*;
@@ -23,3 +24,4 @@ pub use messaging::*;
 pub use network::*;
 pub use permissions::*;
 pub use posts::*;
+pub use rss::*;

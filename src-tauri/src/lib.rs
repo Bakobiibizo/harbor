@@ -245,6 +245,10 @@ pub fn run() {
             // Feed commands
             commands::get_feed,
             commands::get_wall,
+            // RSS commands
+            commands::generate_rss_feed,
+            commands::get_peer_rss_feed,
+            commands::get_rss_feed_url,
             // Like commands
             commands::like_post,
             commands::unlike_post,
