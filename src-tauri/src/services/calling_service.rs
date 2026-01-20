@@ -336,6 +336,7 @@ impl CallingService {
     }
 
     /// Process an incoming ICE candidate
+    #[allow(clippy::too_many_arguments)]
     pub fn process_incoming_ice(
         &self,
         call_id: &str,

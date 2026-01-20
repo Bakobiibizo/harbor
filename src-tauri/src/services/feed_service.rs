@@ -119,35 +119,23 @@ impl FeedService {
             .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Check permission if not our own wall
-        if author_peer_id != identity.peer_id {
-            if !self
+        if author_peer_id != identity.peer_id
+            && !self
                 .permissions_service
                 .we_have_capability(author_peer_id, Capability::WallRead)?
-            {
-                return Err(AppError::PermissionDenied(
-                    "No permission to view this wall".to_string(),
-                ));
-            }
+        {
+            return Err(AppError::PermissionDenied(
+                "No permission to view this wall".to_string(),
+            ));
         }
 
         let posts =
             PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
                 .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        // Filter by visibility
-        let visible_posts: Vec<Post> = posts
-            .into_iter()
-            .filter(|post| {
-                if post.author_peer_id == identity.peer_id {
-                    true // Our own posts
-                } else if post.visibility == PostVisibility::Public {
-                    true // Public posts
-                } else {
-                    // Contacts-only posts require permission (verified above)
-                    true
-                }
-            })
-            .collect();
+        // All posts are visible since we've already verified permission
+        // for contacts-only posts above
+        let visible_posts: Vec<Post> = posts;
 
         let feed_items: Vec<FeedItem> = visible_posts
             .into_iter()

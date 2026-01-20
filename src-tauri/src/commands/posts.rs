@@ -163,6 +163,7 @@ pub async fn get_posts_by_author(
 
 /// Add media to a post
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn add_post_media(
     posts_service: State<'_, Arc<PostsService>>,
     post_id: String,
