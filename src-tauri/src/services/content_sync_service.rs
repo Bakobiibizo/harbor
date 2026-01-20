@@ -41,6 +41,16 @@ pub struct OutgoingManifestResponse {
     pub signature: Vec<u8>,
 }
 
+/// A request to fetch a specific post
+#[derive(Debug, Clone)]
+pub struct OutgoingFetchRequest {
+    pub requester_peer_id: String,
+    pub post_id: String,
+    pub include_media: bool,
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
+}
+
 impl ContentSyncService {
     /// Create a new content sync service
     pub fn new(
@@ -83,6 +93,35 @@ impl ContentSyncService {
             requester_peer_id: identity.peer_id,
             cursor,
             limit,
+            timestamp,
+            signature,
+        })
+    }
+
+    /// Create a fetch request to send to a peer
+    pub fn create_fetch_request(
+        &self,
+        post_id: String,
+        include_media: bool,
+    ) -> Result<OutgoingFetchRequest> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        let timestamp = chrono::Utc::now().timestamp();
+
+        // Sign the fetch request parameters
+        let sign_data = format!(
+            "fetch:{}:{}:{}:{}",
+            identity.peer_id, post_id, include_media, timestamp
+        );
+        let signature = self.identity_service.sign_raw(sign_data.as_bytes())?;
+
+        Ok(OutgoingFetchRequest {
+            requester_peer_id: identity.peer_id,
+            post_id,
+            include_media,
             timestamp,
             signature,
         })

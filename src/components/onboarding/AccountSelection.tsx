@@ -32,10 +32,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
   };
 
   const getInitials = (name: string) => {
-    const parts = name
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+    const parts = name.trim().split(/\s+/).filter(Boolean);
 
     if (parts.length === 0) return '?';
 

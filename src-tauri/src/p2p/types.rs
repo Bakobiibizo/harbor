@@ -129,6 +129,10 @@ pub enum NetworkCommand {
     AddBootstrapNode { address: Multiaddr },
     /// Bootstrap the DHT
     Bootstrap,
+    /// Add a custom relay server address
+    AddRelayServer { address: Multiaddr },
+    /// Connect to public relay servers
+    ConnectToPublicRelays,
     /// Request content manifest from a peer
     RequestContentManifest {
         peer_id: PeerId,
