@@ -133,8 +133,7 @@ impl FeedService {
             PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
                 .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        // All posts are visible since we've already verified permission
-        // for contacts-only posts above
+        // All posts are visible (permission was verified above)
         let visible_posts: Vec<Post> = posts;
 
         let feed_items: Vec<FeedItem> = visible_posts

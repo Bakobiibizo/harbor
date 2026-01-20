@@ -1,6 +1,9 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
-use crate::services::{ContactsService, IdentityService, MessagingService, PermissionsService};
+use crate::services::{
+    ContactsService, ContentSyncService, IdentityService, MessagingService, PermissionsService,
+    PostsService,
+};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
@@ -70,6 +73,7 @@ pub async fn bootstrap_network(network: State<'_, NetworkState>) -> Result<(), A
 }
 
 /// Start the P2P network (called after identity is unlocked)
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_network(
     app: AppHandle,
@@ -78,6 +82,8 @@ pub async fn start_network(
     messaging_service: State<'_, Arc<MessagingService>>,
     contacts_service: State<'_, Arc<ContactsService>>,
     permissions_service: State<'_, Arc<PermissionsService>>,
+    posts_service: State<'_, Arc<PostsService>>,
+    content_sync_service: State<'_, Arc<ContentSyncService>>,
 ) -> Result<(), AppError> {
     // Check if identity is unlocked
     if !identity_service.is_unlocked() {
@@ -126,10 +132,12 @@ pub async fn start_network(
     let identity_arc: Arc<IdentityService> = (*identity_service).clone();
     let (mut service, handle, mut event_rx) = NetworkService::new(config, identity_arc, keypair)?;
 
-    // Inject services for message processing, contact storage, and permissions
+    // Inject services for message processing, contact storage, permissions, and content sync
     service.set_messaging_service((*messaging_service).clone());
     service.set_contacts_service((*contacts_service).clone());
     service.set_permissions_service((*permissions_service).clone());
+    service.set_posts_service((*posts_service).clone());
+    service.set_content_sync_service((*content_sync_service).clone());
 
     // Store the handle
     network.set_handle(handle).await;
@@ -213,4 +221,46 @@ pub async fn add_bootstrap_node(
         .map_err(|e| AppError::Validation(format!("Invalid multiaddress: {}", e)))?;
 
     handle.add_bootstrap_node(addr).await
+}
+
+/// Add a custom relay server address
+#[tauri::command]
+pub async fn add_relay_server(
+    network: State<'_, NetworkState>,
+    multiaddr: String,
+) -> Result<(), AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+
+    let addr: libp2p::Multiaddr = multiaddr
+        .parse()
+        .map_err(|e| AppError::Validation(format!("Invalid multiaddress: {}", e)))?;
+
+    handle.add_relay_server(addr).await
+}
+
+/// Connect to public relay servers for NAT traversal
+#[tauri::command]
+pub async fn connect_to_public_relays(network: State<'_, NetworkState>) -> Result<(), AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+    handle.connect_to_public_relays().await
+}
+
+/// Get detailed NAT status from network stats
+#[tauri::command]
+pub async fn get_nat_status(
+    network: State<'_, NetworkState>,
+) -> Result<crate::p2p::NatStatus, AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+    let stats = handle.get_stats().await?;
+    Ok(stats.nat_status)
+}
+
+/// Trigger feed sync from connected peers
+#[tauri::command]
+pub async fn sync_feed(
+    network: State<'_, NetworkState>,
+    limit: Option<u32>,
+) -> Result<(), AppError> {
+    let handle: NetworkHandle = network.get_handle().await?;
+    handle.sync_feed(limit.unwrap_or(50)).await
 }

@@ -8,7 +8,7 @@ interface IdentityStore {
 
   // Actions
   initialize: () => Promise<void>;
-  createIdentity: (request: CreateIdentityRequest) => Promise<void>;
+  createIdentity: (request: CreateIdentityRequest) => Promise<import('../types').IdentityInfo>;
   unlock: (passphrase: string) => Promise<void>;
   lock: () => Promise<void>;
   updateDisplayName: (displayName: string) => Promise<void>;
@@ -57,6 +57,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       set({ error: null });
       const identity = await identityService.createIdentity(request);
       set({ state: { status: 'unlocked', identity } });
+      return identity;
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
       throw err;

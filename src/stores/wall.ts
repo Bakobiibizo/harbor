@@ -21,6 +21,7 @@ interface WallState {
   posts: WallPost[];
   isLoading: boolean;
   error: string | null;
+  editingPostId: string | null;
 
   // Actions
   loadPosts: () => Promise<void>;
@@ -28,8 +29,10 @@ interface WallState {
     content: string,
     media?: { type: 'image' | 'video'; url: string; name?: string }[],
   ) => Promise<void>;
+  updatePost: (postId: string, content: string) => Promise<void>;
   deletePost: (postId: string) => Promise<void>;
   likePost: (postId: string) => void; // Local-only for now (likes not in backend schema)
+  setEditingPost: (postId: string | null) => void;
 }
 
 /** Convert backend Post to WallPost */
@@ -56,6 +59,7 @@ export const useWallStore = create<WallState>((set) => ({
   posts: [],
   isLoading: false,
   error: null,
+  editingPostId: null,
 
   loadPosts: async () => {
     set({ isLoading: true, error: null });
@@ -132,6 +136,23 @@ export const useWallStore = create<WallState>((set) => ({
     }
   },
 
+  updatePost: async (postId: string, content: string) => {
+    try {
+      await postsService.updatePost(postId, content);
+
+      // Update local state
+      set((state) => ({
+        posts: state.posts.map((post) =>
+          post.postId === postId ? { ...post, content } : post,
+        ),
+        editingPostId: null,
+      }));
+    } catch (err) {
+      console.error('Failed to update post:', err);
+      throw err;
+    }
+  },
+
   deletePost: async (postId: string) => {
     try {
       await postsService.deletePost(postId);
@@ -144,6 +165,10 @@ export const useWallStore = create<WallState>((set) => ({
       console.error('Failed to delete post:', err);
       throw err;
     }
+  },
+
+  setEditingPost: (postId: string | null) => {
+    set({ editingPostId: postId });
   },
 
   likePost: (postId: string) => {

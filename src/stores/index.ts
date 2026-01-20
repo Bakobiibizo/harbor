@@ -1,3 +1,4 @@
+export { useAccountsStore } from './accounts';
 export { useIdentityStore } from './identity';
 export { useNetworkStore } from './network';
 export { useMessagingStore } from './messaging';

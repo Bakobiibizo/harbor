@@ -1,10 +1,16 @@
 import { useState, type FormEvent } from 'react';
 import { Button, Input } from '../common';
-import { useIdentityStore } from '../../stores';
-import { HarborIcon, UserIcon, LockIcon, ShieldIcon } from '../icons';
+import { useIdentityStore, useAccountsStore } from '../../stores';
+import { HarborIcon, UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '../icons';
+import { accountsService } from '../../services';
 
-export function CreateIdentity() {
+interface CreateIdentityProps {
+  onBack?: () => void;
+}
+
+export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const { createIdentity, error, clearError } = useIdentityStore();
+  const { loadAccounts } = useAccountsStore();
 
   const [displayName, setDisplayName] = useState('');
   const [passphrase, setPassphrase] = useState('');
@@ -40,11 +46,26 @@ export function CreateIdentity() {
 
     setLoading(true);
     try {
-      await createIdentity({
+      const identity = await createIdentity({
         displayName: displayName.trim(),
         passphrase,
         bio: bio.trim() || undefined,
       });
+
+      // Ensure the new account is reflected in the accounts store
+      try {
+        await accountsService.listAccounts().then(async (accounts) => {
+          const exists = accounts.some((a) => a.peerId === identity.peerId);
+
+          // In the normal case, the backend now returns the new account.
+          // When it's present, refresh the in-memory accounts store.
+          if (exists) {
+            await loadAccounts();
+          }
+        });
+      } catch {
+        // Non-critical, accounts list may not be set up yet
+      }
     } catch {
       // Error is handled by store
     } finally {
@@ -201,6 +222,18 @@ export function CreateIdentity() {
                 Harbor
               </span>
             </div>
+
+            {/* Back button (when coming from account selection) */}
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="flex items-center gap-2 mb-4 text-sm transition-colors duration-200"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                <ChevronRightIcon className="w-4 h-4 rotate-180" />
+                Back to accounts
+              </button>
+            )}
 
             {/* Step indicator */}
             <div className="flex items-center gap-3 mb-8">
