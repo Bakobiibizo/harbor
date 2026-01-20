@@ -640,8 +640,9 @@ impl NetworkService {
                 let _ = self.swarm.behaviour_mut().content_sync.send_response(
                     channel,
                     ContentSyncResponse::Error {
-                        error: "FetchPost endpoint is not yet available. Use manifest sync instead."
-                            .to_string(),
+                        error:
+                            "FetchPost endpoint is not yet available. Use manifest sync instead."
+                                .to_string(),
                     },
                 );
             }
