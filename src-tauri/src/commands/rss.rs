@@ -52,11 +52,10 @@ pub async fn generate_rss_feed(
         .get_identity()?
         .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
 
-    let config = config.unwrap_or_else(|| {
-        let mut c = RssFeedConfig::default();
-        c.base_url = format!("harbor://peer/{}", identity.peer_id);
-        c.title = format!("{}'s Wall", identity.display_name);
-        c
+    let config = config.unwrap_or_else(|| RssFeedConfig {
+        base_url: format!("harbor://peer/{}", identity.peer_id),
+        title: format!("{}'s Wall", identity.display_name),
+        ..Default::default()
     });
 
     // Get public posts

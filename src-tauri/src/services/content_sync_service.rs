@@ -255,6 +255,7 @@ impl ContentSyncService {
     }
 
     /// Store a post received from a peer
+    #[allow(clippy::too_many_arguments)]
     pub fn store_remote_post(
         &self,
         post_id: &str,

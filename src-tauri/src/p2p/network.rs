@@ -466,11 +466,14 @@ impl NetworkService {
                 debug!("Kademlia routing updated for peer: {}", peer);
             }
 
-            ChatBehaviourEvent::Ping(ping::Event { peer, result, .. }) => {
-                if let Ok(rtt) = result {
-                    debug!("Ping to {} succeeded: {:?}", peer, rtt);
-                }
+            ChatBehaviourEvent::Ping(ping::Event {
+                peer,
+                result: Ok(rtt),
+                ..
+            }) => {
+                debug!("Ping to {} succeeded: {:?}", peer, rtt);
             }
+            ChatBehaviourEvent::Ping(_) => {}
 
             ChatBehaviourEvent::IdentityExchange(request_response::Event::Message {
                 peer,
@@ -855,10 +858,10 @@ impl NetworkService {
                     }
 
                     // Emit event to notify frontend
-                    let _ = self.event_tx.send(NetworkEvent::ContactAdded {
+                    drop(self.event_tx.send(NetworkEvent::ContactAdded {
                         peer_id: response.peer_id.clone(),
                         display_name: response.display_name.clone(),
-                    });
+                    }));
                 }
                 Err(e) => {
                     warn!("Failed to add contact: {}", e);
