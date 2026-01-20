@@ -1,4 +1,105 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ErrorCode {
+    DatabaseError,
+    DatabaseConnection,
+    DatabaseMigration,
+    CryptoError,
+    CryptoKeyGeneration,
+    CryptoEncryption,
+    CryptoDecryption,
+    IdentityError,
+    IdentityNotFound,
+    IdentityLocked,
+    IdentityInvalidPassphrase,
+    SerializationError,
+    IoError,
+    InvalidData,
+    NotFound,
+    AlreadyExists,
+    PermissionDenied,
+    Unauthorized,
+    ValidationError,
+    NetworkError,
+    NetworkConnectionFailed,
+    NetworkPeerUnreachable,
+    NetworkTimeout,
+    InternalError,
+}
+
+impl ErrorCode {
+    pub fn user_message(&self) -> &'static str {
+        match self {
+            ErrorCode::DatabaseError => "A database error occurred",
+            ErrorCode::DatabaseConnection => "Could not connect to the database",
+            ErrorCode::DatabaseMigration => "Database migration failed",
+            ErrorCode::CryptoError => "A cryptographic operation failed",
+            ErrorCode::CryptoKeyGeneration => "Failed to generate encryption keys",
+            ErrorCode::CryptoEncryption => "Failed to encrypt data",
+            ErrorCode::CryptoDecryption => "Failed to decrypt data",
+            ErrorCode::IdentityError => "An identity error occurred",
+            ErrorCode::IdentityNotFound => "No identity found. Please create one first",
+            ErrorCode::IdentityLocked => "Identity is locked. Please unlock it first",
+            ErrorCode::IdentityInvalidPassphrase => "Invalid passphrase",
+            ErrorCode::SerializationError => "Failed to process data",
+            ErrorCode::IoError => "A file operation failed",
+            ErrorCode::InvalidData => "The data provided is invalid",
+            ErrorCode::NotFound => "The requested item was not found",
+            ErrorCode::AlreadyExists => "This item already exists",
+            ErrorCode::PermissionDenied => "You don't have permission for this action",
+            ErrorCode::Unauthorized => "Authentication required",
+            ErrorCode::ValidationError => "Please check your input",
+            ErrorCode::NetworkError => "A network error occurred",
+            ErrorCode::NetworkConnectionFailed => "Failed to connect to the network",
+            ErrorCode::NetworkPeerUnreachable => "Could not reach the peer",
+            ErrorCode::NetworkTimeout => "The connection timed out",
+            ErrorCode::InternalError => "An unexpected error occurred",
+        }
+    }
+
+    pub fn recovery_suggestion(&self) -> Option<&'static str> {
+        match self {
+            ErrorCode::DatabaseConnection => Some("Try restarting the application"),
+            ErrorCode::IdentityLocked => Some("Go to Settings and unlock your identity"),
+            ErrorCode::IdentityInvalidPassphrase => Some("Check your passphrase and try again"),
+            ErrorCode::NetworkConnectionFailed => {
+                Some("Check your internet connection and try again")
+            }
+            ErrorCode::NetworkPeerUnreachable => Some("The peer may be offline. Try again later"),
+            ErrorCode::NetworkTimeout => Some("Try again or check your connection"),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub code: ErrorCode,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<String>,
+}
+
+impl ErrorResponse {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            details: None,
+            recovery: code.recovery_suggestion().map(String::from),
+        }
+    }
+
+    pub fn with_details(mut self, details: impl Into<String>) -> Self {
+        self.details = Some(details.into());
+        self
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -45,13 +146,58 @@ pub enum AppError {
     Internal(String),
 }
 
-// Implement conversion to a serializable error for Tauri commands
-impl serde::Serialize for AppError {
+impl AppError {
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            AppError::Database(_) => ErrorCode::DatabaseError,
+            AppError::DatabaseString(_) => ErrorCode::DatabaseError,
+            AppError::Crypto(_) => ErrorCode::CryptoError,
+            AppError::Identity(msg) => {
+                if msg.contains("locked") {
+                    ErrorCode::IdentityLocked
+                } else if msg.contains("not found") || msg.contains("No identity") {
+                    ErrorCode::IdentityNotFound
+                } else if msg.contains("passphrase") || msg.contains("Passphrase") {
+                    ErrorCode::IdentityInvalidPassphrase
+                } else {
+                    ErrorCode::IdentityError
+                }
+            }
+            AppError::Serialization(_) => ErrorCode::SerializationError,
+            AppError::Io(_) => ErrorCode::IoError,
+            AppError::InvalidData(_) => ErrorCode::InvalidData,
+            AppError::NotFound(_) => ErrorCode::NotFound,
+            AppError::AlreadyExists(_) => ErrorCode::AlreadyExists,
+            AppError::PermissionDenied(_) => ErrorCode::PermissionDenied,
+            AppError::Unauthorized(_) => ErrorCode::Unauthorized,
+            AppError::Validation(_) => ErrorCode::ValidationError,
+            AppError::Network(msg) => {
+                if msg.contains("timeout") || msg.contains("Timeout") {
+                    ErrorCode::NetworkTimeout
+                } else if msg.contains("unreachable") {
+                    ErrorCode::NetworkPeerUnreachable
+                } else if msg.contains("connection") || msg.contains("Connection") {
+                    ErrorCode::NetworkConnectionFailed
+                } else {
+                    ErrorCode::NetworkError
+                }
+            }
+            AppError::Internal(_) => ErrorCode::InternalError,
+        }
+    }
+
+    pub fn to_response(&self) -> ErrorResponse {
+        let code = self.error_code();
+        ErrorResponse::new(code, code.user_message()).with_details(self.to_string())
+    }
+}
+
+impl Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        self.to_response().serialize(serializer)
     }
 }
 
