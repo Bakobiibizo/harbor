@@ -58,7 +58,10 @@ pub async fn update_bootstrap_node(
 
 /// Remove a bootstrap node (only non-default nodes can be removed)
 #[tauri::command]
-pub async fn remove_bootstrap_node(db: State<'_, Arc<Database>>, id: i64) -> Result<bool, AppError> {
+pub async fn remove_bootstrap_node(
+    db: State<'_, Arc<Database>>,
+    id: i64,
+) -> Result<bool, AppError> {
     BootstrapNodesRepo::remove(&db, id).map_err(AppError::Database)
 }
 

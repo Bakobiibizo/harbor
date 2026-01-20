@@ -21,7 +21,7 @@ impl Database {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|_| rusqlite::Error::InvalidPath(path.clone().into()))?;
+                .map_err(|_| rusqlite::Error::InvalidPath(path.clone()))?;
         }
 
         let conn = Connection::open(&path)?;
