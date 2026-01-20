@@ -28,6 +28,7 @@ interface WallState {
     content: string,
     media?: { type: 'image' | 'video'; url: string; name?: string }[],
   ) => Promise<void>;
+  updatePost: (postId: string, content: string) => Promise<void>;
   deletePost: (postId: string) => Promise<void>;
   likePost: (postId: string) => void; // Local-only for now (likes not in backend schema)
 }
@@ -128,6 +129,22 @@ export const useWallStore = create<WallState>((set) => ({
       }));
     } catch (err) {
       console.error('Failed to create post:', err);
+      throw err;
+    }
+  },
+
+  updatePost: async (postId: string, content: string) => {
+    try {
+      await postsService.updatePost(postId, content);
+
+      // Update local state
+      set((state) => ({
+        posts: state.posts.map((post) =>
+          post.postId === postId ? { ...post, content } : post,
+        ),
+      }));
+    } catch (err) {
+      console.error('Failed to update post:', err);
       throw err;
     }
   },

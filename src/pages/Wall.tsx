@@ -5,13 +5,16 @@ import { WallIcon, EllipsisIcon } from '../components/icons';
 
 export function WallPage() {
   const { state } = useIdentityStore();
-  const { posts, isLoading, loadPosts, createPost, deletePost, likePost } = useWallStore();
+  const { posts, isLoading, loadPosts, createPost, updatePost, deletePost, likePost } =
+    useWallStore();
   const [newPost, setNewPost] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<
     { type: 'image' | 'video'; url: string; name: string }[]
   >([]);
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
+  const [editingPost, setEditingPost] = useState<{ postId: string; content: string } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaTypeRef = useRef<'image' | 'video'>('image');
 
@@ -118,10 +121,32 @@ export function WallPage() {
     }
   };
 
+  const handleEditPost = (postId: string) => {
+    const post = posts.find((p) => p.postId === postId);
+    if (post) {
+      setEditingPost({ postId, content: post.content });
+      setShowPostMenu(null);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingPost || !editingPost.content.trim()) return;
+
+    try {
+      await updatePost(editingPost.postId, editingPost.content.trim());
+      setEditingPost(null);
+      toast.success('Post updated');
+    } catch (err) {
+      console.error('Failed to update post:', err);
+      toast.error('Failed to update post');
+    }
+  };
+
   const handleDeletePost = async (postId: string) => {
     try {
       await deletePost(postId);
       setShowPostMenu(null);
+      setShowDeleteConfirm(null);
       toast.success('Post deleted');
     } catch (err) {
       console.error('Failed to delete post:', err);
