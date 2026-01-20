@@ -133,20 +133,8 @@ impl FeedService {
             PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
                 .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        // Filter by visibility
-        let visible_posts: Vec<Post> = posts
-            .into_iter()
-            .filter(|post| {
-                if post.author_peer_id == identity.peer_id {
-                    true // Our own posts
-                } else if post.visibility == PostVisibility::Public {
-                    true // Public posts
-                } else {
-                    // Contacts-only posts require permission (verified above)
-                    true
-                }
-            })
-            .collect();
+        // All posts are visible (permission was verified above)
+        let visible_posts: Vec<Post> = posts;
 
         let feed_items: Vec<FeedItem> = visible_posts
             .into_iter()

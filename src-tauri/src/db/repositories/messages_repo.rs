@@ -369,6 +369,7 @@ impl MessagesRepository {
     }
 
     /// Record a message event (for event sourcing)
+    #[allow(clippy::too_many_arguments)]
     pub fn record_message_event(
         db: &Database,
         event_id: &str,

@@ -229,7 +229,7 @@ mod tests {
         if let ContentSyncMessage::ManifestResponse(decoded_resp) = decoded {
             assert_eq!(decoded_resp.responder_peer_id, response.responder_peer_id);
             assert_eq!(decoded_resp.posts.len(), 1);
-            assert_eq!(decoded_resp.has_more, true);
+            assert!(decoded_resp.has_more);
         } else {
             panic!("Expected ManifestResponse variant");
         }
@@ -251,7 +251,7 @@ mod tests {
 
         if let ContentSyncMessage::FetchRequest(decoded_req) = decoded {
             assert_eq!(decoded_req.post_id, request.post_id);
-            assert_eq!(decoded_req.include_media, true);
+            assert!(decoded_req.include_media);
         } else {
             panic!("Expected FetchRequest variant");
         }

@@ -111,7 +111,7 @@ impl PostsService {
             author_peer_id: identity.peer_id.clone(),
             content_type: content_type.to_string(),
             content_text: content_text.map(String::from),
-            visibility: visibility,
+            visibility,
             lamport_clock: lamport_clock as i64,
             created_at,
             signature: signature.clone(),
@@ -288,6 +288,7 @@ impl PostsService {
     }
 
     /// Add media to a post
+    #[allow(clippy::too_many_arguments)]
     pub fn add_media_to_post(
         &self,
         post_id: &str,
@@ -388,6 +389,7 @@ impl PostsService {
     }
 
     /// Process an incoming post from the network
+    #[allow(clippy::too_many_arguments)]
     pub fn process_incoming_post(
         &self,
         post_id: &str,

@@ -386,6 +386,7 @@ impl PostsRepository {
     }
 
     /// Record a post event (for event sourcing)
+    #[allow(clippy::too_many_arguments)]
     pub fn record_post_event(
         db: &Database,
         event_id: &str,

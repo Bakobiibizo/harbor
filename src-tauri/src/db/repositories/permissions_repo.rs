@@ -113,6 +113,7 @@ impl PermissionsRepository {
     // ============================================================
 
     /// Record a permission event (request, grant, or revoke)
+    #[allow(clippy::too_many_arguments)]
     pub fn record_event(
         db: &Database,
         event_id: &str,
