@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
-import toast from "react-hot-toast";
-import { HarborError, isErrorResponse, getErrorMessage } from "./errors";
-import { createLogger } from "./logger";
+import { invoke } from '@tauri-apps/api/core';
+import toast from 'react-hot-toast';
+import { HarborError, isErrorResponse, getErrorMessage } from './errors';
+import { createLogger } from './logger';
 
-const logger = createLogger("errorHandler");
+const logger = createLogger('errorHandler');
 
 export interface InvokeOptions {
   showToast?: boolean;
@@ -26,11 +26,12 @@ async function delay(ms: number): Promise<void> {
 export async function safeInvoke<T>(
   command: string,
   args?: Record<string, unknown>,
-  options?: InvokeOptions
+  options?: InvokeOptions,
 ): Promise<T> {
   const opts = { ...defaultOptions, ...options };
+  const retryCount = opts.retryCount ?? 0;
 
-  for (let attempt = 0; attempt <= opts.retryCount; attempt++) {
+  for (let attempt = 0; attempt <= retryCount; attempt++) {
     try {
       if (attempt > 0) {
         logger.info(`Retrying ${command} (attempt ${attempt + 1})`);
@@ -44,7 +45,7 @@ export async function safeInvoke<T>(
 
       const harborError = HarborError.fromUnknown(error);
 
-      if (!harborError.isRecoverable() || attempt >= opts.retryCount) {
+      if (!harborError.isRecoverable() || attempt >= retryCount) {
         if (opts.showToast) {
           showErrorToast(harborError);
         }
@@ -55,12 +56,11 @@ export async function safeInvoke<T>(
 
   // All paths in the loop either return or throw; this is unreachable.
   // Added only to satisfy TypeScript's control flow analysis, if needed.
-  throw new Error("safeInvoke reached an unreachable state after retries");
+  throw new Error('safeInvoke reached an unreachable state after retries');
 }
 
 export function showErrorToast(error: unknown): void {
-  const harborError =
-    error instanceof HarborError ? error : HarborError.fromUnknown(error);
+  const harborError = error instanceof HarborError ? error : HarborError.fromUnknown(error);
 
   const message = harborError.message;
   const recovery = harborError.recovery;

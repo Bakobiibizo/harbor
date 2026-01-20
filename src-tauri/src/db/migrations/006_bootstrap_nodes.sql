@@ -1,4 +1,4 @@
--- Migration 005: Bootstrap Nodes Configuration
+-- Migration 006: Bootstrap Nodes Configuration
 -- Stores configured bootstrap/relay node addresses for P2P network connectivity
 
 -- Bootstrap nodes table stores user-configured bootstrap node addresses
@@ -18,4 +18,4 @@ CREATE TABLE IF NOT EXISTS bootstrap_nodes (
 CREATE INDEX IF NOT EXISTS idx_bootstrap_nodes_enabled ON bootstrap_nodes(is_enabled, priority);
 
 -- Update schema version
-UPDATE schema_version SET version = 5 WHERE id = 1;
+UPDATE schema_version SET version = 6 WHERE id = 1;

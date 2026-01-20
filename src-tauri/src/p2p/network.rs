@@ -617,69 +617,33 @@ impl NetworkService {
                 }
             }
             ContentSyncRequest::FetchPost {
-                post_id,
+                post_id: _,
                 include_media: _,
-                requester_peer_id,
+                requester_peer_id: _,
                 timestamp: _,
                 signature: _,
             } => {
-                // For now, we don't implement post/media fetch. Manifest sync is the first step.
-                // If requested, respond with error until the full fetch protocol is added.
-                if requester_peer_id != peer.to_string() {
-                    let _ = self.swarm.behaviour_mut().content_sync.send_response(
-                        channel,
-                        ContentSyncResponse::Error {
-                            error: "requester_peer_id mismatch".to_string(),
-                        },
-                    );
-                    return;
-                }
-
-                let Some(ref posts_service) = self.posts_service else {
-                    let _ = self.swarm.behaviour_mut().content_sync.send_response(
-                        channel,
-                        ContentSyncResponse::Error {
-                            error: "Posts service unavailable".to_string(),
-                        },
-                    );
-                    return;
-                };
-
-                match posts_service.get_post(&post_id) {
-                    Ok(Some(post)) => {
-                        let response = ContentSyncResponse::Post {
-                            post_id: post.post_id,
-                            author_peer_id: post.author_peer_id,
-                            content_type: post.content_type,
-                            content_text: post.content_text,
-                            visibility: post.visibility.to_string(),
-                            lamport_clock: post.lamport_clock as u64,
-                            created_at: post.created_at,
-                            signature: post.signature,
-                        };
-                        let _ = self
-                            .swarm
-                            .behaviour_mut()
-                            .content_sync
-                            .send_response(channel, response);
-                    }
-                    Ok(None) => {
-                        let _ = self.swarm.behaviour_mut().content_sync.send_response(
-                            channel,
-                            ContentSyncResponse::Error {
-                                error: "Post not found".to_string(),
-                            },
-                        );
-                    }
-                    Err(e) => {
-                        let _ = self.swarm.behaviour_mut().content_sync.send_response(
-                            channel,
-                            ContentSyncResponse::Error {
-                                error: e.to_string(),
-                            },
-                        );
-                    }
-                }
+                // SECURITY: FetchPost is disabled until proper authentication is implemented.
+                // This endpoint would leak non-public posts if enabled without:
+                // 1. Signature verification on the request
+                // 2. Timestamp validation to prevent replay attacks
+                // 3. Visibility checks based on requester's permissions
+                //
+                // TODO: Implement proper auth before enabling:
+                // - Verify signature matches requester_peer_id
+                // - Check timestamp is within acceptable window
+                // - Only return public posts, or posts where requester has permission
+                warn!(
+                    "FetchPost request from {} denied: endpoint not yet secured",
+                    peer
+                );
+                let _ = self.swarm.behaviour_mut().content_sync.send_response(
+                    channel,
+                    ContentSyncResponse::Error {
+                        error: "FetchPost endpoint is not yet available. Use manifest sync instead."
+                            .to_string(),
+                    },
+                );
             }
         }
     }

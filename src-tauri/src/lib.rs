@@ -62,19 +62,42 @@ fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let log_config = LogConfig::development();
-    logging::init_logging(log_config);
-
     let profile = get_profile_name();
-    if let Some(ref p) = profile {
-        info!("Starting Harbor with profile: {}", p);
-    } else {
-        info!("Starting Harbor...");
-    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            // Get app data directory first so we can set up logging properly
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data directory");
+
+            // Set up log directory
+            let log_dir = get_log_directory(&app_data_dir);
+
+            // Initialize logging with appropriate config based on build type
+            #[cfg(debug_assertions)]
+            {
+                logging::init_logging(LogConfig::development());
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                // Production: enable file logging with JSON format
+                logging::init_logging(LogConfig::production(log_dir.clone()));
+                // Clean up old log files
+                if let Err(e) = logging::cleanup_old_logs(&log_dir, 5) {
+                    // Can't use info! here as logging might not be fully set up
+                    eprintln!("Could not clean up old logs: {}", e);
+                }
+            }
+
+            if let Some(ref p) = profile {
+                info!("Starting Harbor with profile: {}", p);
+            } else {
+                info!("Starting Harbor...");
+            }
+
             // Update window title if running with a profile
             if let Some(ref profile_name) = profile {
                 if let Some(window) = app.get_webview_window("main") {
@@ -82,14 +105,6 @@ pub fn run() {
                 }
             }
 
-            // Get app data directory
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("Failed to get app data directory");
-
-            // Set up log directory for production
-            let log_dir = get_log_directory(&app_data_dir);
             app.manage(LogDirectory(log_dir));
 
             // Initialize accounts service (manages multi-account registry)

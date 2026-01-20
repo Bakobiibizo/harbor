@@ -18,3 +18,6 @@ CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);
 
 -- Index for getting all posts a user has liked
 CREATE INDEX IF NOT EXISTS idx_post_likes_liker ON post_likes(liker_peer_id);
+
+-- Update schema version
+UPDATE schema_version SET version = 5 WHERE id = 1;

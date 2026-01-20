@@ -11,7 +11,7 @@ use clap::Parser;
 use futures::StreamExt;
 use libp2p::{
     autonat, identify, kad, noise, ping, relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, StreamProtocol,
 };
 use std::time::Duration;
@@ -60,8 +60,8 @@ struct BootstrapBehaviour {
     ping: ping::Behaviour,
     identify: identify::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    relay: relay::Behaviour,
-    autonat: autonat::Behaviour,
+    relay: Toggle<relay::Behaviour>,
+    autonat: Toggle<autonat::Behaviour>,
 }
 
 #[tokio::main]
@@ -97,6 +97,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Bootstrap Node Peer ID: {}", peer_id);
 
+    // Capture flags for use in closure
+    let enable_relay = args.enable_relay;
+    let enable_autonat = args.enable_autonat;
+
     // Build the swarm with TCP and QUIC transports
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair.clone())
         .with_tokio()
@@ -125,19 +129,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let store = kad::store::MemoryStore::new(local_peer_id);
             let kademlia = kad::Behaviour::with_config(local_peer_id, store, kad_config);
 
-            // Relay server for NAT traversal
-            let relay_config = relay::Config {
-                max_reservations: 128,
-                max_reservations_per_peer: 4,
-                reservation_duration: Duration::from_secs(3600), // 1 hour
-                max_circuits: 128,
-                max_circuits_per_peer: 4,
-                ..Default::default()
+            // Relay server for NAT traversal (conditionally enabled)
+            let relay = if enable_relay {
+                let relay_config = relay::Config {
+                    max_reservations: 128,
+                    max_reservations_per_peer: 4,
+                    reservation_duration: Duration::from_secs(3600), // 1 hour
+                    max_circuits: 128,
+                    max_circuits_per_peer: 4,
+                    ..Default::default()
+                };
+                Toggle::from(Some(relay::Behaviour::new(local_peer_id, relay_config)))
+            } else {
+                Toggle::from(None)
             };
-            let relay = relay::Behaviour::new(local_peer_id, relay_config);
 
-            // AutoNAT server to help peers detect their NAT status
-            let autonat = autonat::Behaviour::new(local_peer_id, autonat::Config::default());
+            // AutoNAT server to help peers detect their NAT status (conditionally enabled)
+            let autonat = if enable_autonat {
+                Toggle::from(Some(autonat::Behaviour::new(
+                    local_peer_id,
+                    autonat::Config::default(),
+                )))
+            } else {
+                Toggle::from(None)
+            };
 
             BootstrapBehaviour {
                 ping,
