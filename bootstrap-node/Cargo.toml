@@ -17,11 +17,14 @@ futures = "0.3"
 libp2p = { version = "0.56", features = [
     "tokio",
     "tcp",
+    "quic",
     "noise",
     "yamux",
     "kad",
     "identify",
     "ping",
+    "relay",
+    "autonat",
     "macros",
 ] }
 
