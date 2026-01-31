@@ -118,6 +118,16 @@ function AppContent() {
           console.log('[Harbor] Auto-starting network...');
           await startNetwork();
 
+          // Auto-connect to public relays for circuit addressing
+          console.log('[Harbor] Auto-connecting to public relays...');
+          const { connectToPublicRelays } = useNetworkStore.getState();
+          try {
+            await connectToPublicRelays();
+            console.log('[Harbor] Connected to public relays');
+          } catch (error) {
+            console.error('[Harbor] Failed to connect to public relays:', error);
+          }
+
           // Connect to saved bootstrap nodes
           const settingsState = useSettingsStore.getState();
           if (settingsState.bootstrapNodes.length > 0) {

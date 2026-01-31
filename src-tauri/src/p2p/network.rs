@@ -15,16 +15,10 @@ use tracing::{debug, error, info, warn};
 /// Only Harbor relay servers are listed here. IPFS bootstrap nodes use relay v1
 /// and RSA-based peer IDs that are incompatible with relay v2.
 const PUBLIC_RELAYS: &[&str] = &[
-    // Harbor community relay (primary)
-    "/ip4/154.5.126.219/tcp/4001/p2p/12D3KooWN88G5V8fTAHCwLnsbxiC9ZM6i982sno8bh3m7bvLMvvJ",
-    // IPFS bootstrap relays (fallback)
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-    // Additional IPFS bootstrap nodes with direct addresses for better connectivity
-    "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-    "/ip4/104.131.131.82/udp/4001/quic-v1/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+    // Harbor community relay (primary) - IPv6
+    "/ip6/2001:569:7b51:5500:78a9:3c0e:2ec9:c682/tcp/4001/p2p/12D3KooWN88G5V8fTAHCwLnsbxiC9ZM6i982sno8bh3m7bvLMvvJ",
+    // Fallback IPv4 (local network only due to NAT)
+    "/ip4/192.168.1.71/tcp/4001/p2p/12D3KooWN88G5V8fTAHCwLnsbxiC9ZM6i982sno8bh3m7bvLMvvJ",
 ];
 
 /// Public relay servers specifically for relay circuits (if available)
