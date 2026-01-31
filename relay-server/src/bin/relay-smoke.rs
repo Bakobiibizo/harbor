@@ -148,6 +148,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 info!("Connection established with {} at {:?}", peer_id, endpoint);
+                
+                // If this is the relay connection, request a relay reservation by listening on circuit
+                if let Some(relay_peer_id) = relay_peer_id_from_addr(&relay_addr) {
+                    if peer_id == relay_peer_id {
+                        info!("Connected to relay, requesting relay reservation...");
+                        let circuit_listen_addr: Multiaddr = format!("/p2p/{}/p2p-circuit", relay_peer_id).parse()?;
+                        if let Err(e) = swarm.listen_on(circuit_listen_addr.clone()) {
+                            error!("Failed to listen on relay circuit {}: {}", circuit_listen_addr, e);
+                        }
+                    }
+                }
+                
                 // Once connected to relay, if a dial target was provided, try once.
                 if let Some(target) = dial_target.take() {
                     info!("Dialing target via relay: {}", target);
@@ -174,4 +186,16 @@ fn debug_event<T: std::fmt::Debug>(event: SwarmEvent<T>) {
     if let SwarmEvent::IncomingConnection { .. } = event {
         info!("Incoming connection event: {:?}", event);
     }
+}
+
+/// Extract the peer ID from a multiaddr that ends with /p2p/<peer_id>
+fn relay_peer_id_from_addr(addr: &Multiaddr) -> Option<PeerId> {
+    use libp2p::multiaddr::Protocol;
+    addr.iter().find_map(|p| {
+        if let Protocol::P2p(peer_id_bytes) = p {
+            PeerId::try_from(peer_id_bytes).ok()
+        } else {
+            None
+        }
+    })
 }
