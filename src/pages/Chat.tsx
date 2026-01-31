@@ -8,8 +8,97 @@ import {
   SendIcon,
   PhoneIcon,
   EllipsisIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  XIcon,
 } from '../components/icons';
 import { useMockPeersStore, useContactsStore, useMessagingStore } from '../stores';
+
+// Conversation menu component
+function ConversationMenu({
+  isOpen,
+  onClose,
+  onArchive,
+  onClearHistory,
+  onDelete,
+  isArchived,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onArchive: () => void;
+  onClearHistory: () => void;
+  onDelete: () => void;
+  isArchived: boolean;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      ref={menuRef}
+      className="absolute right-0 top-full mt-1 w-48 rounded-lg shadow-lg z-50 overflow-hidden"
+      style={{
+        background: 'hsl(var(--harbor-bg-elevated))',
+        border: '1px solid hsl(var(--harbor-border-subtle))',
+      }}
+    >
+      <button
+        onClick={() => {
+          onArchive();
+          onClose();
+        }}
+        className="w-full px-4 py-3 text-left text-sm flex items-center gap-3 transition-colors hover:bg-white/5"
+        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+        </svg>
+        {isArchived ? 'Unarchive' : 'Archive'}
+      </button>
+      <button
+        onClick={() => {
+          onClearHistory();
+          onClose();
+        }}
+        className="w-full px-4 py-3 text-left text-sm flex items-center gap-3 transition-colors hover:bg-white/5"
+        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+        Clear History
+      </button>
+      <div style={{ borderTop: '1px solid hsl(var(--harbor-border-subtle))' }}>
+        <button
+          onClick={() => {
+            onDelete();
+            onClose();
+          }}
+          className="w-full px-4 py-3 text-left text-sm flex items-center gap-3 transition-colors hover:bg-white/5"
+          style={{ color: 'hsl(var(--harbor-error))' }}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+          Delete Conversation
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // Back arrow icon
 function BackIcon({ className }: { className?: string }) {
@@ -54,7 +143,17 @@ export function ChatPage() {
   const navigate = useNavigate();
 
   // Mock peers store (for demo contacts)
-  const { conversations: mockConversations, sendMessage: sendMockMessage } = useMockPeersStore();
+  const {
+    conversations: mockConversations,
+    sendMessage: sendMockMessage,
+    archiveConversation,
+    unarchiveConversation,
+    isConversationArchived,
+    clearConversationHistory,
+    deleteConversation,
+    getActiveConversations,
+    getArchivedConversationsList,
+  } = useMockPeersStore();
 
   // Real contacts and messaging
   const { contacts, loadContacts } = useContactsStore();
@@ -87,8 +186,14 @@ export function ChatPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [messageInput, setMessageInput] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [showMessageSearch, setShowMessageSearch] = useState(false);
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Load real contacts and conversations on mount
   useEffect(() => {
@@ -96,27 +201,46 @@ export function ChatPage() {
     loadConversations();
   }, [loadContacts, loadConversations]);
 
+  // Focus search input when search is shown
+  useEffect(() => {
+    if (showMessageSearch && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [showMessageSearch]);
+
+  // Reset search index when query changes
+  useEffect(() => {
+    setCurrentSearchIndex(0);
+  }, [messageSearchQuery]);
+
+  // Get active or archived mock conversations based on toggle
+  const displayMockConversations = showArchived
+    ? getArchivedConversationsList()
+    : getActiveConversations();
+
   // Build unified conversation list
   const unifiedConversations: UnifiedConversation[] = [
-    // Real contacts (with or without conversations)
-    ...contacts.map((contact): UnifiedConversation => {
-      const realConv = realConversations.find((c) => c.peerId === contact.peerId);
-      return {
-        id: `real-${contact.peerId}`,
-        peerId: contact.peerId,
-        name: contact.displayName,
-        online: true, // Assume online for now - would need presence tracking
-        avatarGradient: getContactColor(contact.peerId),
-        lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
-        timestamp: realConv
-          ? new Date(realConv.lastMessageAt * 1000)
-          : new Date(contact.addedAt * 1000),
-        unread: realConv?.unreadCount || 0,
-        isReal: true,
-      };
-    }),
-    // Mock conversations
-    ...mockConversations.map(
+    // Real contacts (only show if not viewing archived - real contacts don't have archive yet)
+    ...(showArchived
+      ? []
+      : contacts.map((contact): UnifiedConversation => {
+          const realConv = realConversations.find((c) => c.peerId === contact.peerId);
+          return {
+            id: `real-${contact.peerId}`,
+            peerId: contact.peerId,
+            name: contact.displayName,
+            online: true, // Assume online for now - would need presence tracking
+            avatarGradient: getContactColor(contact.peerId),
+            lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
+            timestamp: realConv
+              ? new Date(realConv.lastMessageAt * 1000)
+              : new Date(contact.addedAt * 1000),
+            unread: realConv?.unreadCount || 0,
+            isReal: true,
+          };
+        })),
+    // Mock conversations (filtered by archive status)
+    ...displayMockConversations.map(
       (conv): UnifiedConversation => ({
         id: conv.id,
         peerId: conv.peerId,
@@ -144,6 +268,28 @@ export function ChatPage() {
       ? realMessages[selectedConv.peerId] || []
       : mockConversations.find((c) => c.id === selectedConversation)?.messages || []
     : [];
+
+  // Calculate search results
+  const searchResults = messageSearchQuery.trim()
+    ? currentMessages
+        .map((message, index) => ({
+          message,
+          index,
+          content: message.content.toLowerCase(),
+        }))
+        .filter((item) => item.content.includes(messageSearchQuery.toLowerCase()))
+    : [];
+
+  // Navigate search results
+  const navigateSearchResults = (direction: 'next' | 'prev') => {
+    if (searchResults.length === 0) return;
+    setCurrentSearchIndex((prev) => {
+      if (direction === 'next') {
+        return (prev + 1) % searchResults.length;
+      }
+      return (prev - 1 + searchResults.length) % searchResults.length;
+    });
+  };
 
   // Load messages when selecting a real conversation
   useEffect(() => {
@@ -259,20 +405,41 @@ export function ChatPage() {
               <BackIcon className="w-5 h-5" />
             </button>
             <h2 className="text-lg font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-              Messages
+              {showArchived ? 'Archived' : 'Messages'}
             </h2>
           </div>
-          <button
-            onClick={handleNewConversation}
-            className="p-2 rounded-lg transition-colors duration-200"
-            style={{
-              background:
-                'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-              color: 'white',
-            }}
-          >
-            <PlusIcon className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowArchived(!showArchived)}
+              className="p-2 rounded-lg transition-colors duration-200"
+              style={{
+                background: showArchived
+                  ? 'hsl(var(--harbor-primary) / 0.15)'
+                  : 'hsl(var(--harbor-surface-1))',
+                color: showArchived
+                  ? 'hsl(var(--harbor-primary))'
+                  : 'hsl(var(--harbor-text-secondary))',
+              }}
+              title={showArchived ? 'View active conversations' : 'View archived conversations'}
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+            </button>
+            {!showArchived && (
+              <button
+                onClick={handleNewConversation}
+                className="p-2 rounded-lg transition-colors duration-200"
+                style={{
+                  background:
+                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                  color: 'white',
+                }}
+              >
+                <PlusIcon className="w-5 h-5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Search */}
@@ -306,102 +473,153 @@ export function ChatPage() {
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               />
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                No conversations found
+                {showArchived ? 'No archived conversations' : 'No conversations found'}
               </p>
+              {showArchived && (
+                <button
+                  onClick={() => setShowArchived(false)}
+                  className="mt-4 text-sm px-4 py-2 rounded-lg transition-colors"
+                  style={{
+                    color: 'hsl(var(--harbor-primary))',
+                    background: 'hsl(var(--harbor-primary) / 0.1)',
+                  }}
+                >
+                  View active conversations
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-1">
               {filteredConversations.map((conversation) => (
-                <button
+                <div
                   key={conversation.id}
-                  onClick={() => setSelectedConversation(conversation.id)}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg text-left transition-all duration-200"
-                  style={{
-                    background: 'transparent',
-                  }}
+                  className="relative flex items-center rounded-lg transition-all duration-200 hover:bg-white/5"
                 >
-                  {/* Avatar */}
-                  <div className="relative flex-shrink-0">
-                    <div
-                      className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-semibold text-white"
-                      style={{
-                        background: conversation.avatarGradient,
-                      }}
-                    >
-                      {getInitials(conversation.name)}
-                    </div>
-                    {conversation.online && (
+                  <button
+                    onClick={() => setSelectedConversation(conversation.id)}
+                    className="flex-1 flex items-center gap-3 p-3 text-left"
+                  >
+                    {/* Avatar */}
+                    <div className="relative flex-shrink-0">
                       <div
-                        className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2"
+                        className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-semibold text-white"
                         style={{
-                          background: 'hsl(var(--harbor-success))',
-                          borderColor: 'hsl(var(--harbor-bg-primary))',
+                          background: conversation.avatarGradient,
                         }}
-                      />
-                    )}
-                  </div>
+                      >
+                        {getInitials(conversation.name)}
+                      </div>
+                      {conversation.online && (
+                        <div
+                          className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2"
+                          style={{
+                            background: 'hsl(var(--harbor-success))',
+                            borderColor: 'hsl(var(--harbor-bg-primary))',
+                          }}
+                        />
+                      )}
+                    </div>
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <p
-                          className="font-semibold text-sm truncate"
-                          style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <p
+                            className="font-semibold text-sm truncate"
+                            style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                          >
+                            {conversation.name}
+                          </p>
+                          {conversation.isReal ? (
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+                              style={{
+                                background: 'hsl(var(--harbor-success) / 0.15)',
+                                color: 'hsl(var(--harbor-success))',
+                              }}
+                            >
+                              P2P
+                            </span>
+                          ) : (
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+                              style={{
+                                background: 'hsl(var(--harbor-text-tertiary) / 0.15)',
+                                color: 'hsl(var(--harbor-text-tertiary))',
+                              }}
+                            >
+                              Demo
+                            </span>
+                          )}
+                        </div>
+                        <span
+                          className="text-xs flex-shrink-0 ml-2"
+                          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                         >
-                          {conversation.name}
+                          {formatTime(conversation.timestamp)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p
+                          className="text-sm truncate"
+                          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                        >
+                          {conversation.lastMessage}
                         </p>
-                        {conversation.isReal ? (
+                        {conversation.unread > 0 && (
                           <span
-                            className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+                            className="ml-2 px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0"
                             style={{
-                              background: 'hsl(var(--harbor-success) / 0.15)',
-                              color: 'hsl(var(--harbor-success))',
+                              background:
+                                'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                              color: 'white',
                             }}
                           >
-                            P2P
-                          </span>
-                        ) : (
-                          <span
-                            className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
-                            style={{
-                              background: 'hsl(var(--harbor-text-tertiary) / 0.15)',
-                              color: 'hsl(var(--harbor-text-tertiary))',
-                            }}
-                          >
-                            Demo
+                            {conversation.unread}
                           </span>
                         )}
                       </div>
-                      <span
-                        className="text-xs flex-shrink-0 ml-2"
+                    </div>
+                  </button>
+
+                  {/* Menu button - only for mock conversations */}
+                  {!conversation.isReal && (
+                    <div className="relative pr-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(openMenuId === conversation.id ? null : conversation.id);
+                        }}
+                        className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/10"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                       >
-                        {formatTime(conversation.timestamp)}
-                      </span>
+                        <EllipsisIcon className="w-5 h-5" />
+                      </button>
+                      <ConversationMenu
+                        isOpen={openMenuId === conversation.id}
+                        onClose={() => setOpenMenuId(null)}
+                        isArchived={isConversationArchived(conversation.id)}
+                        onArchive={() => {
+                          if (isConversationArchived(conversation.id)) {
+                            unarchiveConversation(conversation.id);
+                            toast.success(`Unarchived conversation with ${conversation.name}`);
+                          } else {
+                            archiveConversation(conversation.id);
+                            toast.success(`Archived conversation with ${conversation.name}`);
+                          }
+                        }}
+                        onClearHistory={() => {
+                          clearConversationHistory(conversation.id);
+                          toast.success(`Cleared chat history with ${conversation.name}`);
+                        }}
+                        onDelete={() => {
+                          deleteConversation(conversation.id);
+                          toast.success(`Deleted conversation with ${conversation.name}`);
+                        }}
+                      />
                     </div>
-                    <div className="flex items-center justify-between">
-                      <p
-                        className="text-sm truncate"
-                        style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                      >
-                        {conversation.lastMessage}
-                      </p>
-                      {conversation.unread > 0 && (
-                        <span
-                          className="ml-2 px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0"
-                          style={{
-                            background:
-                              'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                            color: 'white',
-                          }}
-                        >
-                          {conversation.unread}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -473,6 +691,26 @@ export function ChatPage() {
 
         <div className="flex items-center gap-2">
           <button
+            onClick={() => {
+              setShowMessageSearch(!showMessageSearch);
+              if (showMessageSearch) {
+                setMessageSearchQuery('');
+              }
+            }}
+            className="p-2 rounded-lg transition-colors duration-200"
+            style={{
+              background: showMessageSearch
+                ? 'hsl(var(--harbor-primary) / 0.15)'
+                : 'hsl(var(--harbor-surface-1))',
+              color: showMessageSearch
+                ? 'hsl(var(--harbor-primary))'
+                : 'hsl(var(--harbor-text-secondary))',
+            }}
+            title="Search messages (Ctrl+F)"
+          >
+            <SearchIcon className="w-5 h-5" />
+          </button>
+          <button
             onClick={handleCall}
             className="p-2 rounded-lg transition-colors duration-200"
             style={{
@@ -494,6 +732,87 @@ export function ChatPage() {
           </button>
         </div>
       </header>
+
+      {/* Message search bar */}
+      {showMessageSearch && (
+        <div
+          className="px-4 py-2 border-b flex items-center gap-3"
+          style={{
+            borderColor: 'hsl(var(--harbor-border-subtle))',
+            background: 'hsl(var(--harbor-bg-elevated))',
+          }}
+        >
+          <div className="flex-1 relative">
+            <SearchIcon
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
+              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+            />
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search messages..."
+              value={messageSearchQuery}
+              onChange={(e) => setMessageSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  navigateSearchResults(e.shiftKey ? 'prev' : 'next');
+                }
+                if (e.key === 'Escape') {
+                  setShowMessageSearch(false);
+                  setMessageSearchQuery('');
+                }
+              }}
+              className="w-full pl-10 pr-4 py-2 rounded-lg text-sm"
+              style={{
+                background: 'hsl(var(--harbor-surface-1))',
+                border: '1px solid hsl(var(--harbor-border-subtle))',
+                color: 'hsl(var(--harbor-text-primary))',
+              }}
+            />
+          </div>
+          {searchResults.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span
+                className="text-sm"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                {currentSearchIndex + 1} of {searchResults.length}
+              </span>
+              <button
+                onClick={() => navigateSearchResults('prev')}
+                className="p-1.5 rounded-lg transition-colors"
+                style={{
+                  background: 'hsl(var(--harbor-surface-1))',
+                  color: 'hsl(var(--harbor-text-secondary))',
+                }}
+              >
+                <ChevronUpIcon className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => navigateSearchResults('next')}
+                className="p-1.5 rounded-lg transition-colors"
+                style={{
+                  background: 'hsl(var(--harbor-surface-1))',
+                  color: 'hsl(var(--harbor-text-secondary))',
+                }}
+              >
+                <ChevronDownIcon className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+          <button
+            onClick={() => {
+              setShowMessageSearch(false);
+              setMessageSearchQuery('');
+            }}
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">

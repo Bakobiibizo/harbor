@@ -4,12 +4,9 @@ import { useIdentityStore, useSettingsStore } from '../stores';
 import {
   UserIcon,
   LockIcon,
-  NetworkIcon,
   ShieldIcon,
   ChevronRightIcon,
   XIcon,
-  PlusIcon,
-  TrashIcon,
 } from '../components/icons';
 
 // Toggle component
@@ -98,17 +95,10 @@ function PasswordInput({
 export function SettingsPage() {
   const { state, updateDisplayName, updateBio } = useIdentityStore();
   const {
-    autoStartNetwork,
-    localDiscovery,
-    bootstrapNodes,
     showReadReceipts,
     showOnlineStatus,
     defaultVisibility,
     avatarUrl,
-    setAutoStartNetwork,
-    setLocalDiscovery,
-    addBootstrapNode,
-    removeBootstrapNode,
     setShowReadReceipts,
     setShowOnlineStatus,
     setDefaultVisibility,
@@ -116,10 +106,6 @@ export function SettingsPage() {
   } = useSettingsStore();
 
   const [activeSection, setActiveSection] = useState<string>('profile');
-
-  // Bootstrap node state
-  const [newBootstrapNode, setNewBootstrapNode] = useState('');
-  const [bootstrapError, setBootstrapError] = useState('');
 
   // Profile edit state
   const [displayName, setDisplayName] = useState('');
@@ -361,47 +347,9 @@ export function SettingsPage() {
     toast.success(value ? 'Online status visible to contacts' : 'Online status hidden');
   };
 
-  const handleAddBootstrapNode = () => {
-    setBootstrapError('');
-    const address = newBootstrapNode.trim();
-
-    if (!address) {
-      setBootstrapError('Please enter an address');
-      return;
-    }
-
-    // Basic validation for multiaddress format
-    if (!address.startsWith('/')) {
-      setBootstrapError('Address must start with / (multiaddress format)');
-      return;
-    }
-
-    // Check if it contains /p2p/ component
-    if (!address.includes('/p2p/')) {
-      setBootstrapError('Address must include peer ID (/p2p/...)');
-      return;
-    }
-
-    // Check for duplicates
-    if (bootstrapNodes.includes(address)) {
-      setBootstrapError('This address is already in your list');
-      return;
-    }
-
-    addBootstrapNode(address);
-    setNewBootstrapNode('');
-    toast.success('Bootstrap node added!');
-  };
-
-  const handleRemoveBootstrapNode = (address: string) => {
-    removeBootstrapNode(address);
-    toast.success('Bootstrap node removed');
-  };
-
   const sections = [
     { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
     { id: 'security', label: 'Security', icon: LockIcon, description: 'Passphrase and keys' },
-    { id: 'network', label: 'Network', icon: NetworkIcon, description: 'Connection settings' },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
   ];
 
@@ -889,182 +837,6 @@ export function SettingsPage() {
                 >
                   Delete Account
                 </button>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'network' && (
-            <div className="space-y-6">
-              <div>
-                <h3
-                  className="text-xl font-semibold mb-1"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  Network
-                </h3>
-                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Configure connection settings
-                </p>
-              </div>
-
-              <div
-                className="rounded-lg p-6"
-                style={{
-                  background: 'hsl(var(--harbor-bg-elevated))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4
-                      className="font-medium"
-                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                    >
-                      Auto-connect on startup
-                    </h4>
-                    <p
-                      className="text-sm mt-0.5"
-                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                    >
-                      Automatically connect to the network when app starts
-                    </p>
-                  </div>
-                  <Toggle enabled={autoStartNetwork} onChange={setAutoStartNetwork} />
-                </div>
-              </div>
-
-              <div
-                className="rounded-lg p-6"
-                style={{
-                  background: 'hsl(var(--harbor-bg-elevated))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4
-                      className="font-medium"
-                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                    >
-                      Local network discovery
-                    </h4>
-                    <p
-                      className="text-sm mt-0.5"
-                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                    >
-                      Automatically find other Harbor users on your local network
-                    </p>
-                  </div>
-                  <Toggle enabled={localDiscovery} onChange={setLocalDiscovery} />
-                </div>
-              </div>
-
-              {/* Bootstrap Nodes */}
-              <div
-                className="rounded-lg p-6"
-                style={{
-                  background: 'hsl(var(--harbor-bg-elevated))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
-              >
-                <h4
-                  className="font-medium mb-2"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  Bootstrap Nodes
-                </h4>
-                <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Bootstrap nodes help you connect to remote peers outside your local network. These
-                  will be automatically connected when you start the network.
-                </p>
-
-                {/* Add new bootstrap node */}
-                <div className="flex gap-2 mb-4">
-                  <input
-                    type="text"
-                    value={newBootstrapNode}
-                    onChange={(e) => {
-                      setNewBootstrapNode(e.target.value);
-                      setBootstrapError('');
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleAddBootstrapNode();
-                      }
-                    }}
-                    placeholder="/ip4/1.2.3.4/tcp/9000/p2p/12D3KooW..."
-                    className="flex-1 px-4 py-3 rounded-lg text-sm font-mono"
-                    style={{
-                      background: 'hsl(var(--harbor-surface-1))',
-                      border: '1px solid hsl(var(--harbor-border-subtle))',
-                      color: 'hsl(var(--harbor-text-primary))',
-                    }}
-                  />
-                  <button
-                    onClick={handleAddBootstrapNode}
-                    className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center gap-2"
-                    style={{
-                      background:
-                        'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                      color: 'white',
-                    }}
-                  >
-                    <PlusIcon size={16} />
-                    Add
-                  </button>
-                </div>
-
-                {bootstrapError && (
-                  <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-error))' }}>
-                    {bootstrapError}
-                  </p>
-                )}
-
-                {/* List of bootstrap nodes */}
-                {bootstrapNodes.length === 0 ? (
-                  <div
-                    className="text-sm text-center py-6 rounded-lg"
-                    style={{
-                      background: 'hsl(var(--harbor-surface-1))',
-                      color: 'hsl(var(--harbor-text-tertiary))',
-                    }}
-                  >
-                    No bootstrap nodes configured. Add one to connect to remote peers.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {bootstrapNodes.map((address, index) => (
-                      <div
-                        key={index}
-                        className="flex items-center gap-2 p-3 rounded-lg group"
-                        style={{
-                          background: 'hsl(var(--harbor-surface-1))',
-                          border: '1px solid hsl(var(--harbor-border-subtle))',
-                        }}
-                      >
-                        <div
-                          className="flex-1 text-sm font-mono truncate"
-                          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                          title={address}
-                        >
-                          {address}
-                        </div>
-                        <button
-                          onClick={() => handleRemoveBootstrapNode(address)}
-                          className="p-2 rounded-lg transition-colors duration-200 opacity-0 group-hover:opacity-100"
-                          style={{ color: 'hsl(var(--harbor-error))' }}
-                          title="Remove bootstrap node"
-                        >
-                          <TrashIcon size={16} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <p className="text-xs mt-4" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                  Get bootstrap node addresses from friends or public Harbor community servers.
-                </p>
               </div>
             </div>
           )}

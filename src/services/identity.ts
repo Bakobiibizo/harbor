@@ -43,6 +43,11 @@ export const identityService = {
     return invoke('update_bio', { bio });
   },
 
+  /** Update passphrase hint */
+  async updatePassphraseHint(hint: string | null): Promise<void> {
+    return invoke('update_passphrase_hint', { hint });
+  },
+
   /** Get the local peer ID */
   async getPeerId(): Promise<string> {
     return invoke<string>('get_peer_id');

@@ -6,6 +6,7 @@ export interface IdentityInfo {
   displayName: string;
   avatarHash: string | null;
   bio: string | null;
+  passphraseHint: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -15,6 +16,7 @@ export interface CreateIdentityRequest {
   displayName: string;
   passphrase: string;
   bio?: string;
+  passphraseHint?: string;
 }
 
 /** Application state for identity */

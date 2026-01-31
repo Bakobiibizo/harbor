@@ -10,6 +10,7 @@ pub struct LocalIdentity {
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
+    pub passphrase_hint: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -24,6 +25,7 @@ pub struct IdentityInfo {
     pub display_name: String,
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
+    pub passphrase_hint: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -40,6 +42,7 @@ impl From<LocalIdentity> for IdentityInfo {
             display_name: identity.display_name,
             avatar_hash: identity.avatar_hash,
             bio: identity.bio,
+            passphrase_hint: identity.passphrase_hint,
             created_at: identity.created_at,
             updated_at: identity.updated_at,
         }
@@ -53,6 +56,7 @@ pub struct CreateIdentityRequest {
     pub display_name: String,
     pub passphrase: String,
     pub bio: Option<String>,
+    pub passphrase_hint: Option<String>,
 }
 
 /// Request to unlock identity

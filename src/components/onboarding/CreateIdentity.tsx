@@ -15,6 +15,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const [displayName, setDisplayName] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
+  const [passphraseHint, setPassphraseHint] = useState('');
   const [bio, setBio] = useState('');
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -50,6 +51,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
         displayName: displayName.trim(),
         passphrase,
         bio: bio.trim() || undefined,
+        passphraseHint: passphraseHint.trim() || undefined,
       });
 
       // Ensure the new account is reflected in the accounts store
@@ -394,6 +396,14 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                     value={confirmPassphrase}
                     onChange={(e) => setConfirmPassphrase(e.target.value)}
                     placeholder="Enter passphrase again"
+                  />
+
+                  <Input
+                    label="Passphrase Hint (optional)"
+                    type="text"
+                    value={passphraseHint}
+                    onChange={(e) => setPassphraseHint(e.target.value)}
+                    placeholder="A hint to help remember your passphrase"
                   />
 
                   {displayError && (

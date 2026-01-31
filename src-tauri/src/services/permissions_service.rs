@@ -532,6 +532,7 @@ mod tests {
                 display_name: "Test User".to_string(),
                 passphrase: "password123".to_string(),
                 bio: None,
+                passphrase_hint: None,
             })
             .unwrap();
         identity_service.unlock("password123").unwrap();
@@ -559,6 +560,7 @@ mod tests {
                 display_name: "Test User".to_string(),
                 passphrase: "password123".to_string(),
                 bio: None,
+                passphrase_hint: None,
             })
             .unwrap();
         identity_service.unlock("password123").unwrap();

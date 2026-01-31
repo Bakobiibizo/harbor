@@ -108,8 +108,11 @@ export function useTauriEvents() {
           console.log(`[Network] Relay connected: ${event.relayAddress}`);
           // Add relay address to store
           useNetworkStore.getState().addRelayAddress(event.relayAddress);
+          // Update relay status
+          useNetworkStore.getState().setRelayStatus('connected');
           // Refresh addresses to update the UI
           useNetworkStore.getState().refreshAddresses();
+          useNetworkStore.getState().refreshShareableAddresses();
           toast.success('Connected to relay server');
           break;
 

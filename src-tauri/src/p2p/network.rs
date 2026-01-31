@@ -12,18 +12,11 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 /// Public relay servers that support libp2p relay v2
-/// Harbor's own relay is listed first for priority, followed by IPFS bootstrap nodes
+/// Only Harbor relay servers are listed here. IPFS bootstrap nodes use relay v1
+/// and RSA-based peer IDs that are incompatible with relay v2.
 const PUBLIC_RELAYS: &[&str] = &[
     // Harbor community relay (primary)
     "/ip4/154.5.126.219/tcp/4001/p2p/12D3KooWBNWtWMxJCeP6LDFK5qzhSCkvF34kV1kCEGAobjAnvYSN",
-    // IPFS bootstrap relays (fallback)
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-    "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-    // Additional IPFS bootstrap nodes with direct addresses for better connectivity
-    "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-    "/ip4/104.131.131.82/udp/4001/quic-v1/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 ];
 
 /// Public relay servers specifically for relay circuits (if available)
@@ -894,11 +887,54 @@ impl NetworkService {
                     relay_peer_id, renewal
                 );
 
-                // Build relay circuit address: /p2p/RELAY/p2p-circuit/p2p/LOCAL
-                let relay_circuit_addr: Multiaddr =
+                // Build full relay circuit address WITH transport prefix.
+                // Look up the relay peer's transport address from connected peers
+                // so other peers can actually reach us through this relay.
+                let mut relay_circuit_addr: Option<Multiaddr> = None;
+
+                if let Some(peer_info) = self.connected_peers.get(&relay_peer_id) {
+                    for addr_str in &peer_info.addresses {
+                        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                            // Strip /p2p/ from the address to get transport-only
+                            let transport_addr: Multiaddr = addr
+                                .iter()
+                                .filter(|p| {
+                                    !matches!(p, libp2p::multiaddr::Protocol::P2p(_))
+                                })
+                                .collect();
+
+                            if transport_addr.to_string().is_empty() {
+                                continue;
+                            }
+
+                            // Build: TRANSPORT/p2p/RELAY_ID/p2p-circuit/p2p/LOCAL_ID
+                            let full_circuit_addr: Multiaddr = format!(
+                                "{}/p2p/{}/p2p-circuit/p2p/{}",
+                                transport_addr, relay_peer_id, local_peer_id
+                            )
+                            .parse()
+                            .expect("valid relay circuit multiaddr");
+
+                            relay_circuit_addr = Some(full_circuit_addr);
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback: if we couldn't find a transport address, use bare p2p form
+                let relay_circuit_addr = relay_circuit_addr.unwrap_or_else(|| {
                     format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id)
                         .parse()
-                        .unwrap();
+                        .expect("valid relay circuit multiaddr")
+                });
+
+                // Register as external address so Identify advertises it to other peers
+                self.swarm
+                    .add_external_address(relay_circuit_addr.clone());
+                info!(
+                    "Added relay circuit as external address: {}",
+                    relay_circuit_addr
+                );
 
                 // Store the relay address if not already present
                 if !self.relay_addresses.contains(&relay_circuit_addr) {
@@ -1039,24 +1075,48 @@ impl NetworkService {
                     if let Some(relay_peer_id) = peer_id {
                         info!("Dialing relay server: {}", relay_addr);
 
-                        // Add to Kademlia for routing
+                        // Extract transport-only address (without /p2p/...)
                         let addr_without_peer: Multiaddr = relay_addr
                             .iter()
                             .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
                             .collect();
+
+                        // Add to Kademlia for routing
                         self.swarm
                             .behaviour_mut()
                             .kademlia
-                            .add_address(&relay_peer_id, addr_without_peer);
+                            .add_address(&relay_peer_id, addr_without_peer.clone());
 
                         // Dial the relay
                         if let Err(e) = self.swarm.dial(relay_addr.clone()) {
                             warn!("Failed to dial relay {}: {}", relay_addr, e);
                         } else {
-                            // Request a reservation from the relay
-                            // This happens automatically when we connect to a relay server
-                            // that supports the relay protocol
                             info!("Dial initiated to relay: {}", relay_peer_id);
+                        }
+
+                        // Listen on the relay circuit address to request a reservation.
+                        // In relay v2, the client MUST explicitly listen on a
+                        // p2p-circuit address — it does NOT happen automatically.
+                        let relay_circuit_listen_addr: Multiaddr = format!(
+                            "{}/p2p/{}/p2p-circuit",
+                            addr_without_peer, relay_peer_id
+                        )
+                        .parse()
+                        .expect("valid relay circuit multiaddr");
+
+                        match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
+                            Ok(_) => {
+                                info!(
+                                    "Listening on relay circuit: {}",
+                                    relay_circuit_listen_addr
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to listen on relay circuit {}: {}",
+                                    relay_circuit_listen_addr, e
+                                );
+                            }
                         }
                     }
                 }
@@ -1450,7 +1510,7 @@ impl NetworkService {
                         None
                     }
                 }) {
-                    // Add to Kademlia routing table, but only if there is a non-P2p component
+                    // Extract transport-only address (without /p2p/...)
                     let addr_without_peer: Multiaddr = address
                         .iter()
                         .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
@@ -1466,7 +1526,7 @@ impl NetworkService {
                         self.swarm
                             .behaviour_mut()
                             .kademlia
-                            .add_address(&relay_peer_id, addr_without_peer);
+                            .add_address(&relay_peer_id, addr_without_peer.clone());
                         info!("Added relay server: {} at {}", relay_peer_id, address);
                     }
 
@@ -1474,12 +1534,43 @@ impl NetworkService {
                     match self.swarm.dial(address.clone()) {
                         Ok(_) => {
                             info!("Dialing relay server: {}", address);
-                            NetworkResponse::Ok
                         }
                         Err(e) => {
-                            NetworkResponse::Error(format!("Failed to dial relay server: {}", e))
+                            return NetworkResponse::Error(format!(
+                                "Failed to dial relay server: {}",
+                                e
+                            ));
                         }
                     }
+
+                    // Listen on the relay circuit address to request a reservation.
+                    // In relay v2, the client MUST explicitly listen on a
+                    // p2p-circuit address — it does NOT happen automatically.
+                    if !addr_without_peer.is_empty() {
+                        let relay_circuit_listen_addr: Multiaddr = format!(
+                            "{}/p2p/{}/p2p-circuit",
+                            addr_without_peer, relay_peer_id
+                        )
+                        .parse()
+                        .expect("valid relay circuit multiaddr");
+
+                        match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
+                            Ok(_) => {
+                                info!(
+                                    "Listening on relay circuit: {}",
+                                    relay_circuit_listen_addr
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to listen on relay circuit {}: {}",
+                                    relay_circuit_listen_addr, e
+                                );
+                            }
+                        }
+                    }
+
+                    NetworkResponse::Ok
                 } else {
                     NetworkResponse::Error(
                         "Relay address must contain peer ID (/p2p/...)".to_string(),
@@ -1488,11 +1579,10 @@ impl NetworkService {
             }
 
             NetworkCommand::ConnectToPublicRelays => {
-                // Reset the flag to allow reconnection
+                // Reset the flag to allow reconnection and actually connect
                 self.relay_connection_attempted = false;
-                // Trigger connection to public relays
-                // This is done in a non-blocking way, actual connection happens asynchronously
                 info!("Manually triggering connection to public relay servers...");
+                self.connect_to_relays().await;
                 NetworkResponse::Ok
             }
 

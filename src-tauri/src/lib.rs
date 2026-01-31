@@ -196,6 +196,7 @@ pub fn run() {
             commands::lock_identity,
             commands::update_display_name,
             commands::update_bio,
+            commands::update_passphrase_hint,
             commands::get_peer_id,
             // Network commands
             commands::get_connected_peers,

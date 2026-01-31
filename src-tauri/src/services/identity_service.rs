@@ -93,6 +93,7 @@ impl IdentityService {
             display_name: request.display_name,
             avatar_hash: None,
             bio: request.bio,
+            passphrase_hint: request.passphrase_hint,
             created_at: now,
             updated_at: now,
         };
@@ -198,6 +199,13 @@ impl IdentityService {
         Ok(())
     }
 
+    /// Update passphrase hint
+    pub fn update_passphrase_hint(&self, hint: Option<&str>) -> Result<()> {
+        let repo = IdentityRepository::new(&self.db);
+        repo.update_passphrase_hint(hint)?;
+        Ok(())
+    }
+
     /// Get the local peer ID
     pub fn get_peer_id(&self) -> Result<String> {
         let repo = IdentityRepository::new(&self.db);
@@ -241,6 +249,7 @@ mod tests {
             display_name: "Test User".to_string(),
             passphrase: "test-passphrase".to_string(),
             bio: Some("Test bio".to_string()),
+            passphrase_hint: Some("Test hint".to_string()),
         };
 
         let info = service.create_identity(request).unwrap();
@@ -248,6 +257,7 @@ mod tests {
         assert!(info.peer_id.starts_with("12D3KooW"));
         assert_eq!(info.display_name, "Test User");
         assert_eq!(info.bio, Some("Test bio".to_string()));
+        assert_eq!(info.passphrase_hint, Some("Test hint".to_string()));
 
         // Should be auto-unlocked after creation
         assert!(service.is_unlocked());
@@ -262,6 +272,7 @@ mod tests {
             display_name: "Test User".to_string(),
             passphrase: "test-passphrase".to_string(),
             bio: None,
+            passphrase_hint: None,
         };
 
         service.create_identity(request).unwrap();
@@ -284,6 +295,7 @@ mod tests {
             display_name: "Test User".to_string(),
             passphrase: "correct-passphrase".to_string(),
             bio: None,
+            passphrase_hint: None,
         };
 
         service.create_identity(request).unwrap();
@@ -302,6 +314,7 @@ mod tests {
             display_name: "Test User".to_string(),
             passphrase: "test-passphrase".to_string(),
             bio: None,
+            passphrase_hint: None,
         };
 
         service.create_identity(request).unwrap();

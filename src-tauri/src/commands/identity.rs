@@ -96,6 +96,15 @@ pub async fn update_bio(
     identity_service.update_bio(bio.as_deref())
 }
 
+/// Update passphrase hint
+#[tauri::command]
+pub async fn update_passphrase_hint(
+    identity_service: State<'_, Arc<IdentityService>>,
+    hint: Option<String>,
+) -> Result<(), AppError> {
+    identity_service.update_passphrase_hint(hint.as_deref())
+}
+
 /// Get the local peer ID
 #[tauri::command]
 pub async fn get_peer_id(

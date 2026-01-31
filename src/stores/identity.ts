@@ -13,6 +13,7 @@ interface IdentityStore {
   lock: () => Promise<void>;
   updateDisplayName: (displayName: string) => Promise<void>;
   updateBio: (bio: string | null) => Promise<void>;
+  updatePassphraseHint: (hint: string | null) => Promise<void>;
   clearError: () => void;
 }
 
@@ -113,6 +114,23 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
           state: {
             ...state,
             identity: { ...state.identity, bio },
+          },
+        });
+      }
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+
+  updatePassphraseHint: async (hint: string | null) => {
+    try {
+      await identityService.updatePassphraseHint(hint);
+      const { state } = get();
+      if (state.status === 'unlocked' || state.status === 'locked') {
+        set({
+          state: {
+            ...state,
+            identity: { ...state.identity, passphraseHint: hint },
           },
         });
       }

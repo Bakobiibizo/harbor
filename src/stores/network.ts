@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import type { PeerInfo, NetworkStats, ConnectionStatus, NatStatus } from '../types';
 import * as networkService from '../services/network';
 
+export type RelayStatus = 'disconnected' | 'connecting' | 'connected';
+
 interface NetworkState {
   // State
   isRunning: boolean;
@@ -9,6 +11,8 @@ interface NetworkState {
   connectedPeers: PeerInfo[];
   stats: NetworkStats;
   listeningAddresses: string[];
+  shareableAddresses: string[];
+  relayStatus: RelayStatus;
   error: string | null;
   isLoading: boolean;
 
@@ -21,6 +25,10 @@ interface NetworkState {
   checkStatus: () => Promise<void>;
   connectToPeer: (multiaddr: string) => Promise<void>;
   addBootstrapNode: (multiaddr: string) => Promise<void>;
+  connectToRelay: (multiaddr: string) => Promise<void>;
+  connectToPublicRelays: () => Promise<void>;
+  refreshShareableAddresses: () => Promise<void>;
+  setRelayStatus: (status: RelayStatus) => void;
   // NAT status update (called by event handler)
   setNatStatus: (status: NatStatus) => void;
   addRelayAddress: (address: string) => void;
@@ -43,6 +51,8 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
   connectedPeers: [],
   stats: initialStats,
   listeningAddresses: [],
+  shareableAddresses: [],
+  relayStatus: 'disconnected',
   error: null,
   isLoading: false,
 
@@ -76,6 +86,8 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         connectedPeers: [],
         stats: initialStats,
         listeningAddresses: [],
+        shareableAddresses: [],
+        relayStatus: 'disconnected',
         isLoading: false,
       });
     } catch (error) {
@@ -154,6 +166,55 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({ error: error instanceof Error ? error.message : String(error), isLoading: false });
       throw error;
     }
+  },
+
+  // Connect to a specific relay server
+  connectToRelay: async (multiaddr: string) => {
+    set({ relayStatus: 'connecting', error: null });
+    try {
+      await networkService.addRelayServer(multiaddr);
+      // Relay status will be set to 'connected' by the relay_connected event handler
+      await get().refreshAddresses();
+      await get().refreshShareableAddresses();
+    } catch (error) {
+      set({
+        relayStatus: 'disconnected',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  },
+
+  // Connect to public/default Harbor relays
+  connectToPublicRelays: async () => {
+    set({ relayStatus: 'connecting', error: null });
+    try {
+      await networkService.connectToPublicRelays();
+      // Relay status will be set to 'connected' by the relay_connected event handler
+      await get().refreshAddresses();
+      await get().refreshShareableAddresses();
+    } catch (error) {
+      set({
+        relayStatus: 'disconnected',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  },
+
+  // Refresh shareable addresses (relay addresses usable by remote peers)
+  refreshShareableAddresses: async () => {
+    try {
+      const addresses = await networkService.getShareableAddresses();
+      set({ shareableAddresses: addresses });
+    } catch (error) {
+      console.error('Failed to refresh shareable addresses:', error);
+    }
+  },
+
+  // Set relay status (called by event handler)
+  setRelayStatus: (status: RelayStatus) => {
+    set({ relayStatus: status });
   },
 
   // Update NAT status (called by event handler)
