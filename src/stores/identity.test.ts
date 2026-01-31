@@ -12,6 +12,7 @@ vi.mock('../services', () => ({
     lock: vi.fn(),
     updateDisplayName: vi.fn(),
     updateBio: vi.fn(),
+    updatePassphraseHint: vi.fn(),
   },
 }));
 
@@ -22,6 +23,7 @@ const mockIdentity = {
   displayName: 'Test User',
   avatarHash: null,
   bio: 'Test bio',
+  passphraseHint: null,
   createdAt: 1704067200000,
   updatedAt: 1704067200000,
 };

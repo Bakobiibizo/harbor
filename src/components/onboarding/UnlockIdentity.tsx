@@ -213,6 +213,35 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
               </button>
             </div>
 
+            {/* Passphrase hint */}
+            {identity?.passphraseHint && (
+              <div
+                className="p-3 rounded-xl text-sm flex items-center gap-2"
+                style={{
+                  background: 'hsl(var(--harbor-primary) / 0.1)',
+                  color: 'hsl(var(--harbor-primary))',
+                  border: '1px solid hsl(var(--harbor-primary) / 0.2)',
+                }}
+              >
+                <svg
+                  className="w-4 h-4 flex-shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <span>
+                  <strong>Hint:</strong> {identity.passphraseHint}
+                </span>
+              </div>
+            )}
+
             {error && (
               <div
                 className="p-3 rounded-xl text-sm flex items-center gap-2"

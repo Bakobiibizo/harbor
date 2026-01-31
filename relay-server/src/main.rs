@@ -115,8 +115,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let local_peer_id = PeerId::from(keypair.public());
             let local_public_key = keypair.public();
 
-            // Configure relay server with limits
-            let relay_config = relay::Config::default();
+            // Configure relay server with limits from CLI args
+            let relay_config = relay::Config {
+                max_reservations: args.max_reservations,
+                max_circuits: args.max_circuits,
+                max_circuits_per_peer: args.max_circuits_per_peer,
+                ..Default::default()
+            };
 
             let relay = relay::Behaviour::new(local_peer_id, relay_config);
 

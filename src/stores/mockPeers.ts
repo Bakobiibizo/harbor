@@ -385,10 +385,16 @@ export interface SnoozedUser {
   snoozedUntil: Date; // When snooze expires
 }
 
+export interface ArchivedConversation {
+  conversationId: string;
+  archivedAt: Date;
+}
+
 // Zustand store interface
 interface MockPeersState {
   peers: MockPeer[];
   conversations: MockConversation[];
+  archivedConversations: ArchivedConversation[];
   userPosts: UserPost[];
   savedPosts: SavedPost[];
   hiddenPosts: HiddenPost[];
@@ -433,6 +439,15 @@ interface MockPeersState {
   snoozeUser: (peerId: string, durationHours: number) => void;
   unsnoozeUser: (peerId: string) => void;
   isUserSnoozed: (peerId: string) => boolean;
+
+  // Conversation management actions
+  archiveConversation: (conversationId: string) => void;
+  unarchiveConversation: (conversationId: string) => void;
+  isConversationArchived: (conversationId: string) => boolean;
+  clearConversationHistory: (conversationId: string) => void;
+  deleteConversation: (conversationId: string) => void;
+  getActiveConversations: () => MockConversation[];
+  getArchivedConversationsList: () => MockConversation[];
 }
 
 // Initial user posts (demo data)
@@ -469,6 +484,7 @@ const initialUserPosts: UserPost[] = [
 export const useMockPeersStore = create<MockPeersState>((set, get) => ({
   peers: mockPeers,
   conversations: initialConversations,
+  archivedConversations: [],
   userPosts: initialUserPosts,
   savedPosts: [],
   hiddenPosts: [],
@@ -723,5 +739,58 @@ export const useMockPeersStore = create<MockPeersState>((set, get) => ({
     if (!snooze) return false;
     // Check if snooze has expired
     return new Date() < snooze.snoozedUntil;
+  },
+
+  // Conversation management actions
+  archiveConversation: (conversationId: string) => {
+    set((state) => ({
+      archivedConversations: [
+        ...state.archivedConversations,
+        { conversationId, archivedAt: new Date() },
+      ],
+    }));
+  },
+
+  unarchiveConversation: (conversationId: string) => {
+    set((state) => ({
+      archivedConversations: state.archivedConversations.filter(
+        (a) => a.conversationId !== conversationId,
+      ),
+    }));
+  },
+
+  isConversationArchived: (conversationId: string) => {
+    return get().archivedConversations.some((a) => a.conversationId === conversationId);
+  },
+
+  clearConversationHistory: (conversationId: string) => {
+    set((state) => ({
+      conversations: state.conversations.map((conv) =>
+        conv.id === conversationId
+          ? { ...conv, messages: [], lastMessage: 'No messages yet', unread: 0 }
+          : conv,
+      ),
+    }));
+  },
+
+  deleteConversation: (conversationId: string) => {
+    set((state) => ({
+      conversations: state.conversations.filter((c) => c.id !== conversationId),
+      archivedConversations: state.archivedConversations.filter(
+        (a) => a.conversationId !== conversationId,
+      ),
+    }));
+  },
+
+  getActiveConversations: () => {
+    const { conversations, archivedConversations } = get();
+    const archivedIds = new Set(archivedConversations.map((a) => a.conversationId));
+    return conversations.filter((c) => !archivedIds.has(c.id));
+  },
+
+  getArchivedConversationsList: () => {
+    const { conversations, archivedConversations } = get();
+    const archivedIds = new Set(archivedConversations.map((a) => a.conversationId));
+    return conversations.filter((c) => archivedIds.has(c.id));
   },
 }));

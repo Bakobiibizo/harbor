@@ -46,6 +46,26 @@ export async function addBootstrapNode(multiaddr: string): Promise<void> {
   return invoke<void>('add_bootstrap_node', { multiaddr });
 }
 
+/** Add a relay server by multiaddress */
+export async function addRelayServer(multiaddr: string): Promise<void> {
+  return invoke<void>('add_relay_server', { multiaddr });
+}
+
+/** Connect to public/default relay servers */
+export async function connectToPublicRelays(): Promise<void> {
+  return invoke<void>('connect_to_public_relays');
+}
+
+/** Get current NAT status */
+export async function getNatStatus(): Promise<string> {
+  return invoke<string>('get_nat_status');
+}
+
+/** Get shareable addresses (relay addresses that work globally) */
+export async function getShareableAddresses(): Promise<string[]> {
+  return invoke<string[]>('get_shareable_addresses');
+}
+
 export async function syncFeed(limit?: number): Promise<void> {
   return invoke<void>('sync_feed', { limit });
 }

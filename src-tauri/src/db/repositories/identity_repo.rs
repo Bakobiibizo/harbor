@@ -30,7 +30,7 @@ impl<'a> IdentityRepository<'a> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT peer_id, public_key, x25519_public, private_key_encrypted,
-                        display_name, avatar_hash, bio, created_at, updated_at
+                        display_name, avatar_hash, bio, passphrase_hint, created_at, updated_at
                  FROM local_identity WHERE id = 1",
             )?;
 
@@ -43,8 +43,9 @@ impl<'a> IdentityRepository<'a> {
                     display_name: row.get(4)?,
                     avatar_hash: row.get(5)?,
                     bio: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    passphrase_hint: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             });
 
@@ -62,8 +63,8 @@ impl<'a> IdentityRepository<'a> {
             conn.execute(
                 "INSERT INTO local_identity
                  (id, peer_id, public_key, x25519_public, private_key_encrypted,
-                  display_name, avatar_hash, bio, created_at, updated_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                  display_name, avatar_hash, bio, passphrase_hint, created_at, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     identity.peer_id,
                     identity.public_key,
@@ -72,6 +73,7 @@ impl<'a> IdentityRepository<'a> {
                     identity.display_name,
                     identity.avatar_hash,
                     identity.bio,
+                    identity.passphrase_hint,
                     identity.created_at,
                     identity.updated_at,
                 ],
@@ -116,6 +118,18 @@ impl<'a> IdentityRepository<'a> {
             Ok(())
         })
     }
+
+    /// Update passphrase hint
+    pub fn update_passphrase_hint(&self, hint: Option<&str>) -> SqliteResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE local_identity SET passphrase_hint = ?1, updated_at = ?2 WHERE id = 1",
+                params![hint, now],
+            )?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +145,7 @@ mod tests {
             display_name: "Test User".to_string(),
             avatar_hash: None,
             bio: Some("Test bio".to_string()),
+            passphrase_hint: Some("My hint".to_string()),
             created_at: 1000,
             updated_at: 1000,
         }

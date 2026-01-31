@@ -1,6 +1,8 @@
 import { type ReactNode, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useIdentityStore, useSettingsStore, useNetworkStore, useMessagingStore } from '../../stores';
+import { useKeyboardNavigation } from '../../hooks';
+import { KeyboardShortcutsModal } from '../common';
 import {
   ChatIcon,
   WallIcon,
@@ -58,6 +60,9 @@ export function MainLayout({ children }: MainLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isLocking, setIsLocking] = useState(false);
+
+  // Enable keyboard navigation
+  useKeyboardNavigation();
 
   const identity = state.status === 'unlocked' ? state.identity : null;
 
@@ -376,6 +381,9 @@ export function MainLayout({ children }: MainLayoutProps) {
       >
         {children}
       </main>
+
+      {/* Keyboard shortcuts modal */}
+      <KeyboardShortcutsModal />
     </div>
   );
 }
