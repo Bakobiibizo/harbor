@@ -42,7 +42,7 @@
           pkgs.pkg-config
           pkgs.openssl
           pkgs.sqlite
-          pkgs.webkitgtk
+          pkgs.webkitgtk_4_1
           pkgs.gtk3
           pkgs.libsoup
           pkgs.librsvg
