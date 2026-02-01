@@ -44,7 +44,6 @@
           pkgs.sqlite
           pkgs.webkitgtk_4_1
           pkgs.gtk3
-          pkgs.libsoup_2_4
           pkgs.librsvg
         ];
         
