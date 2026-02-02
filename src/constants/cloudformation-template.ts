@@ -2,6 +2,8 @@
 // This template is embedded in the app for easy copy-paste deployment
 
 export const RELAY_BINARY_SHA256 = '8b78854e4311520337ffa908ee94f8ec28886371ede09ea426546e54191fc0fe';
+export const RELAY_PEER_ID = '12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9';
+export const RELAY_IDENTITY_KEY_B64 = 'CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo=';
 
 export const RELAY_CLOUDFORMATION_TEMPLATE = `AWSTemplateFormatVersion: "2010-09-09"
 Description: "Harbor libp2p Relay Server - Enables NAT traversal for Harbor chat app users"
@@ -241,6 +243,8 @@ Resources:
 
           EXPECTED_SHA256="8b78854e4311520337ffa908ee94f8ec28886371ede09ea426546e54191fc0fe"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
+          RELAY_PEER_ID="12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+          IDENTITY_KEY_B64="CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo="
 
           # Download pre-compiled binary
           echo "Downloading pre-compiled relay binary..."
@@ -258,6 +262,12 @@ Resources:
           echo "SHA256 verified OK"
 
           chmod +x /usr/local/bin/harbor-relay
+
+          # Install static identity key (same peer ID across restarts/redeployments)
+          echo "Installing static relay identity key..."
+          mkdir -p /root/.config/harbor-relay
+          echo "$IDENTITY_KEY_B64" | base64 -d > /root/.config/harbor-relay/id.key
+          echo "Relay Peer ID: $RELAY_PEER_ID"
 
           # Get public IP using IMDSv2
           echo "Getting public IP..."
@@ -297,53 +307,27 @@ Resources:
           systemctl start libp2p-relay
 
           # Wait for startup
-          echo "Waiting for relay to start (15 seconds)..."
-          sleep 15
+          echo "Waiting for relay to start (10 seconds)..."
+          sleep 10
 
           systemctl status libp2p-relay --no-pager || true
 
-          # Extract peer ID from logs
-          echo "Getting peer ID from logs..."
-          PEER_ID=""
-          for i in {1..20}; do
-            PEER_ID=$(journalctl -u libp2p-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
-            if [ -n "$PEER_ID" ]; then
-              echo "Found Peer ID: $PEER_ID"
-              break
-            fi
-            sleep 2
-          done
-
-          # Write relay address to SSM
+          # Build relay address using known peer ID (no need to extract from logs)
           SSM_PARAM_NAME="/harbor/\${AWS::StackName}/relay-address"
+          RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/\${RelayPort}/p2p/$RELAY_PEER_ID"
 
-          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
-            RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/\${RelayPort}/p2p/$PEER_ID"
-            echo "Relay address: $RELAY_ADDRESS"
+          echo "Relay address: $RELAY_ADDRESS"
 
-            aws ssm put-parameter \\
-              --name "$SSM_PARAM_NAME" \\
-              --value "$RELAY_ADDRESS" \\
-              --type String \\
-              --overwrite \\
-              --region \${AWS::Region}
+          aws ssm put-parameter \\
+            --name "$SSM_PARAM_NAME" \\
+            --value "$RELAY_ADDRESS" \\
+            --type String \\
+            --overwrite \\
+            --region \${AWS::Region}
 
-            echo "=== SUCCESS ==="
-            echo "YOUR RELAY ADDRESS (copy this to Harbor):"
-            echo "$RELAY_ADDRESS"
-          else
-            echo "=== PARTIAL FAILURE ==="
-            echo "Public IP: $PUBLIC_IP"
-            echo "Peer ID: $PEER_ID"
-
-            aws ssm put-parameter \\
-              --name "$SSM_PARAM_NAME" \\
-              --value "ERROR: Setup incomplete. Check /var/log/user-data.log on EC2 instance" \\
-              --type String \\
-              --overwrite \\
-              --region \${AWS::Region}
-          fi
-
+          echo "=== SUCCESS ==="
+          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+          echo "$RELAY_ADDRESS"
           echo "=== Setup Complete ==="
 
       Tags:
@@ -353,21 +337,25 @@ Resources:
           Value: harbor-chat
 
 Outputs:
+  RelayAddress:
+    Description: "Your relay address (once the EIP is assigned)"
+    Value: !Sub "/ip4/\${RelayEIP}/tcp/\${RelayPort}/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+
   Step1WaitTwoMinutes:
-    Description: "STEP 1: Wait ~2 minutes for the server to start up"
-    Value: "The relay server downloads a pre-compiled binary and starts quickly."
+    Description: "STEP 1: Wait ~1 minute for the server to start"
+    Value: "Uses pre-compiled binary with static identity - starts quickly."
 
-  Step2GetYourRelayAddress:
-    Description: "STEP 2: Click this link to get your relay address"
-    Value: !Sub "https://\${AWS::Region}.console.aws.amazon.com/systems-manager/parameters/harbor/\${AWS::StackName}/relay-address/description?region=\${AWS::Region}"
-
-  Step3CopyTheValue:
-    Description: "STEP 3: Copy the 'Value' field and paste it into Harbor"
-    Value: "On that page, find the 'Value' field. It looks like: /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."
+  Step2CopyRelayAddress:
+    Description: "STEP 2: Copy the RelayAddress output above into Harbor"
+    Value: "Paste it into Network > Advanced > Add Relay Address"
 
   RelayPublicIP:
     Description: "Public IP address (for reference)"
     Value: !Ref RelayEIP
+
+  RelayPeerID:
+    Description: "Relay Peer ID (static, survives restarts)"
+    Value: "12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
 
   EstimatedMonthlyCost:
     Description: "Cost: FREE for 12 months, then ~$9/month"
