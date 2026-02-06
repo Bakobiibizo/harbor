@@ -102,11 +102,7 @@
 
 /* Dark Mode */
 @media (prefers-color-scheme: dark) {
-<<<<<<< Updated upstream
-  :root {
-=======
   :root:not([data-theme='light']) {
->>>>>>> Stashed changes
     --harbor-bg-primary: 222 47% 8%;
     --harbor-bg-secondary: 222 47% 11%;
     --harbor-bg-tertiary: 222 41% 15%;
@@ -130,8 +126,6 @@
   }
 }
 
-<<<<<<< Updated upstream
-=======
 /* Dark Mode - forced via toggle */
 :root[data-theme='dark'] {
   --harbor-bg-primary: 222 47% 8%;
@@ -156,7 +150,6 @@
   --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.4);
 }
 
->>>>>>> Stashed changes
 /* ============================================
    Base Styles
    ============================================ */

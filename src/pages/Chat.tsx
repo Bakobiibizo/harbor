@@ -228,7 +228,6 @@ export function ChatPage() {
     setCurrentSearchIndex(0);
   }, [messageSearchQuery]);
 
-<<<<<<< Updated upstream
   // Get active or archived mock conversations based on toggle
   const displayMockConversations = showArchived
     ? getArchivedConversationsList()
@@ -270,27 +269,6 @@ export function ChatPage() {
       }),
     ),
   ];
-=======
-  // Build conversation list from real contacts
-  const unifiedConversations: UnifiedConversation[] = contacts.map(
-    (contact): UnifiedConversation => {
-      const realConv = realConversations.find((c) => c.peerId === contact.peerId);
-      return {
-        id: `real-${contact.peerId}`,
-        peerId: contact.peerId,
-        name: contact.displayName,
-        online: true, // Assume online for now - would need presence tracking
-        avatarGradient: getContactColor(contact.peerId),
-        lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
-        timestamp: realConv
-          ? new Date(realConv.lastMessageAt * 1000)
-          : new Date(contact.addedAt * 1000),
-        unread: realConv?.unreadCount || 0,
-        isReal: true,
-      };
-    },
-  );
->>>>>>> Stashed changes
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -300,15 +278,11 @@ export function ChatPage() {
   const selectedConv = unifiedConversations.find((c) => c.id === selectedConversation);
 
   // Get messages for current conversation
-<<<<<<< Updated upstream
   const currentMessages = selectedConv
     ? selectedConv.isReal
       ? realMessages[selectedConv.peerId] || []
       : mockConversations.find((c) => c.id === selectedConversation)?.messages || []
     : [];
-=======
-  const currentMessages = selectedConv ? realMessages[selectedConv.peerId] || [] : [];
->>>>>>> Stashed changes
 
   // Calculate search results
   const searchResults = messageSearchQuery.trim()
@@ -464,7 +438,12 @@ export function ChatPage() {
               title={showArchived ? 'View active conversations' : 'View archived conversations'}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+                />
               </svg>
             </button>
             {!showArchived && (

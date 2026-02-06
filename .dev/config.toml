@@ -1,4 +1,4 @@
-# Tauri project configuration
+# Windows devkit configuration
 # Frontend: TypeScript/npm at project root
 # Backend: Rust at src-tauri/
 
@@ -7,16 +7,16 @@ default_language = "typescript"
 # ===================== TypeScript/Frontend ========================
 
 [tasks.ts_fmt]
-commands = [["./node_modules/.bin/prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
+commands = [["npx.cmd", "prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
 
 [tasks.ts_lint]
-commands = [["./node_modules/.bin/eslint", "src", "--fix"]]
+commands = [["npx.cmd", "eslint", "src", "--fix"]]
 
 [tasks.ts_lint_check]
-commands = [["./node_modules/.bin/eslint", "src"]]
+commands = [["npx.cmd", "eslint", "src"]]
 
 [tasks.ts_type]
-commands = [["./node_modules/.bin/tsc", "--noEmit"]]
+commands = [["npx.cmd", "tsc", "--noEmit"]]
 
 [tasks.ts_test]
 commands = [["npm", "run", "test"]]

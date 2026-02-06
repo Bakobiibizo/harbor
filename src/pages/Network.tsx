@@ -1,8 +1,4 @@
 import { useEffect, useState } from 'react';
-<<<<<<< Updated upstream
-=======
-import { invoke } from '@tauri-apps/api/core';
->>>>>>> Stashed changes
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
 import { contactsService } from '../services/contacts';
@@ -204,16 +200,9 @@ export function NetworkPage() {
   const [isConnectingRelay, setIsConnectingRelay] = useState(false);
   const [peerAddress, setPeerAddress] = useState('');
   const [isConnectingPeer, setIsConnectingPeer] = useState(false);
-<<<<<<< Updated upstream
-  const [isAddingContact, setIsAddingContact] = useState(false);
-  const [showManualConnect, setShowManualConnect] = useState(false);
-  const [showLocalAddresses, setShowLocalAddresses] = useState(false);
-  const [showDeployRelay, setShowDeployRelay] = useState(false);
-=======
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [natDetectionTimedOut, setNatDetectionTimedOut] = useState(false);
   const [shareableContactString, setShareableContactString] = useState<string | null>(null);
->>>>>>> Stashed changes
 
   // Check network status on mount and set up refresh interval
   useEffect(() => {
@@ -238,8 +227,6 @@ export function NetworkPage() {
     refreshShareableAddresses,
   ]);
 
-<<<<<<< Updated upstream
-=======
   // NAT status "Detecting..." timeout (30s)
   useEffect(() => {
     if (stats.natStatus !== 'unknown' || !isRunning) {
@@ -269,7 +256,6 @@ export function NetworkPage() {
     }
   }, [relayStatus, isRunning]);
 
->>>>>>> Stashed changes
   // Handlers
   const handleConnectToRelay = async () => {
     if (!relayInput.trim()) {
@@ -356,13 +342,11 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-<<<<<<< Updated upstream
-=======
     const contactName =
       contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
->>>>>>> Stashed changes
     return (
       friendlyName.includes(query) ||
+      contactName.includes(query) ||
       peer.peerId.toLowerCase().includes(query) ||
       peer.addresses.some((addr) => addr.toLowerCase().includes(query))
     );
@@ -564,9 +548,6 @@ export function NetworkPage() {
                             : 'hsl(var(--harbor-text-primary))',
                     }}
                   >
-<<<<<<< Updated upstream
-                    {stats.natStatus === 'unknown' ? 'Detecting...' : stats.natStatus === 'public' ? 'Public' : stats.natStatus === 'private' ? 'Relayed' : 'Behind NAT'}
-=======
                     {stats.natStatus === 'unknown'
                       ? natDetectionTimedOut
                         ? 'Unable to detect'
@@ -576,7 +557,6 @@ export function NetworkPage() {
                         : stats.natStatus === 'private'
                           ? 'Relayed'
                           : 'Behind NAT'}
->>>>>>> Stashed changes
                   </p>
                 </div>
               </div>
@@ -1087,22 +1067,6 @@ export function NetworkPage() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-<<<<<<< Updated upstream
-                    {discoveredPeers.map((peer) => (
-                      <PeerRow
-                        key={peer.peerId}
-                        peerId={peer.peerId}
-
-                        actionLabel="Connect"
-                        actionStyle="primary"
-                        onAction={async () => {
-                          if (peer.addresses.length > 0) {
-                            try {
-                              await connectToPeer(peer.addresses[0]);
-                              toast.success('Connecting...');
-                            } catch (err) {
-                              toast.error(`Failed: ${err}`);
-=======
                     {discoveredPeers.map((peer) => {
                       const knownContact = contacts.find(
                         (contact) => contact.peerId === peer.peerId,
@@ -1124,14 +1088,11 @@ export function NetworkPage() {
                               }
                             } else {
                               toast.error('No address available for this peer');
->>>>>>> Stashed changes
                             }
-                          } else {
-                            toast.error('No address available for this peer');
-                          }
-                        }}
-                      />
-                    ))}
+                          }}
+                        />
+                      );
+                    })}
                   </div>
                 )
               ) : activeTab === 'connected' ? (
@@ -1161,26 +1122,6 @@ export function NetworkPage() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-<<<<<<< Updated upstream
-                    {connectedPeersList.map((peer) => (
-                      <PeerRow
-                        key={peer.peerId}
-                        peerId={peer.peerId}
-
-                        isConnected
-                        actionLabel="Add Contact"
-                        actionStyle="success"
-                        onAction={async () => {
-                          try {
-                            await contactsService.requestPeerIdentity(peer.peerId);
-                            toast.success(`Requesting identity from ${getPeerFriendlyName(peer.peerId)}...`);
-                          } catch (err) {
-                            toast.error(`Failed to add contact: ${err}`);
-                          }
-                        }}
-                      />
-                    ))}
-=======
                     {connectedPeersList.map((peer) => {
                       const knownContact = contacts.find(
                         (contact) => contact.peerId === peer.peerId,
@@ -1207,7 +1148,6 @@ export function NetworkPage() {
                         />
                       );
                     })}
->>>>>>> Stashed changes
                   </div>
                 )
               ) : // Contacts tab
@@ -1246,41 +1186,12 @@ export function NetworkPage() {
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                         style={{ background: getPeerColor(contact.peerId) }}
                       >
-<<<<<<< Updated upstream
-                        <div
-                          className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
-                          style={{ background: getPeerColor(contact.peerId) }}
-                        >
-                          {contact.displayName.split(' ').map((word) => word[0]).join('').toUpperCase().slice(0, 2)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                            {contact.displayName}
-                          </p>
-                          <p
-                            className="text-xs font-mono truncate"
-                            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                            title={contact.peerId}
-                          >
-                            {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
-                          </p>
-                        </div>
-                        {contact.bio && (
-                          <p
-                            className="text-xs truncate max-w-[200px]"
-                            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                          >
-                            {contact.bio}
-                          </p>
-                        )}
-=======
                         {contact.displayName
                           .split(' ')
                           .map((word) => word[0])
                           .join('')
                           .toUpperCase()
                           .slice(0, 2)}
->>>>>>> Stashed changes
                       </div>
                       <div className="flex-1 min-w-0">
                         <p
@@ -1378,16 +1289,12 @@ function PeerRow({
 }) {
   const friendlyName = getPeerFriendlyName(peerId);
   const avatarColor = getPeerColor(peerId);
-<<<<<<< Updated upstream
-  const initials = friendlyName.split(' ').map((word) => word[0]).join('');
-=======
   const initials = friendlyName
     .split(' ')
     .map((word) => word[0])
     .join('')
     .toUpperCase()
     .slice(0, 2);
->>>>>>> Stashed changes
 
   return (
     <div
