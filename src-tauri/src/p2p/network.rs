@@ -437,6 +437,10 @@ impl NetworkService {
             return;
         }
 
+        // Auto-connect to relay on start (don't wait for AutoNAT)
+        info!("Auto-connecting to Harbor relay...");
+        self.connect_to_relays().await;
+
         loop {
             tokio::select! {
                 // Handle swarm events
@@ -612,34 +616,61 @@ impl NetworkService {
                 }
             }
             ContentSyncRequest::FetchPost {
-                post_id: _,
-                include_media: _,
-                requester_peer_id: _,
-                timestamp: _,
-                signature: _,
+                post_id,
+                include_media,
+                requester_peer_id,
+                timestamp,
+                signature,
             } => {
-                // SECURITY: FetchPost is disabled until proper authentication is implemented.
-                // This endpoint would leak non-public posts if enabled without:
-                // 1. Signature verification on the request
-                // 2. Timestamp validation to prevent replay attacks
-                // 3. Visibility checks based on requester's permissions
-                //
-                // TODO: Implement proper auth before enabling:
-                // - Verify signature matches requester_peer_id
-                // - Check timestamp is within acceptable window
-                // - Only return public posts, or posts where requester has permission
-                warn!(
-                    "FetchPost request from {} denied: endpoint not yet secured",
-                    peer
-                );
-                let _ = self.swarm.behaviour_mut().content_sync.send_response(
-                    channel,
-                    ContentSyncResponse::Error {
-                        error:
-                            "FetchPost endpoint is not yet available. Use manifest sync instead."
-                                .to_string(),
-                    },
-                );
+                // Ensure peer id matches claimed requester
+                if requester_peer_id != peer.to_string() {
+                    let _ = self.swarm.behaviour_mut().content_sync.send_response(
+                        channel,
+                        ContentSyncResponse::Error {
+                            error: "requester_peer_id mismatch".to_string(),
+                        },
+                    );
+                    return;
+                }
+
+                match content_sync_service.process_fetch_request(
+                    &requester_peer_id,
+                    &post_id,
+                    include_media,
+                    timestamp,
+                    &signature,
+                ) {
+                    Ok(resp) => {
+                        let response = ContentSyncResponse::Post {
+                            post_id: resp.post_id,
+                            author_peer_id: resp.author_peer_id,
+                            content_type: resp.content_type,
+                            content_text: resp.content_text,
+                            visibility: resp.visibility,
+                            lamport_clock: resp.lamport_clock,
+                            created_at: resp.created_at,
+                            signature: resp.signature,
+                        };
+
+                        if let Err(e) = self
+                            .swarm
+                            .behaviour_mut()
+                            .content_sync
+                            .send_response(channel, response)
+                        {
+                            warn!("Failed to send fetch post response: {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to process fetch request from {}: {}", peer, e);
+                        let _ = self.swarm.behaviour_mut().content_sync.send_response(
+                            channel,
+                            ContentSyncResponse::Error {
+                                error: e.to_string(),
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -693,16 +724,107 @@ impl NetworkService {
                     timestamp,
                     &signature,
                 ) {
-                    Ok(_posts_to_fetch) => {
-                        // TODO: issue follow-up fetch requests for missing posts/media
+                    Ok(posts_to_fetch) => {
+                        // Emit manifest received event
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContentManifestReceived {
+                                peer_id: peer.to_string(),
+                                post_count: posts_to_fetch.len(),
+                                has_more,
+                            })
+                            .await;
+
+                        // Issue fetch requests for posts we need
+                        for post_id in posts_to_fetch {
+                            match content_sync_service.create_fetch_request(post_id.clone(), false)
+                            {
+                                Ok(fetch_req) => {
+                                    let request = ContentSyncRequest::FetchPost {
+                                        post_id: fetch_req.post_id,
+                                        include_media: fetch_req.include_media,
+                                        requester_peer_id: fetch_req.requester_peer_id,
+                                        timestamp: fetch_req.timestamp,
+                                        signature: fetch_req.signature,
+                                    };
+                                    self.swarm
+                                        .behaviour_mut()
+                                        .content_sync
+                                        .send_request(&peer, request);
+                                    debug!("Sent fetch request for post {} to {}", post_id, peer);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to create fetch request for {}: {}", post_id, e);
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         warn!("Failed to process manifest response: {}", e);
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContentSyncError {
+                                peer_id: peer.to_string(),
+                                error: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
-            ContentSyncResponse::Post { .. } => {
-                // TODO: Handle post fetch responses
+            ContentSyncResponse::Post {
+                post_id,
+                author_peer_id,
+                content_type,
+                content_text,
+                visibility,
+                lamport_clock,
+                created_at,
+                signature,
+            } => {
+                info!("Received post {} from {}", post_id, peer);
+
+                // Verify the author matches the peer we requested from
+                if author_peer_id != peer.to_string() {
+                    warn!(
+                        "Post author mismatch: expected {}, got {}",
+                        peer, author_peer_id
+                    );
+                    return;
+                }
+
+                // Store the remote post
+                match content_sync_service.store_remote_post(
+                    &post_id,
+                    &author_peer_id,
+                    &content_type,
+                    content_text.as_deref(),
+                    &visibility,
+                    lamport_clock,
+                    created_at,
+                    &signature,
+                ) {
+                    Ok(_) => {
+                        info!("Stored remote post {} from {}", post_id, peer);
+                        // Emit event for UI to refresh feed
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContentFetched {
+                                peer_id: peer.to_string(),
+                                post_id,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        warn!("Failed to store remote post {}: {}", post_id, e);
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContentSyncError {
+                                peer_id: peer.to_string(),
+                                error: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
             }
             ContentSyncResponse::Error { error } => {
                 warn!("Content sync error from {}: {}", peer, error);
@@ -898,9 +1020,7 @@ impl NetworkService {
                             // Strip /p2p/ from the address to get transport-only
                             let transport_addr: Multiaddr = addr
                                 .iter()
-                                .filter(|p| {
-                                    !matches!(p, libp2p::multiaddr::Protocol::P2p(_))
-                                })
+                                .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
                                 .collect();
 
                             if transport_addr.to_string().is_empty() {
@@ -929,8 +1049,7 @@ impl NetworkService {
                 });
 
                 // Register as external address so Identify advertises it to other peers
-                self.swarm
-                    .add_external_address(relay_circuit_addr.clone());
+                self.swarm.add_external_address(relay_circuit_addr.clone());
                 info!(
                     "Added relay circuit as external address: {}",
                     relay_circuit_addr
@@ -1097,19 +1216,14 @@ impl NetworkService {
                         // Listen on the relay circuit address to request a reservation.
                         // In relay v2, the client MUST explicitly listen on a
                         // p2p-circuit address — it does NOT happen automatically.
-                        let relay_circuit_listen_addr: Multiaddr = format!(
-                            "{}/p2p/{}/p2p-circuit",
-                            addr_without_peer, relay_peer_id
-                        )
-                        .parse()
-                        .expect("valid relay circuit multiaddr");
+                        let relay_circuit_listen_addr: Multiaddr =
+                            format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
+                                .parse()
+                                .expect("valid relay circuit multiaddr");
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!(
-                                    "Listening on relay circuit: {}",
-                                    relay_circuit_listen_addr
-                                );
+                                info!("Listening on relay circuit: {}", relay_circuit_listen_addr);
                             }
                             Err(e) => {
                                 warn!(
@@ -1547,19 +1661,14 @@ impl NetworkService {
                     // In relay v2, the client MUST explicitly listen on a
                     // p2p-circuit address — it does NOT happen automatically.
                     if !addr_without_peer.is_empty() {
-                        let relay_circuit_listen_addr: Multiaddr = format!(
-                            "{}/p2p/{}/p2p-circuit",
-                            addr_without_peer, relay_peer_id
-                        )
-                        .parse()
-                        .expect("valid relay circuit multiaddr");
+                        let relay_circuit_listen_addr: Multiaddr =
+                            format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
+                                .parse()
+                                .expect("valid relay circuit multiaddr");
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!(
-                                    "Listening on relay circuit: {}",
-                                    relay_circuit_listen_addr
-                                );
+                                info!("Listening on relay circuit: {}", relay_circuit_listen_addr);
                             }
                             Err(e) => {
                                 warn!(

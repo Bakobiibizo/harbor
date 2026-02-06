@@ -1,4 +1,4 @@
-# Tauri project configuration
+# Windows devkit configuration
 # Frontend: TypeScript/npm at project root
 # Backend: Rust at src-tauri/
 
@@ -7,22 +7,22 @@ default_language = "typescript"
 # ===================== TypeScript/Frontend ========================
 
 [tasks.ts_fmt]
-commands = [["./node_modules/.bin/prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
+commands = [["node_modules/.bin/prettier.cmd", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
 
 [tasks.ts_lint]
-commands = [["./node_modules/.bin/eslint", "src", "--fix"]]
+commands = [["node_modules/.bin/eslint.cmd", "src", "--fix"]]
 
 [tasks.ts_lint_check]
-commands = [["./node_modules/.bin/eslint", "src"]]
+commands = [["node_modules/.bin/eslint.cmd", "src"]]
 
 [tasks.ts_type]
-commands = [["./node_modules/.bin/tsc", "--noEmit"]]
+commands = [["node_modules/.bin/tsc.cmd", "--noEmit"]]
 
 [tasks.ts_test]
-commands = [["npm", "run", "test"]]
+commands = [["npm.cmd", "run", "test"]]
 
 [tasks.ts_build]
-commands = [["npm", "run", "build"]]
+commands = [["npm.cmd", "run", "build"]]
 
 [tasks.ts_fix]
 commands = [
@@ -101,15 +101,15 @@ commands = [
 ]
 
 [tasks.tauri_dev]
-commands = [["npm", "run", "tauri", "dev"]]
+commands = [["npm.cmd", "run", "tauri", "dev"]]
 
 [tasks.tauri_build]
-commands = [["npm", "run", "tauri", "build"]]
+commands = [["npm.cmd", "run", "tauri", "build"]]
 
 # ===================== Language Pipelines ========================
 
 [languages.typescript]
-install = [["npm", "install"]]
+install = [["npm.cmd", "install"]]
 
 [languages.typescript.pipelines]
 fmt = ["ts_fmt"]

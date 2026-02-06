@@ -77,3 +77,13 @@
 
 - Describe the notable changes here.
 
+## 2026-02-06 - v0.1.1
+
+- Merge pull request #61 from Bakobiibizo/fix/p2p-communciations
+- Merge branch 'release-candidate' into fix/p2p-communciations
+- dev ci
+- devci
+- added updater
+- fixed p2p communications
+- fix: updating p2p communications to work with the relay and simplify the network menu options
+

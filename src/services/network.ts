@@ -66,6 +66,16 @@ export async function getShareableAddresses(): Promise<string[]> {
   return invoke<string[]>('get_shareable_addresses');
 }
 
+/** Get a shareable contact string that includes everything needed to add as contact */
+export async function getShareableContactString(): Promise<string> {
+  return invoke<string>('get_shareable_contact_string');
+}
+
+/** Add a contact from a shareable contact string (harbor://...) */
+export async function addContactFromString(contactString: string): Promise<string> {
+  return invoke<string>('add_contact_from_string', { contactString });
+}
+
 export async function syncFeed(limit?: number): Promise<void> {
   return invoke<void>('sync_feed', { limit });
 }

@@ -30,8 +30,8 @@ export function KeyboardShortcutsModal() {
   };
 
   // Group shortcuts by category
-  const navigationShortcuts = KEYBOARD_SHORTCUTS.filter((s) =>
-    s.description.includes('Go to') || s.description.includes('page'),
+  const navigationShortcuts = KEYBOARD_SHORTCUTS.filter(
+    (s) => s.description.includes('Go to') || s.description.includes('page'),
   );
   const actionShortcuts = KEYBOARD_SHORTCUTS.filter(
     (s) =>
@@ -95,10 +95,7 @@ export function KeyboardShortcutsModal() {
             <div className="space-y-2">
               {navigationShortcuts.map((shortcut, index) => (
                 <div key={index} className="flex items-center justify-between">
-                  <span
-                    className="text-sm"
-                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                  >
+                  <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
                     {shortcut.description}
                   </span>
                   <kbd
@@ -127,10 +124,7 @@ export function KeyboardShortcutsModal() {
             <div className="space-y-2">
               {actionShortcuts.map((shortcut, index) => (
                 <div key={index} className="flex items-center justify-between">
-                  <span
-                    className="text-sm"
-                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                  >
+                  <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
                     {shortcut.description}
                   </span>
                   <kbd
@@ -159,10 +153,7 @@ export function KeyboardShortcutsModal() {
             <div className="space-y-2">
               {listShortcuts.map((shortcut, index) => (
                 <div key={index} className="flex items-center justify-between">
-                  <span
-                    className="text-sm"
-                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                  >
+                  <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
                     {shortcut.description}
                   </span>
                   <kbd
@@ -187,7 +178,11 @@ export function KeyboardShortcutsModal() {
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-            Press <kbd className="px-1 rounded" style={{ background: 'hsl(var(--harbor-surface-1))' }}>Esc</kbd> to close
+            Press{' '}
+            <kbd className="px-1 rounded" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
+              Esc
+            </kbd>{' '}
+            to close
           </p>
         </div>
       </div>

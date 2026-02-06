@@ -81,8 +81,7 @@ pub fn init_logging(config: LogConfig) {
             .with_span_events(FmtSpan::CLOSE)
             .with_filter(env_filter.clone());
 
-        if config.file_enabled && config.log_dir.is_some() {
-            let log_dir = config.log_dir.unwrap();
+        if let Some(log_dir) = config.log_dir.filter(|_| config.file_enabled) {
             std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
 
             let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "harbor.log");
@@ -114,8 +113,7 @@ pub fn init_logging(config: LogConfig) {
         } else {
             registry.with(console_layer).init();
         }
-    } else if config.file_enabled && config.log_dir.is_some() {
-        let log_dir = config.log_dir.unwrap();
+    } else if let Some(log_dir) = config.log_dir.filter(|_| config.file_enabled) {
         std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
 
         let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "harbor.log");

@@ -2,6 +2,36 @@ import { create } from 'zustand';
 import type { IdentityState, CreateIdentityRequest } from '../types';
 import { identityService } from '../services';
 
+/** Extract error message from various error types (including Tauri errors) */
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === 'string') {
+    return err;
+  }
+  if (err && typeof err === 'object') {
+    // Tauri errors might have a message property
+    if ('message' in err && typeof err.message === 'string') {
+      return err.message;
+    }
+    // Or an error property
+    if ('error' in err && typeof err.error === 'string') {
+      return err.error;
+    }
+    // Try to stringify for debugging, but provide a fallback
+    try {
+      const str = JSON.stringify(err);
+      if (str && str !== '{}') {
+        return str;
+      }
+    } catch {
+      // Ignore stringify errors
+    }
+  }
+  return 'An unknown error occurred';
+}
+
 interface IdentityStore {
   state: IdentityState;
   error: string | null;
@@ -48,7 +78,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     } catch (err) {
       set({
         state: { status: 'no_identity' },
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   },
@@ -60,7 +90,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       set({ state: { status: 'unlocked', identity } });
       return identity;
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
       throw err;
     }
   },
@@ -71,7 +101,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       const identity = await identityService.unlock(passphrase);
       set({ state: { status: 'unlocked', identity } });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
       throw err;
     }
   },
@@ -84,7 +114,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         set({ state: { status: 'locked', identity: state.identity } });
       }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
     }
   },
 
@@ -101,7 +131,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
     }
   },
 
@@ -118,7 +148,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
     }
   },
 
@@ -135,7 +165,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
     }
   },
 

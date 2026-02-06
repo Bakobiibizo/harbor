@@ -41,4 +41,7 @@ export type NetworkEvent =
   | { type: 'contact_added'; peerId: string; displayName: string }
   | { type: 'nat_status_changed'; status: NatStatus }
   | { type: 'relay_connected'; relayAddress: string }
-  | { type: 'hole_punch_succeeded'; peerId: string };
+  | { type: 'hole_punch_succeeded'; peerId: string }
+  | { type: 'content_manifest_received'; peerId: string; postCount: number; hasMore: boolean }
+  | { type: 'content_fetched'; peerId: string; postId: string }
+  | { type: 'content_sync_error'; peerId: string; error: string };
