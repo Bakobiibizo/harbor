@@ -1,4 +1,4 @@
-# Tauri project configuration
+# Windows devkit configuration
 # Frontend: TypeScript/npm at project root
 # Backend: Rust at src-tauri/
 

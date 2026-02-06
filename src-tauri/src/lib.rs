@@ -66,6 +66,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             // Get app data directory first so we can set up logging properly
             let app_data_dir = app
@@ -145,6 +148,7 @@ pub fn run() {
                 db.clone(),
                 identity_service.clone(),
                 permissions_service.clone(),
+                contacts_service.clone(),
             ));
             let calling_service = Arc::new(CallingService::new(
                 db.clone(),
@@ -210,6 +214,8 @@ pub fn run() {
             commands::sync_feed,
             commands::add_bootstrap_node,
             commands::get_shareable_addresses,
+            commands::get_shareable_contact_string,
+            commands::add_contact_from_string,
             commands::add_relay_server,
             commands::connect_to_public_relays,
             commands::get_nat_status,

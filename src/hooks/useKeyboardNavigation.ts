@@ -54,9 +54,7 @@ export function useKeyboardNavigation() {
       // Don't trigger shortcuts when typing in input fields
       const target = event.target as HTMLElement;
       const isInputField =
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable;
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
       // Ctrl+1-5: Navigate to pages
       if (event.ctrlKey && !event.altKey && !event.shiftKey) {
@@ -133,11 +131,7 @@ export function useListKeyboardNavigation<T>(
     const handleKeyDown = (event: KeyboardEvent) => {
       // Don't handle if typing in input
       const target = event.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
-      ) {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
         return;
       }
 

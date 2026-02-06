@@ -305,3 +305,150 @@ pub async fn sync_feed(
     let handle: NetworkHandle = network.get_handle().await?;
     handle.sync_feed(limit.unwrap_or(50)).await
 }
+
+/// Contact bundle for sharing - contains everything needed to add someone as a contact
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactBundle {
+    /// Multiaddress for connection
+    pub multiaddr: String,
+    /// Display name
+    pub display_name: String,
+    /// Ed25519 public key (base64)
+    pub public_key: String,
+    /// X25519 public key for encryption (base64)
+    pub x25519_public: String,
+    /// Optional bio
+    pub bio: Option<String>,
+    /// Optional avatar hash
+    pub avatar_hash: Option<String>,
+}
+
+/// Generate a shareable contact string that includes all info needed to add as contact
+/// Format: harbor://<base64_encoded_json>
+#[tauri::command]
+pub async fn get_shareable_contact_string(
+    network: State<'_, NetworkState>,
+    identity_service: State<'_, Arc<IdentityService>>,
+) -> Result<String, AppError> {
+    use base64::Engine;
+
+    let handle: NetworkHandle = network.get_handle().await?;
+    let stats = handle.get_stats().await?;
+
+    // Get our identity with keys
+    let identity = identity_service
+        .get_identity()?
+        .ok_or_else(|| AppError::NotFound("Identity not found".to_string()))?;
+
+    let keys = identity_service
+        .get_identity_info()?
+        .ok_or_else(|| AppError::NotFound("Identity keys not found".to_string()))?;
+
+    // Get the best address to share
+    let multiaddr = if !stats.relay_addresses.is_empty() {
+        // Prefer relay addresses as they work through NAT
+        stats.relay_addresses[0].clone()
+    } else if !stats.external_addresses.is_empty() {
+        // Use external address if available
+        let addr = &stats.external_addresses[0];
+        if addr.contains("/p2p/") {
+            addr.clone()
+        } else {
+            format!("{}/p2p/{}", addr, identity.peer_id)
+        }
+    } else {
+        return Err(AppError::Network(
+            "No shareable address available. Please connect to a relay first.".to_string(),
+        ));
+    };
+
+    let bundle = ContactBundle {
+        multiaddr,
+        display_name: identity.display_name,
+        public_key: base64::engine::general_purpose::STANDARD.encode(&keys.public_key),
+        x25519_public: base64::engine::general_purpose::STANDARD.encode(&keys.x25519_public),
+        bio: identity.bio,
+        avatar_hash: identity.avatar_hash,
+    };
+
+    let json = serde_json::to_string(&bundle)
+        .map_err(|e| AppError::Serialization(format!("Failed to serialize contact: {}", e)))?;
+
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
+
+    Ok(format!("harbor://{}", encoded))
+}
+
+/// Add a contact from a shareable contact string and connect to them
+/// This is the simplified flow - no handshake needed
+#[tauri::command]
+pub async fn add_contact_from_string(
+    network: State<'_, NetworkState>,
+    contacts_service: State<'_, Arc<ContactsService>>,
+    permissions_service: State<'_, Arc<PermissionsService>>,
+    contact_string: String,
+) -> Result<String, AppError> {
+    use crate::db::Capability;
+    use base64::Engine;
+
+    // Parse the contact string
+    let encoded = contact_string
+        .strip_prefix("harbor://")
+        .ok_or_else(|| AppError::Validation("Invalid contact string format".to_string()))?;
+
+    let json_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|e| AppError::Validation(format!("Invalid contact encoding: {}", e)))?;
+
+    let bundle: ContactBundle = serde_json::from_slice(&json_bytes)
+        .map_err(|e| AppError::Validation(format!("Invalid contact data: {}", e)))?;
+
+    // Decode the keys
+    let public_key = base64::engine::general_purpose::STANDARD
+        .decode(&bundle.public_key)
+        .map_err(|e| AppError::Validation(format!("Invalid public key: {}", e)))?;
+
+    let x25519_public = base64::engine::general_purpose::STANDARD
+        .decode(&bundle.x25519_public)
+        .map_err(|e| AppError::Validation(format!("Invalid x25519 key: {}", e)))?;
+
+    // Extract peer ID from multiaddr
+    let peer_id = bundle
+        .multiaddr
+        .split("/p2p/")
+        .last()
+        .ok_or_else(|| AppError::Validation("No peer ID in multiaddr".to_string()))?
+        .to_string();
+
+    // Add as contact
+    contacts_service.add_contact(
+        &peer_id,
+        &public_key,
+        &x25519_public,
+        &bundle.display_name,
+        bundle.avatar_hash.as_deref(),
+        bundle.bio.as_deref(),
+    )?;
+
+    // Grant them permissions (WallRead and Chat by default)
+    let _ = permissions_service.create_permission_grant(&peer_id, Capability::WallRead, None);
+    let _ = permissions_service.create_permission_grant(&peer_id, Capability::Chat, None);
+
+    // Connect to them
+    let handle: NetworkHandle = network.get_handle().await?;
+    let addr: libp2p::Multiaddr = bundle
+        .multiaddr
+        .parse()
+        .map_err(|e| AppError::Validation(format!("Invalid multiaddress: {}", e)))?;
+
+    // Don't fail if connection fails - they might be offline
+    let _ = handle.add_bootstrap_node(addr).await;
+
+    info!(
+        "Added contact {} ({}) from shareable string",
+        bundle.display_name, peer_id
+    );
+
+    Ok(peer_id)
+}

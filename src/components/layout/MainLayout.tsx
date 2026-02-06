@@ -1,6 +1,11 @@
 import { type ReactNode, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { useIdentityStore, useSettingsStore, useNetworkStore, useMessagingStore } from '../../stores';
+import {
+  useIdentityStore,
+  useSettingsStore,
+  useNetworkStore,
+  useMessagingStore,
+} from '../../stores';
 import { useKeyboardNavigation } from '../../hooks';
 import { KeyboardShortcutsModal } from '../common';
 import {

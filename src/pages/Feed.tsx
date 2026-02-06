@@ -52,7 +52,12 @@ function PostMenu({
         style={{ color: 'hsl(var(--harbor-text-primary))' }}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"
+          />
         </svg>
         Hide this post
       </button>
@@ -69,7 +74,12 @@ function PostMenu({
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
           </svg>
           For 24 hours
         </button>
@@ -82,7 +92,12 @@ function PostMenu({
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+            />
           </svg>
           For 7 days
         </button>
@@ -95,7 +110,12 @@ function PostMenu({
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+            />
           </svg>
           For 30 days
         </button>
@@ -380,16 +400,21 @@ export function FeedPage() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 p-1 rounded-lg" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
+          <div
+            className="flex gap-1 p-1 rounded-lg"
+            style={{ background: 'hsl(var(--harbor-surface-1))' }}
+          >
             <button
               onClick={() => setActiveTab('all')}
               className="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
               style={{
-                background: activeTab === 'all'
-                  ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                  : 'transparent',
+                background:
+                  activeTab === 'all'
+                    ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                    : 'transparent',
                 color: activeTab === 'all' ? 'white' : 'hsl(var(--harbor-text-secondary))',
-                boxShadow: activeTab === 'all' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
+                boxShadow:
+                  activeTab === 'all' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
               }}
             >
               All Posts
@@ -398,22 +423,32 @@ export function FeedPage() {
               onClick={() => setActiveTab('saved')}
               className="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2"
               style={{
-                background: activeTab === 'saved'
-                  ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                  : 'transparent',
+                background:
+                  activeTab === 'saved'
+                    ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                    : 'transparent',
                 color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-text-secondary))',
-                boxShadow: activeTab === 'saved' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
+                boxShadow:
+                  activeTab === 'saved' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
               }}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
+                />
               </svg>
               Saved
               {savedUnifiedPosts.length > 0 && (
                 <span
                   className="px-1.5 py-0.5 rounded-full text-xs"
                   style={{
-                    background: activeTab === 'saved' ? 'rgba(255,255,255,0.2)' : 'hsl(var(--harbor-primary) / 0.15)',
+                    background:
+                      activeTab === 'saved'
+                        ? 'rgba(255,255,255,0.2)'
+                        : 'hsl(var(--harbor-primary) / 0.15)',
                     color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-primary))',
                   }}
                 >

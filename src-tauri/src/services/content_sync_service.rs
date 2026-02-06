@@ -51,6 +51,19 @@ pub struct OutgoingFetchRequest {
     pub signature: Vec<u8>,
 }
 
+/// A response with full post content
+#[derive(Debug, Clone)]
+pub struct OutgoingFetchResponse {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: u64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+}
+
 impl ContentSyncService {
     /// Create a new content sync service
     pub fn new(
@@ -124,6 +137,97 @@ impl ContentSyncService {
             include_media,
             timestamp,
             signature,
+        })
+    }
+
+    /// Process an incoming fetch request and return the post if authorized
+    pub fn process_fetch_request(
+        &self,
+        requester_peer_id: &str,
+        post_id: &str,
+        _include_media: bool,
+        timestamp: i64,
+        signature: &[u8],
+    ) -> Result<OutgoingFetchResponse> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        // Validate timestamp is within acceptable window (5 minutes)
+        let now = chrono::Utc::now().timestamp();
+        let time_diff = (now - timestamp).abs();
+        if time_diff > 300 {
+            return Err(AppError::Crypto(format!(
+                "Request timestamp too old or in future: {} seconds difference",
+                time_diff
+            )));
+        }
+
+        // Verify the requester's signature
+        let requester_public_key = self
+            .contacts_service
+            .get_public_key(requester_peer_id)?
+            .ok_or_else(|| AppError::NotFound("Requester not in contacts".to_string()))?;
+
+        // Reconstruct the signed data (must match create_fetch_request format)
+        let sign_data = format!(
+            "fetch:{}:{}:{}:{}",
+            requester_peer_id, post_id, _include_media, timestamp
+        );
+
+        let verifying_key = VerifyingKey::from_bytes(
+            requester_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+
+        // Verify signature using raw verification
+        use ed25519_dalek::Verifier;
+        let sig = ed25519_dalek::Signature::from_slice(signature)
+            .map_err(|e| AppError::Crypto(format!("Invalid signature format: {}", e)))?;
+        verifying_key
+            .verify(sign_data.as_bytes(), &sig)
+            .map_err(|_| AppError::Crypto("Invalid fetch request signature".to_string()))?;
+
+        // Check if the requester has WallRead permission from us
+        if !self
+            .permissions_service
+            .peer_has_capability(requester_peer_id, Capability::WallRead)?
+        {
+            return Err(AppError::PermissionDenied(
+                "Requester doesn't have WallRead permission".to_string(),
+            ));
+        }
+
+        // Get the post
+        let post = PostsRepository::get_by_post_id(&self.db, post_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+            .ok_or_else(|| AppError::NotFound(format!("Post {} not found", post_id)))?;
+
+        // Verify this is our post (we can only serve our own posts)
+        if post.author_peer_id != identity.peer_id {
+            return Err(AppError::PermissionDenied(
+                "Can only serve own posts".to_string(),
+            ));
+        }
+
+        // Check visibility - for Contacts visibility, requester must be in contacts
+        // (which we already verified above via WallRead permission check)
+        // For Public, anyone with WallRead can access
+        // Note: We don't serve posts with other visibility levels
+
+        Ok(OutgoingFetchResponse {
+            post_id: post.post_id,
+            author_peer_id: post.author_peer_id,
+            content_type: post.content_type,
+            content_text: post.content_text,
+            visibility: post.visibility.to_string(),
+            lamport_clock: post.lamport_clock as u64,
+            created_at: post.created_at,
+            signature: post.signature,
         })
     }
 

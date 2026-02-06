@@ -27,7 +27,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
       setShowDeleteConfirm(null);
       setDeleteData(false);
     } catch (error) {
-      toast.error('Failed to remove account');
+      toast.error(`Failed to remove account: ${error}`);
     }
   };
 
