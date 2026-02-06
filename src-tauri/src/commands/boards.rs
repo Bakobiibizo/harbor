@@ -85,20 +85,13 @@ pub async fn join_community(
                 None
             }
         })
-        .ok_or_else(|| {
-            AppError::Network("Address must contain peer ID (/p2p/...)".to_string())
-        })?;
+        .ok_or_else(|| AppError::Network("Address must contain peer ID (/p2p/...)".to_string()))?;
 
     // Dial the relay first
-    handle
-        .dial(relay_peer_id, vec![addr.clone()])
-        .await
-        .ok();
+    handle.dial(relay_peer_id, vec![addr.clone()]).await.ok();
 
     // Join the community
-    handle
-        .join_community(relay_peer_id, relay_address)
-        .await
+    handle.join_community(relay_peer_id, relay_address).await
 }
 
 /// Leave a community
@@ -139,7 +132,8 @@ pub async fn get_board_posts(
     before_timestamp: Option<i64>,
 ) -> Result<Vec<BoardPostInfoFe>, AppError> {
     let limit = limit.unwrap_or(50);
-    let posts = board_service.get_board_posts(&relay_peer_id, &board_id, limit, before_timestamp)?;
+    let posts =
+        board_service.get_board_posts(&relay_peer_id, &board_id, limit, before_timestamp)?;
     Ok(posts
         .into_iter()
         .map(|p| BoardPostInfoFe {
@@ -205,7 +199,5 @@ pub async fn sync_board(
         .map_err(|e| AppError::Network(format!("Invalid peer ID: {}", e)))?;
 
     // Use list_boards as a simple way to trigger sync — actually use get_board_posts
-    handle
-        .get_board_posts(peer_id, board_id, None, 50)
-        .await
+    handle.get_board_posts(peer_id, board_id, None, 50).await
 }

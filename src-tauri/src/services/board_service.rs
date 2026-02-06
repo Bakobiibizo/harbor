@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::db::{BoardsRepository, Database};
 use crate::error::{AppError, Result};
 use crate::services::{
-    IdentityService, SignableBoardListRequest, SignableBoardPost,
-    SignableBoardPostDelete, SignableBoardPostsRequest, SignablePeerRegistration,
+    IdentityService, SignableBoardListRequest, SignableBoardPost, SignableBoardPostDelete,
+    SignableBoardPostsRequest, SignablePeerRegistration,
 };
 
 /// Service for managing community board operations
@@ -132,11 +132,9 @@ impl BoardService {
         let signature = self.identity_service.sign(&signable)?;
 
         // Decode public key from base64
-        let public_key = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &info.public_key,
-        )
-        .map_err(|e| AppError::Internal(format!("Failed to decode public key: {}", e)))?;
+        let public_key =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &info.public_key)
+                .map_err(|e| AppError::Internal(format!("Failed to decode public key: {}", e)))?;
 
         Ok(OutgoingPeerRegistration {
             peer_id: info.peer_id,
@@ -250,14 +248,12 @@ impl BoardService {
 
     /// Get all joined communities
     pub fn get_communities(&self) -> Result<Vec<crate::db::RelayCommunity>> {
-        BoardsRepository::get_relay_communities(&self.db)
-            .map_err(AppError::Database)
+        BoardsRepository::get_relay_communities(&self.db).map_err(AppError::Database)
     }
 
     /// Get boards for a relay (from local cache)
     pub fn get_boards(&self, relay_peer_id: &str) -> Result<Vec<crate::db::Board>> {
-        BoardsRepository::get_boards_for_relay(&self.db, relay_peer_id)
-            .map_err(AppError::Database)
+        BoardsRepository::get_boards_for_relay(&self.db, relay_peer_id).map_err(AppError::Database)
     }
 
     /// Get board posts from local cache
@@ -268,8 +264,14 @@ impl BoardService {
         limit: i64,
         before_timestamp: Option<i64>,
     ) -> Result<Vec<crate::db::BoardPost>> {
-        BoardsRepository::get_board_posts(&self.db, board_id, relay_peer_id, limit, before_timestamp)
-            .map_err(AppError::Database)
+        BoardsRepository::get_board_posts(
+            &self.db,
+            board_id,
+            relay_peer_id,
+            limit,
+            before_timestamp,
+        )
+        .map_err(AppError::Database)
     }
 
     /// Store boards received from a relay
@@ -333,11 +335,7 @@ impl BoardService {
     }
 
     /// Get sync cursor for a board
-    pub fn get_sync_cursor(
-        &self,
-        relay_peer_id: &str,
-        board_id: &str,
-    ) -> Result<Option<i64>> {
+    pub fn get_sync_cursor(&self, relay_peer_id: &str, board_id: &str) -> Result<Option<i64>> {
         BoardsRepository::get_board_sync_cursor(&self.db, relay_peer_id, board_id)
             .map_err(AppError::Database)
     }

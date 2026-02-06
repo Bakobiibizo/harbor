@@ -7,8 +7,10 @@ use libp2p::{
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::protocols::{BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL};
 use super::protocols::board_sync::{BoardSyncRequest, BoardSyncResponse};
+use super::protocols::{
+    BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL,
+};
 
 // Duration is used in ping configuration
 

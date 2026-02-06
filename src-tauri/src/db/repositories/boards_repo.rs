@@ -149,6 +149,7 @@ impl BoardsRepository {
     }
 
     /// Insert or update a board post
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_board_post(
         db: &Database,
         post_id: &str,
@@ -174,9 +175,18 @@ impl BoardsRepository {
                      deleted_at = excluded.deleted_at,
                      cached_at = excluded.cached_at",
                 params![
-                    post_id, board_id, relay_peer_id, author_peer_id,
-                    author_display_name, content_type, content_text, lamport_clock,
-                    created_at, deleted_at, signature, now
+                    post_id,
+                    board_id,
+                    relay_peer_id,
+                    author_peer_id,
+                    author_display_name,
+                    content_type,
+                    content_text,
+                    lamport_clock,
+                    created_at,
+                    deleted_at,
+                    signature,
+                    now
                 ],
             )?;
             Ok(())
@@ -278,10 +288,7 @@ impl BoardsRepository {
     }
 
     /// Update last_sync_at for a community
-    pub fn update_community_sync_time(
-        db: &Database,
-        relay_peer_id: &str,
-    ) -> SqliteResult<()> {
+    pub fn update_community_sync_time(db: &Database, relay_peer_id: &str) -> SqliteResult<()> {
         let now = chrono::Utc::now().timestamp();
         db.with_connection(|conn| {
             conn.execute(

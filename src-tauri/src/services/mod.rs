@@ -39,7 +39,6 @@ pub use signing::{
     SignableBoardPost,
     SignableBoardPostDelete,
     SignableBoardPostsRequest,
-    SignablePeerRegistration,
     // Content sync
     SignableContentManifestRequest,
     SignableContentManifestResponse,
@@ -49,6 +48,7 @@ pub use signing::{
     SignableIdentityRequest,
     SignableIdentityResponse,
     SignableMessageAck,
+    SignablePeerRegistration,
     SignablePermissionGrant,
     // Permission messages
     SignablePermissionRequest,

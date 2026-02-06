@@ -161,10 +161,7 @@ pub fn run() {
                 contacts_service.clone(),
                 permissions_service.clone(),
             ));
-            let board_service = Arc::new(BoardService::new(
-                db.clone(),
-                identity_service.clone(),
-            ));
+            let board_service = Arc::new(BoardService::new(db.clone(), identity_service.clone()));
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();

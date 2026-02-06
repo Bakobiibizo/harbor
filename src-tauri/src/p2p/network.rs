@@ -41,11 +41,11 @@ use super::swarm::build_swarm;
 use super::types::*;
 use crate::db::Capability;
 use crate::error::{AppError, Result};
+use crate::services::board_service::StorableBoardPost;
 use crate::services::{
     BoardService, ContactsService, ContentSyncService, IdentityService, MessagingService,
     PermissionsService, PostsService,
 };
-use crate::services::board_service::StorableBoardPost;
 use std::sync::Arc;
 
 /// Handle to interact with the network service
@@ -239,11 +239,7 @@ impl NetworkHandle {
     }
 
     /// Join a community (register peer and list boards)
-    pub async fn join_community(
-        &self,
-        relay_peer_id: PeerId,
-        relay_address: String,
-    ) -> Result<()> {
+    pub async fn join_community(&self, relay_peer_id: PeerId, relay_address: String) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send((
@@ -335,11 +331,7 @@ impl NetworkHandle {
     }
 
     /// Delete a board post on a relay
-    pub async fn delete_board_post(
-        &self,
-        relay_peer_id: PeerId,
-        post_id: String,
-    ) -> Result<()> {
+    pub async fn delete_board_post(&self, relay_peer_id: PeerId, post_id: String) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send((
@@ -655,9 +647,7 @@ impl NetworkService {
                     .await;
             }
 
-            SwarmEvent::OutgoingConnectionError {
-                peer_id, error, ..
-            } => {
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 if let Some(peer_id) = peer_id {
                     warn!("Failed to connect to peer {}: {}", peer_id, error);
                 } else {
@@ -1372,7 +1362,10 @@ impl NetworkService {
                         if let Err(e) = self.swarm.dial(relay_addr.clone()) {
                             warn!("Failed to dial relay {}: {}", relay_addr, e);
                         } else {
-                            info!("Dial initiated to relay: {} (waiting for connection...)", relay_peer_id);
+                            info!(
+                                "Dial initiated to relay: {} (waiting for connection...)",
+                                relay_peer_id
+                            );
                         }
 
                         // Request a relay reservation by listening on a p2p-circuit address.
@@ -1387,7 +1380,10 @@ impl NetworkService {
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!("Relay reservation requested via: {} (awaiting acceptance...)", relay_circuit_listen_addr);
+                                info!(
+                                    "Relay reservation requested via: {} (awaiting acceptance...)",
+                                    relay_circuit_listen_addr
+                                );
                             }
                             Err(e) => {
                                 warn!(
@@ -1405,11 +1401,7 @@ impl NetworkService {
         }
     }
 
-    async fn handle_board_sync_response(
-        &mut self,
-        peer: PeerId,
-        response: WireBoardSyncResponse,
-    ) {
+    async fn handle_board_sync_response(&mut self, peer: PeerId, response: WireBoardSyncResponse) {
         let Some(ref board_service) = self.board_service else {
             return;
         };
@@ -1934,7 +1926,10 @@ impl NetworkService {
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!("Relay reservation requested via: {} (awaiting acceptance...)", relay_circuit_listen_addr);
+                                info!(
+                                    "Relay reservation requested via: {} (awaiting acceptance...)",
+                                    relay_circuit_listen_addr
+                                );
                             }
                             Err(e) => {
                                 warn!(
@@ -2158,9 +2153,10 @@ impl NetworkService {
                             .send_request(&relay_peer_id, request);
                         NetworkResponse::Ok
                     }
-                    Err(e) => {
-                        NetworkResponse::Error(format!("Failed to create list boards request: {}", e))
-                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to create list boards request: {}",
+                        e
+                    )),
                 }
             }
 
@@ -2174,8 +2170,11 @@ impl NetworkService {
                     return NetworkResponse::Error("Board service unavailable".to_string());
                 };
 
-                match board_service.create_get_board_posts_request(&board_id, after_timestamp, limit)
-                {
+                match board_service.create_get_board_posts_request(
+                    &board_id,
+                    after_timestamp,
+                    limit,
+                ) {
                     Ok(req) => {
                         let request = WireBoardSyncRequest::GetBoardPosts {
                             requester_peer_id: req.requester_peer_id,
@@ -2191,12 +2190,10 @@ impl NetworkService {
                             .send_request(&relay_peer_id, request);
                         NetworkResponse::Ok
                     }
-                    Err(e) => {
-                        NetworkResponse::Error(format!(
-                            "Failed to create get board posts request: {}",
-                            e
-                        ))
-                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to create get board posts request: {}",
+                        e
+                    )),
                 }
             }
 
@@ -2227,9 +2224,7 @@ impl NetworkService {
                             .send_request(&relay_peer_id, request);
                         NetworkResponse::Ok
                     }
-                    Err(e) => {
-                        NetworkResponse::Error(format!("Failed to create board post: {}", e))
-                    }
+                    Err(e) => NetworkResponse::Error(format!("Failed to create board post: {}", e)),
                 }
             }
 
