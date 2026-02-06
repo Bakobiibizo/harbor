@@ -13,6 +13,7 @@ import {
   XIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  TrashIcon,
 } from '../components/icons';
 import { RELAY_CLOUDFORMATION_TEMPLATE } from '../constants/cloudformation-template';
 
@@ -189,7 +190,7 @@ export function NetworkPage() {
     connectToPublicRelays,
   } = useNetworkStore();
 
-  const { contacts } = useContactsStore();
+  const { contacts, refreshContacts } = useContactsStore();
   const { autoStartNetwork, localDiscovery, setAutoStartNetwork, setLocalDiscovery } =
     useSettingsStore();
 
@@ -1276,18 +1277,20 @@ export function NetworkPage() {
 
 function PeerRow({
   peerId,
+  displayName,
   isConnected,
   actionLabel,
   actionStyle,
   onAction,
 }: {
   peerId: string;
+  displayName?: string;
   isConnected?: boolean;
   actionLabel: string;
   actionStyle: 'primary' | 'success';
   onAction: () => Promise<void>;
 }) {
-  const friendlyName = getPeerFriendlyName(peerId);
+  const friendlyName = displayName || getPeerFriendlyName(peerId);
   const avatarColor = getPeerColor(peerId);
   const initials = friendlyName
     .split(' ')
