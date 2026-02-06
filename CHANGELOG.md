@@ -87,13 +87,3 @@
 - fixed p2p communications
 - fix: updating p2p communications to work with the relay and simplify the network menu options
 
-## 2026-02-06 - v0.1.2
-
-- feat: split relay into dummy (NAT-only) and community (boards + SQLite) modes via `--community` flag
-- feat: add community relay CloudFormation template with CommunityName parameter
-- feat: add community boards system with relay-side SQLite storage
-- feat: add cross-platform dev setup scripts (Linux/macOS/Windows)
-- feat: add relay build and hash dev commands
-- fix: align tauri crate versions with npm packages (2.10.x)
-- chore: update relay binary and SHA256 hashes
-
