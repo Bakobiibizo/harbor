@@ -100,9 +100,9 @@
   --z-toast: 600;
 }
 
-/* Dark Mode */
+/* Dark Mode - follows system preference when no data-theme is set */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
+  :root:not([data-theme="light"]) {
     --harbor-bg-primary: 222 47% 8%;
     --harbor-bg-secondary: 222 47% 11%;
     --harbor-bg-tertiary: 222 41% 15%;
@@ -127,7 +127,7 @@
 }
 
 /* Dark Mode - forced via toggle */
-:root[data-theme='dark'] {
+:root[data-theme="dark"] {
   --harbor-bg-primary: 222 47% 8%;
   --harbor-bg-secondary: 222 47% 11%;
   --harbor-bg-tertiary: 222 41% 15%;

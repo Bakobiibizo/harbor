@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+export type ThemeMode = 'system' | 'light' | 'dark';
+
 interface SettingsState {
   // Network settings
   autoStartNetwork: boolean;
@@ -15,6 +17,9 @@ interface SettingsState {
   // Profile settings
   avatarUrl: string | null;
 
+  // Appearance settings
+  theme: ThemeMode;
+
   // Actions
   setAutoStartNetwork: (value: boolean) => void;
   setLocalDiscovery: (value: boolean) => void;
@@ -24,6 +29,16 @@ interface SettingsState {
   setShowOnlineStatus: (value: boolean) => void;
   setDefaultVisibility: (value: 'contacts' | 'public') => void;
   setAvatarUrl: (url: string | null) => void;
+  setTheme: (value: ThemeMode) => void;
+}
+
+function applyTheme(theme: ThemeMode) {
+  const root = document.documentElement;
+  if (theme === 'system') {
+    root.removeAttribute('data-theme');
+  } else {
+    root.setAttribute('data-theme', theme);
+  }
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -37,6 +52,7 @@ export const useSettingsStore = create<SettingsState>()(
       showOnlineStatus: true,
       defaultVisibility: 'contacts',
       avatarUrl: null,
+      theme: 'system',
 
       // Actions
       setAutoStartNetwork: (value) => set({ autoStartNetwork: value }),
@@ -55,9 +71,20 @@ export const useSettingsStore = create<SettingsState>()(
       setShowOnlineStatus: (value) => set({ showOnlineStatus: value }),
       setDefaultVisibility: (value) => set({ defaultVisibility: value }),
       setAvatarUrl: (url) => set({ avatarUrl: url }),
+      setTheme: (value) => {
+        applyTheme(value);
+        set({ theme: value });
+      },
     }),
     {
       name: 'harbor-settings',
+      onRehydrateStorage: () => {
+        return (state: SettingsState | undefined) => {
+          if (state?.theme) {
+            applyTheme(state.theme);
+          }
+        };
+      },
     },
   ),
 );

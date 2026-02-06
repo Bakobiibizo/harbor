@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { FeedIcon, EllipsisIcon } from '../components/icons';
-import { useMockPeersStore, useFeedStore, useContactsStore } from '../stores';
+import { useFeedStore, useContactsStore } from '../stores';
 import type { FeedItem } from '../types';
 
 // Dropdown menu component
@@ -160,21 +160,6 @@ function getContactColor(peerId: string): string {
 type FeedTab = 'all' | 'saved';
 
 export function FeedPage() {
-  const {
-    getAllFeedPosts,
-    likePost,
-    toggleSavePost,
-    isPostSaved,
-    getSavedPosts,
-    peers,
-    savedPosts,
-    hiddenPosts,
-    snoozedUsers,
-    hidePost,
-    isPostHidden,
-    snoozeUser,
-    isUserSnoozed,
-  } = useMockPeersStore();
   const { feedItems, loadFeed, refreshFeed } = useFeedStore();
   const { contacts, loadContacts } = useContactsStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -187,91 +172,31 @@ export function FeedPage() {
     loadContacts();
   }, [loadFeed, loadContacts]);
 
-  // Get mock feed posts
-  const mockPosts = useMemo(() => getAllFeedPosts(), [peers]);
-
   // Convert real feed items to unified format
-  const realPosts: UnifiedPost[] = useMemo(() => {
-    return feedItems.map((item: FeedItem): UnifiedPost => {
-      const contact = contacts.find((c) => c.peerId === item.authorPeerId);
-      return {
-        id: `real-${item.postId}`,
-        content: item.contentText || '',
-        timestamp: new Date(item.createdAt * 1000),
-        likes: 0, // Real posts don't have like counts yet
-        comments: 0,
-        likedByUser: false,
-        author: {
-          peerId: item.authorPeerId,
-          name: item.authorDisplayName || contact?.displayName || 'Unknown',
-          avatarGradient: getContactColor(item.authorPeerId),
-        },
-        isReal: true,
-      };
-    });
-  }, [feedItems, contacts]);
-
-  // Convert mock posts to unified format
-  const mockUnifiedPosts: UnifiedPost[] = useMemo(() => {
-    return mockPosts.map(
-      (post): UnifiedPost => ({
-        id: post.id,
-        content: post.content,
-        timestamp: post.timestamp,
-        likes: post.likes,
-        comments: post.comments,
-        likedByUser: post.likedByUser,
-        author: {
-          peerId: post.author.peerId,
-          name: post.author.name,
-          avatarGradient: post.author.avatarGradient,
-        },
-        isReal: false,
-      }),
-    );
-  }, [mockPosts]);
-
-  // Get saved posts from store
-  const savedPostsData = useMemo(() => getSavedPosts(), [savedPosts, peers]);
-
-  // Convert saved posts to unified format
-  const savedUnifiedPosts: UnifiedPost[] = useMemo(() => {
-    return savedPostsData.map(
-      (post): UnifiedPost => ({
-        id: post.id,
-        content: post.content,
-        timestamp: post.timestamp,
-        likes: post.likes,
-        comments: post.comments,
-        likedByUser: post.likedByUser,
-        author: {
-          peerId: post.author.peerId,
-          name: post.author.name,
-          avatarGradient: post.author.avatarGradient,
-        },
-        isReal: false,
-      }),
-    );
-  }, [savedPostsData]);
-
-  // Combine and sort all posts by timestamp (newest first)
-  // Filter out hidden posts and posts from snoozed users
   const allPosts: UnifiedPost[] = useMemo(() => {
-    return [...realPosts, ...mockUnifiedPosts]
-      .filter((post) => {
-        // Don't filter real posts (they don't support hide/snooze yet)
-        if (post.isReal) return true;
-        // Filter out hidden posts
-        if (isPostHidden(post.author.peerId, post.id)) return false;
-        // Filter out posts from snoozed users
-        if (isUserSnoozed(post.author.peerId)) return false;
-        return true;
+    return feedItems
+      .map((item: FeedItem): UnifiedPost => {
+        const contact = contacts.find((c) => c.peerId === item.authorPeerId);
+        return {
+          id: `real-${item.postId}`,
+          content: item.contentText || '',
+          timestamp: new Date(item.createdAt * 1000),
+          likes: 0,
+          comments: 0,
+          likedByUser: false,
+          author: {
+            peerId: item.authorPeerId,
+            name: item.authorDisplayName || contact?.displayName || 'Unknown',
+            avatarGradient: getContactColor(item.authorPeerId),
+          },
+          isReal: true,
+        };
       })
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [realPosts, mockUnifiedPosts, hiddenPosts, snoozedUsers]);
+  }, [feedItems, contacts]);
 
-  // Select posts based on active tab
-  const posts: UnifiedPost[] = activeTab === 'saved' ? savedUnifiedPosts : allPosts;
+  // Select posts based on active tab (saved tab placeholder for future)
+  const posts: UnifiedPost[] = activeTab === 'saved' ? [] : allPosts;
 
   const formatDate = (date: Date) => {
     const now = new Date();
@@ -312,55 +237,24 @@ export function FeedPage() {
     }
   };
 
-  const handleLike = (post: UnifiedPost) => {
-    if (post.isReal) {
-      // Real posts don't support likes yet
-      toast('Likes for P2P posts coming soon!', { icon: '💜' });
-    } else {
-      likePost(post.author.peerId, post.id);
-      if (!post.likedByUser) {
-        toast.success('Post liked!');
-      }
-    }
+  const handleLike = (_post: UnifiedPost) => {
+    toast('Likes coming soon!');
   };
 
-  const handleSave = (post: UnifiedPost) => {
-    if (post.isReal) {
-      // Real posts don't support saving yet
-      toast('Saving P2P posts coming soon!', { icon: '🔖' });
-    } else {
-      const wasSaved = isPostSaved(post.author.peerId, post.id);
-      toggleSavePost(post.author.peerId, post.id);
-      if (!wasSaved) {
-        toast.success('Post saved to your collection!');
-      } else {
-        toast.success('Post removed from saved');
-      }
-    }
+  const handleSave = (_post: UnifiedPost) => {
+    toast('Saving posts coming soon!');
   };
 
-  const isSaved = (post: UnifiedPost): boolean => {
-    if (post.isReal) return false;
-    return isPostSaved(post.author.peerId, post.id);
+  const isSaved = (_post: UnifiedPost): boolean => {
+    return false;
   };
 
-  const handleHidePost = (post: UnifiedPost) => {
-    if (post.isReal) {
-      toast('Hiding P2P posts coming soon!', { icon: '👁️' });
-      return;
-    }
-    hidePost(post.author.peerId, post.id);
-    toast.success('Post hidden from your feed');
+  const handleHidePost = (_post: UnifiedPost) => {
+    toast('Hiding posts coming soon!');
   };
 
-  const handleSnoozeUser = (post: UnifiedPost, hours: number) => {
-    if (post.isReal) {
-      toast('Snoozing P2P contacts coming soon!', { icon: '😴' });
-      return;
-    }
-    snoozeUser(post.author.peerId, hours);
-    const duration = hours < 48 ? `${hours} hours` : `${Math.round(hours / 24)} days`;
-    toast.success(`${post.author.name} snoozed for ${duration}`);
+  const handleSnoozeUser = (_post: UnifiedPost, _hours: number) => {
+    toast('Snoozing contacts coming soon!');
   };
 
   return (
@@ -441,7 +335,7 @@ export function FeedPage() {
                 />
               </svg>
               Saved
-              {savedUnifiedPosts.length > 0 && (
+              {[].length > 0 && (
                 <span
                   className="px-1.5 py-0.5 rounded-full text-xs"
                   style={{
@@ -452,7 +346,7 @@ export function FeedPage() {
                     color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-primary))',
                   }}
                 >
-                  {savedUnifiedPosts.length}
+                  {[].length}
                 </span>
               )}
             </button>
@@ -566,27 +460,15 @@ export function FeedPage() {
                           >
                             {post.author.name}
                           </p>
-                          {post.isReal ? (
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded"
-                              style={{
-                                background: 'hsl(var(--harbor-success) / 0.15)',
-                                color: 'hsl(var(--harbor-success))',
-                              }}
-                            >
-                              P2P
-                            </span>
-                          ) : (
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded"
-                              style={{
-                                background: 'hsl(var(--harbor-text-tertiary) / 0.15)',
-                                color: 'hsl(var(--harbor-text-tertiary))',
-                              }}
-                            >
-                              Demo
-                            </span>
-                          )}
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded"
+                            style={{
+                              background: 'hsl(var(--harbor-success) / 0.15)',
+                              color: 'hsl(var(--harbor-success))',
+                            }}
+                          >
+                            P2P
+                          </span>
                         </div>
                         <p
                           className="text-xs"

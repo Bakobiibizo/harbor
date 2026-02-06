@@ -295,6 +295,8 @@ pub fn run() {
             commands::request_content_fetch,
             commands::get_sync_cursor,
             commands::sync_with_all_peers,
+            // File commands
+            commands::save_to_downloads,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  harbor-relay:
+    build: .
+    image: harbor-relay:latest
+    container_name: harbor-relay
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+      - IDENTITY_KEY_PATH=/var/lib/harbor-relay/id.key
+    command: >
+      --port 4001
+      --announce-ip ${ANNOUNCE_IP:-154.5.126.219}
+      --identity-key-path /var/lib/harbor-relay/id.key
+    ports:
+      - "4001:4001/tcp"
+      - "4001:4001/udp"
+    volumes:
+      - relay-data:/var/lib/harbor-relay
+
+volumes:
+  relay-data:

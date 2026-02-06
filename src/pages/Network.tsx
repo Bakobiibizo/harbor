@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
 import { contactsService } from '../services/contacts';
@@ -204,6 +205,12 @@ export function NetworkPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [natDetectionTimedOut, setNatDetectionTimedOut] = useState(false);
   const [shareableContactString, setShareableContactString] = useState<string | null>(null);
+  const [isAddingContact, setIsAddingContact] = useState(false);
+  const [showManualConnect, setShowManualConnect] = useState(false);
+  const [showLocalAddresses, setShowLocalAddresses] = useState(false);
+  const [showDeployRelay, setShowDeployRelay] = useState(false);
+  const [natDetectionTimedOut, setNatDetectionTimedOut] = useState(false);
+  const relayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check network status on mount and set up refresh interval
   useEffect(() => {
@@ -256,6 +263,45 @@ export function NetworkPage() {
       setShareableContactString(null);
     }
   }, [relayStatus, isRunning]);
+
+  // Fix 3: Relay "Connecting..." spinner timeout (30s)
+  useEffect(() => {
+    if (relayTimeoutRef.current) {
+      clearTimeout(relayTimeoutRef.current);
+      relayTimeoutRef.current = null;
+    }
+
+    if (relayStatus === 'connecting') {
+      relayTimeoutRef.current = setTimeout(() => {
+        const currentStatus = useNetworkStore.getState().relayStatus;
+        if (currentStatus === 'connecting') {
+          useNetworkStore.getState().setRelayStatus('disconnected');
+          toast.error('Relay connection timed out. The relay may be unreachable.');
+        }
+      }, 30_000);
+    }
+
+    return () => {
+      if (relayTimeoutRef.current) {
+        clearTimeout(relayTimeoutRef.current);
+        relayTimeoutRef.current = null;
+      }
+    };
+  }, [relayStatus]);
+
+  // Fix 4: NAT status "Detecting..." timeout (30s)
+  useEffect(() => {
+    if (stats.natStatus !== 'unknown' || !isRunning) {
+      setNatDetectionTimedOut(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setNatDetectionTimedOut(true);
+    }, 30_000);
+
+    return () => clearTimeout(timeout);
+  }, [isRunning, stats.natStatus]);
 
   // Handlers
   const handleConnectToRelay = async () => {
@@ -338,13 +384,12 @@ export function NetworkPage() {
     return `${secs}s`;
   };
 
-  // Filter peers by search
+  // Filter peers by search (also checks contact display names)
   const filteredPeers = connectedPeers.filter((peer) => {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-    const contactName =
-      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
+    const contactName = contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
     return (
       friendlyName.includes(query) ||
       contactName.includes(query) ||
@@ -550,14 +595,8 @@ export function NetworkPage() {
                     }}
                   >
                     {stats.natStatus === 'unknown'
-                      ? natDetectionTimedOut
-                        ? 'Unable to detect'
-                        : 'Detecting...'
-                      : stats.natStatus === 'public'
-                        ? 'Public'
-                        : stats.natStatus === 'private'
-                          ? 'Relayed'
-                          : 'Behind NAT'}
+                      ? (natDetectionTimedOut ? 'Unable to detect' : 'Detecting...')
+                      : stats.natStatus === 'public' ? 'Public' : stats.natStatus === 'private' ? 'Relayed' : 'Behind NAT'}
                   </p>
                 </div>
               </div>
@@ -1069,9 +1108,7 @@ export function NetworkPage() {
                 ) : (
                   <div className="space-y-2">
                     {discoveredPeers.map((peer) => {
-                      const knownContact = contacts.find(
-                        (contact) => contact.peerId === peer.peerId,
-                      );
+                      const knownContact = contacts.find((contact) => contact.peerId === peer.peerId);
                       return (
                         <PeerRow
                           key={peer.peerId}
@@ -1124,9 +1161,7 @@ export function NetworkPage() {
                 ) : (
                   <div className="space-y-2">
                     {connectedPeersList.map((peer) => {
-                      const knownContact = contacts.find(
-                        (contact) => contact.peerId === peer.peerId,
-                      );
+                      const knownContact = contacts.find((contact) => contact.peerId === peer.peerId);
                       const displayName = knownContact?.displayName;
                       return (
                         <PeerRow
@@ -1139,9 +1174,7 @@ export function NetworkPage() {
                           onAction={async () => {
                             try {
                               await contactsService.requestPeerIdentity(peer.peerId);
-                              toast.success(
-                                `Requesting identity from ${displayName ?? getPeerFriendlyName(peer.peerId)}...`,
-                              );
+                              toast.success(`Requesting identity from ${displayName ?? getPeerFriendlyName(peer.peerId)}...`);
                             } catch (err) {
                               toast.error(`Failed to add contact: ${err}`);
                             }
@@ -1206,8 +1239,44 @@ export function NetworkPage() {
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                           title={contact.peerId}
                         >
-                          {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
-                        </p>
+                          {contact.displayName.split(' ').map((word) => word[0]).join('').toUpperCase().slice(0, 2)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                            {contact.displayName}
+                          </p>
+                          <p
+                            className="text-xs font-mono truncate"
+                            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                            title={contact.peerId}
+                          >
+                            {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
+                          </p>
+                        </div>
+                        {contact.bio && (
+                          <p
+                            className="text-xs truncate max-w-[200px]"
+                            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                          >
+                            {contact.bio}
+                          </p>
+                        )}
+                        <button
+                          className="p-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0"
+                          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                          title="Remove contact"
+                          onClick={async () => {
+                            try {
+                              await contactsService.removeContact(contact.peerId);
+                              await refreshContacts();
+                              toast.success(`Removed ${contact.displayName} from contacts`);
+                            } catch (err) {
+                              toast.error(`Failed to remove contact: ${err}`);
+                            }
+                          }}
+                        >
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
                       </div>
                       {contact.bio && (
                         <p
@@ -1290,14 +1359,9 @@ function PeerRow({
   actionStyle: 'primary' | 'success';
   onAction: () => Promise<void>;
 }) {
-  const friendlyName = displayName || getPeerFriendlyName(peerId);
+  const friendlyName = displayName ?? getPeerFriendlyName(peerId);
   const avatarColor = getPeerColor(peerId);
-  const initials = friendlyName
-    .split(' ')
-    .map((word) => word[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2);
+  const initials = friendlyName.split(' ').map((word) => word[0]).join('').toUpperCase().slice(0, 2);
 
   return (
     <div
@@ -1418,17 +1482,23 @@ function DeployRelayContent() {
           </span>
         </div>
         <button
-          onClick={() => {
-            const blob = new Blob([RELAY_CLOUDFORMATION_TEMPLATE], { type: 'application/x-yaml' });
-            const url = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = 'harbor-relay-cloudformation.yaml';
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
-            URL.revokeObjectURL(url);
-            toast.success('Template downloaded!');
+          onClick={async () => {
+            try {
+              const savedPath = await invoke<string>('save_to_downloads', {
+                filename: 'harbor-relay-cloudformation.yaml',
+                content: RELAY_CLOUDFORMATION_TEMPLATE,
+              });
+              toast.success(`Template saved to ${savedPath}`);
+            } catch (error) {
+              console.error('Failed to save template via Tauri:', error);
+              // Fallback: copy to clipboard
+              try {
+                await navigator.clipboard.writeText(RELAY_CLOUDFORMATION_TEMPLATE);
+                toast.success('Template copied to clipboard! Paste it into a .yaml file.');
+              } catch {
+                toast.error(`Save failed: ${error}`);
+              }
+            }
           }}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
           style={{ background: 'linear-gradient(135deg, #FF9900, #FF6600)', color: 'white' }}

@@ -10,8 +10,11 @@ use libp2p::{
     identify, noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, SwarmBuilder,
+    identity::Keypair,
 };
+use std::fs;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -39,6 +42,10 @@ struct Args {
     /// Maximum total circuits
     #[arg(long, default_value_t = 512)]
     max_circuits: usize,
+
+    /// Path to the persistent identity key (generated if missing)
+    #[arg(long, default_value_t = default_identity_path())]
+    identity_key_path: String,
 }
 
 /// Combined behaviour for the relay server
@@ -47,6 +54,33 @@ struct RelayServerBehaviour {
     relay: relay::Behaviour,
     ping: ping::Behaviour,
     identify: identify::Behaviour,
+}
+
+fn default_identity_path() -> String {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config/harbor-relay/id.key")
+        .display()
+        .to_string()
+}
+
+fn load_or_generate_identity(path: &str) -> Result<Keypair, Box<dyn std::error::Error>> {
+    let path = PathBuf::from(path);
+
+    if path.exists() {
+        let bytes = fs::read(&path)?;
+        let key = Keypair::from_protobuf_encoding(&bytes)?;
+        return Ok(key);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let key = Keypair::generate_ed25519();
+    let encoded = key.to_protobuf_encoding()?;
+    fs::write(&path, encoded)?;
+    Ok(key)
 }
 
 #[tokio::main]
@@ -65,8 +99,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Max reservations: {}", args.max_reservations);
     info!("Max circuits per peer: {}", args.max_circuits_per_peer);
 
+    let keypair = load_or_generate_identity(&args.identity_key_path)?;
+    info!("Using identity key at {}", args.identity_key_path);
+
     // Build the swarm
-    let mut swarm = SwarmBuilder::with_new_identity()
+    let mut swarm = SwarmBuilder::with_existing_identity(keypair.clone())
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
@@ -74,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             yamux::Config::default,
         )?
         .with_quic()
-        .with_behaviour(|keypair| {
+        .with_behaviour(|_| {
             let local_peer_id = PeerId::from(keypair.public());
             let local_public_key = keypair.public();
 
@@ -88,7 +125,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let relay = relay::Behaviour::new(local_peer_id, relay_config);
 
-            let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(30)));
+            let ping = ping::Behaviour::new(
+                ping::Config::new()
+                    .with_interval(Duration::from_secs(15))
+                    .with_timeout(Duration::from_secs(60)),
+            );
 
             let identify = identify::Behaviour::new(identify::Config::new(
                 "/harbor-relay/1.0.0".to_string(),
@@ -101,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 identify,
             }
         })?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(3600)))
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(365 * 24 * 60 * 60)))
         .build();
 
     let local_peer_id = *swarm.local_peer_id();
@@ -124,9 +165,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let external_quic: Multiaddr =
             format!("/ip4/{}/udp/{}/quic-v1/p2p/{}", announce_ip, args.port, local_peer_id)
                 .parse()?;
+        let local_0_0_0_0_tcp: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}/p2p/{}", args.port, local_peer_id).parse()?;
+        let local_0_0_0_0_quic: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1/p2p/{}", args.port, local_peer_id).parse()?;
 
         swarm.add_external_address(external_tcp.clone());
         swarm.add_external_address(external_quic.clone());
+        swarm.add_external_address(local_0_0_0_0_tcp.clone());
+        swarm.add_external_address(local_0_0_0_0_quic.clone());
 
         info!("========================================");
         info!("YOUR RELAY ADDRESSES:");
@@ -158,11 +203,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })) => {
                 info!("Identified peer {}: {}", peer_id, info.agent_version);
             }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                info!("Connection established with: {}", peer_id);
+            SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } => {
+                info!("Connection established with: {} via {:?} ({:?})", peer_id, connection_id, endpoint);
             }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                info!("Connection closed with: {}", peer_id);
+            SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, endpoint, .. } => {
+                info!("Connection closed with: {} via {:?} ({:?}), cause: {:?}", peer_id, connection_id, endpoint, cause);
             }
             _ => {}
         }

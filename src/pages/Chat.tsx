@@ -12,7 +12,7 @@ import {
   ChevronDownIcon,
   XIcon,
 } from '../components/icons';
-import { useMockPeersStore, useContactsStore, useMessagingStore } from '../stores';
+import { useContactsStore, useMessagingStore } from '../stores';
 
 // Conversation menu component
 function ConversationMenu({
@@ -157,19 +157,6 @@ function getContactColor(peerId: string): string {
 export function ChatPage() {
   const navigate = useNavigate();
 
-  // Mock peers store (for demo contacts)
-  const {
-    conversations: mockConversations,
-    sendMessage: sendMockMessage,
-    archiveConversation,
-    unarchiveConversation,
-    isConversationArchived,
-    clearConversationHistory,
-    deleteConversation,
-    getActiveConversations,
-    getArchivedConversationsList,
-  } = useMockPeersStore();
-
   // Real contacts and messaging
   const { contacts, loadContacts } = useContactsStore();
   const {
@@ -189,9 +176,7 @@ export function ChatPage() {
   // Keep the store's activeConversation in sync with local selectedConversation
   // This is needed for the event handler to know which conversation to refresh
   useEffect(() => {
-    // Find if selected conversation is a real contact
-    const isReal = selectedConversation?.startsWith('real-');
-    if (isReal && selectedConversation) {
+    if (selectedConversation) {
       const peerId = selectedConversation.replace('real-', '');
       setActiveConversation(peerId);
     } else {
@@ -201,7 +186,6 @@ export function ChatPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [messageInput, setMessageInput] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [showMessageSearch, setShowMessageSearch] = useState(false);
   const [messageSearchQuery, setMessageSearchQuery] = useState('');
@@ -228,47 +212,23 @@ export function ChatPage() {
     setCurrentSearchIndex(0);
   }, [messageSearchQuery]);
 
-  // Get active or archived mock conversations based on toggle
-  const displayMockConversations = showArchived
-    ? getArchivedConversationsList()
-    : getActiveConversations();
-
-  // Build unified conversation list
-  const unifiedConversations: UnifiedConversation[] = [
-    // Real contacts (only show if not viewing archived - real contacts don't have archive yet)
-    ...(showArchived
-      ? []
-      : contacts.map((contact): UnifiedConversation => {
-          const realConv = realConversations.find((c) => c.peerId === contact.peerId);
-          return {
-            id: `real-${contact.peerId}`,
-            peerId: contact.peerId,
-            name: contact.displayName,
-            online: true, // Assume online for now - would need presence tracking
-            avatarGradient: getContactColor(contact.peerId),
-            lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
-            timestamp: realConv
-              ? new Date(realConv.lastMessageAt * 1000)
-              : new Date(contact.addedAt * 1000),
-            unread: realConv?.unreadCount || 0,
-            isReal: true,
-          };
-        })),
-    // Mock conversations (filtered by archive status)
-    ...displayMockConversations.map(
-      (conv): UnifiedConversation => ({
-        id: conv.id,
-        peerId: conv.peerId,
-        name: conv.name,
-        online: conv.online,
-        avatarGradient: conv.avatarGradient,
-        lastMessage: conv.lastMessage,
-        timestamp: conv.timestamp,
-        unread: conv.unread,
-        isReal: false,
-      }),
-    ),
-  ];
+  // Build conversation list from real contacts
+  const unifiedConversations: UnifiedConversation[] = contacts.map((contact): UnifiedConversation => {
+    const realConv = realConversations.find((c) => c.peerId === contact.peerId);
+    return {
+      id: `real-${contact.peerId}`,
+      peerId: contact.peerId,
+      name: contact.displayName,
+      online: true, // Assume online for now - would need presence tracking
+      avatarGradient: getContactColor(contact.peerId),
+      lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
+      timestamp: realConv
+        ? new Date(realConv.lastMessageAt * 1000)
+        : new Date(contact.addedAt * 1000),
+      unread: realConv?.unreadCount || 0,
+      isReal: true,
+    };
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -279,9 +239,7 @@ export function ChatPage() {
 
   // Get messages for current conversation
   const currentMessages = selectedConv
-    ? selectedConv.isReal
-      ? realMessages[selectedConv.peerId] || []
-      : mockConversations.find((c) => c.id === selectedConversation)?.messages || []
+    ? realMessages[selectedConv.peerId] || []
     : [];
 
   // Calculate search results
@@ -306,12 +264,12 @@ export function ChatPage() {
     });
   };
 
-  // Load messages when selecting a real conversation
+  // Load messages when selecting a conversation
   useEffect(() => {
-    if (selectedConv?.isReal) {
+    if (selectedConv) {
       loadMessages(selectedConv.peerId);
     }
-  }, [selectedConv?.peerId, selectedConv?.isReal, loadMessages]);
+  }, [selectedConv?.peerId, loadMessages]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -351,19 +309,12 @@ export function ChatPage() {
     setMessageInput('');
     inputRef.current?.focus();
 
-    if (selectedConv.isReal) {
-      // Send via real P2P messaging
-      try {
-        await sendRealMessage(selectedConv.peerId, content);
-        // Reload messages to show the sent message
-        loadMessages(selectedConv.peerId);
-      } catch (error) {
-        console.error('Failed to send message:', error);
-        toast.error('Failed to send message');
-      }
-    } else {
-      // Send via mock store (triggers auto-reply for online peers)
-      sendMockMessage(selectedConversation, content);
+    try {
+      await sendRealMessage(selectedConv.peerId, content);
+      loadMessages(selectedConv.peerId);
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      toast.error('Failed to send message');
     }
   };
 
@@ -420,45 +371,21 @@ export function ChatPage() {
               <BackIcon className="w-5 h-5" />
             </button>
             <h2 className="text-lg font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-              {showArchived ? 'Archived' : 'Messages'}
+              Messages
             </h2>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowArchived(!showArchived)}
+              onClick={handleNewConversation}
               className="p-2 rounded-lg transition-colors duration-200"
               style={{
-                background: showArchived
-                  ? 'hsl(var(--harbor-primary) / 0.15)'
-                  : 'hsl(var(--harbor-surface-1))',
-                color: showArchived
-                  ? 'hsl(var(--harbor-primary))'
-                  : 'hsl(var(--harbor-text-secondary))',
+                background:
+                  'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                color: 'white',
               }}
-              title={showArchived ? 'View active conversations' : 'View archived conversations'}
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
-                />
-              </svg>
+              <PlusIcon className="w-5 h-5" />
             </button>
-            {!showArchived && (
-              <button
-                onClick={handleNewConversation}
-                className="p-2 rounded-lg transition-colors duration-200"
-                style={{
-                  background:
-                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                  color: 'white',
-                }}
-              >
-                <PlusIcon className="w-5 h-5" />
-              </button>
-            )}
           </div>
         </div>
 
@@ -493,20 +420,8 @@ export function ChatPage() {
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               />
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                {showArchived ? 'No archived conversations' : 'No conversations found'}
+                No conversations found
               </p>
-              {showArchived && (
-                <button
-                  onClick={() => setShowArchived(false)}
-                  className="mt-4 text-sm px-4 py-2 rounded-lg transition-colors"
-                  style={{
-                    color: 'hsl(var(--harbor-primary))',
-                    background: 'hsl(var(--harbor-primary) / 0.1)',
-                  }}
-                >
-                  View active conversations
-                </button>
-              )}
             </div>
           ) : (
             <div className="space-y-1">
@@ -550,27 +465,15 @@ export function ChatPage() {
                           >
                             {conversation.name}
                           </p>
-                          {conversation.isReal ? (
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
-                              style={{
-                                background: 'hsl(var(--harbor-success) / 0.15)',
-                                color: 'hsl(var(--harbor-success))',
-                              }}
-                            >
-                              P2P
-                            </span>
-                          ) : (
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
-                              style={{
-                                background: 'hsl(var(--harbor-text-tertiary) / 0.15)',
-                                color: 'hsl(var(--harbor-text-tertiary))',
-                              }}
-                            >
-                              Demo
-                            </span>
-                          )}
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={{
+                              background: 'hsl(var(--harbor-success) / 0.15)',
+                              color: 'hsl(var(--harbor-success))',
+                            }}
+                          >
+                            P2P
+                          </span>
                         </div>
                         <span
                           className="text-xs flex-shrink-0 ml-2"
@@ -618,23 +521,15 @@ export function ChatPage() {
                       <ConversationMenu
                         isOpen={openMenuId === conversation.id}
                         onClose={() => setOpenMenuId(null)}
-                        isArchived={isConversationArchived(conversation.id)}
+                        isArchived={false}
                         onArchive={() => {
-                          if (isConversationArchived(conversation.id)) {
-                            unarchiveConversation(conversation.id);
-                            toast.success(`Unarchived conversation with ${conversation.name}`);
-                          } else {
-                            archiveConversation(conversation.id);
-                            toast.success(`Archived conversation with ${conversation.name}`);
-                          }
+                          toast('Archive coming soon');
                         }}
                         onClearHistory={() => {
-                          clearConversationHistory(conversation.id);
-                          toast.success(`Cleared chat history with ${conversation.name}`);
+                          toast('Clear history coming soon');
                         }}
                         onDelete={() => {
-                          deleteConversation(conversation.id);
-                          toast.success(`Deleted conversation with ${conversation.name}`);
+                          toast('Delete coming soon');
                         }}
                       />
                     </div>
@@ -835,14 +730,10 @@ export function ChatPage() {
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-3xl mx-auto space-y-3">
           {currentMessages.map((message) => {
-            // Handle both real messages (Message type) and mock messages (MockMessage type)
-            const isMine = 'isMine' in message ? message.isMine : message.isOutgoing;
-            const timestamp =
-              'timestamp' in message && message.timestamp instanceof Date
-                ? message.timestamp
-                : new Date(('sentAt' in message ? message.sentAt : 0) * 1000);
+            const isMine = message.isOutgoing;
+            const timestamp = new Date(message.sentAt * 1000);
             const content = message.content;
-            const id = 'id' in message ? message.id : message.messageId;
+            const id = message.messageId;
 
             return (
               <div key={id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
