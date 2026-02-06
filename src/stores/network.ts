@@ -61,7 +61,8 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
     set({ isLoading: true, error: null, status: 'connecting' });
     try {
       await networkService.startNetwork();
-      set({ isRunning: true, status: 'connected', isLoading: false });
+      // Backend auto-connects to relay, set UI to show connecting state
+      set({ isRunning: true, status: 'connected', isLoading: false, relayStatus: 'connecting' });
       // Refresh peers, stats, and addresses after starting
       await get().refreshPeers();
       await get().refreshStats();

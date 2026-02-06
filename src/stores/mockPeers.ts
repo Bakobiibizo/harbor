@@ -706,9 +706,7 @@ export const useMockPeersStore = create<MockPeersState>((set, get) => ({
 
   unhidePost: (peerId: string, postId: string) => {
     set((state) => ({
-      hiddenPosts: state.hiddenPosts.filter(
-        (h) => !(h.peerId === peerId && h.postId === postId),
-      ),
+      hiddenPosts: state.hiddenPosts.filter((h) => !(h.peerId === peerId && h.postId === postId)),
     }));
   },
 

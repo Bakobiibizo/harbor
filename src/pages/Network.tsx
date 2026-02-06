@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
+<<<<<<< Updated upstream
+=======
+import { invoke } from '@tauri-apps/api/core';
+>>>>>>> Stashed changes
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
 import { contactsService } from '../services/contacts';
+import * as networkService from '../services/network';
 import {
   NetworkIcon,
   UsersIcon,
@@ -17,17 +22,73 @@ import { RELAY_CLOUDFORMATION_TEMPLATE } from '../constants/cloudformation-templ
 
 // Adjectives and animals for generating human-friendly peer names
 const ADJECTIVES = [
-  'Swift', 'Brave', 'Calm', 'Clever', 'Eager', 'Gentle', 'Happy', 'Jolly',
-  'Kind', 'Lively', 'Merry', 'Noble', 'Proud', 'Quick', 'Quiet', 'Sleek',
-  'Smart', 'Sunny', 'Warm', 'Wise', 'Bold', 'Bright', 'Cool', 'Crisp',
-  'Dapper', 'Fresh', 'Grand', 'Lucky', 'Neat', 'Sharp', 'Vivid', 'Witty',
+  'Swift',
+  'Brave',
+  'Calm',
+  'Clever',
+  'Eager',
+  'Gentle',
+  'Happy',
+  'Jolly',
+  'Kind',
+  'Lively',
+  'Merry',
+  'Noble',
+  'Proud',
+  'Quick',
+  'Quiet',
+  'Sleek',
+  'Smart',
+  'Sunny',
+  'Warm',
+  'Wise',
+  'Bold',
+  'Bright',
+  'Cool',
+  'Crisp',
+  'Dapper',
+  'Fresh',
+  'Grand',
+  'Lucky',
+  'Neat',
+  'Sharp',
+  'Vivid',
+  'Witty',
 ];
 
 const ANIMALS = [
-  'Falcon', 'Wolf', 'Bear', 'Eagle', 'Hawk', 'Lion', 'Tiger', 'Otter',
-  'Fox', 'Deer', 'Owl', 'Raven', 'Swan', 'Crane', 'Heron', 'Panda',
-  'Koala', 'Dolphin', 'Whale', 'Seal', 'Lynx', 'Badger', 'Hare', 'Finch',
-  'Robin', 'Sparrow', 'Jay', 'Wren', 'Lark', 'Dove', 'Elk', 'Moose',
+  'Falcon',
+  'Wolf',
+  'Bear',
+  'Eagle',
+  'Hawk',
+  'Lion',
+  'Tiger',
+  'Otter',
+  'Fox',
+  'Deer',
+  'Owl',
+  'Raven',
+  'Swan',
+  'Crane',
+  'Heron',
+  'Panda',
+  'Koala',
+  'Dolphin',
+  'Whale',
+  'Seal',
+  'Lynx',
+  'Badger',
+  'Hare',
+  'Finch',
+  'Robin',
+  'Sparrow',
+  'Jay',
+  'Wren',
+  'Lark',
+  'Dove',
+  'Elk',
+  'Moose',
 ];
 
 function getPeerFriendlyName(peerId: string): string {
@@ -116,7 +177,6 @@ export function NetworkPage() {
     isRunning,
     connectedPeers,
     stats,
-    listeningAddresses,
     shareableAddresses,
     relayStatus,
     error,
@@ -142,13 +202,18 @@ export function NetworkPage() {
   const [activeTab, setActiveTab] = useState<'discovered' | 'connected' | 'contacts'>('connected');
   const [relayInput, setRelayInput] = useState('');
   const [isConnectingRelay, setIsConnectingRelay] = useState(false);
-  const [peerMultiaddr, setPeerMultiaddr] = useState('');
-  const [manualPeerId, setManualPeerId] = useState('');
+  const [peerAddress, setPeerAddress] = useState('');
   const [isConnectingPeer, setIsConnectingPeer] = useState(false);
+<<<<<<< Updated upstream
   const [isAddingContact, setIsAddingContact] = useState(false);
   const [showManualConnect, setShowManualConnect] = useState(false);
   const [showLocalAddresses, setShowLocalAddresses] = useState(false);
   const [showDeployRelay, setShowDeployRelay] = useState(false);
+=======
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [natDetectionTimedOut, setNatDetectionTimedOut] = useState(false);
+  const [shareableContactString, setShareableContactString] = useState<string | null>(null);
+>>>>>>> Stashed changes
 
   // Check network status on mount and set up refresh interval
   useEffect(() => {
@@ -164,8 +229,47 @@ export function NetworkPage() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isRunning, checkStatus, refreshPeers, refreshStats, refreshAddresses, refreshShareableAddresses]);
+  }, [
+    isRunning,
+    checkStatus,
+    refreshPeers,
+    refreshStats,
+    refreshAddresses,
+    refreshShareableAddresses,
+  ]);
 
+<<<<<<< Updated upstream
+=======
+  // NAT status "Detecting..." timeout (30s)
+  useEffect(() => {
+    if (stats.natStatus !== 'unknown' || !isRunning) {
+      setNatDetectionTimedOut(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setNatDetectionTimedOut(true);
+    }, 30_000);
+
+    return () => clearTimeout(timeout);
+  }, [isRunning, stats.natStatus]);
+
+  // Fetch shareable contact string when relay is connected
+  useEffect(() => {
+    if (relayStatus === 'connected' && isRunning) {
+      networkService
+        .getShareableContactString()
+        .then(setShareableContactString)
+        .catch((err) => {
+          console.warn('Could not get shareable contact string:', err);
+          setShareableContactString(null);
+        });
+    } else {
+      setShareableContactString(null);
+    }
+  }, [relayStatus, isRunning]);
+
+>>>>>>> Stashed changes
   // Handlers
   const handleConnectToRelay = async () => {
     if (!relayInput.trim()) {
@@ -201,44 +305,32 @@ export function NetworkPage() {
   };
 
   const handleConnectToPeer = async () => {
-    if (!peerMultiaddr.trim()) {
-      toast.error('Please enter a multiaddress');
+    const input = peerAddress.trim();
+    if (!input) {
+      toast.error('Please enter an address');
       return;
     }
-    if (!peerMultiaddr.includes('/p2p/')) {
-      toast.error('Multiaddress must include peer ID (/p2p/...)');
-      return;
-    }
+
     setIsConnectingPeer(true);
     try {
-      await connectToPeer(peerMultiaddr.trim());
-      toast.success('Connection initiated!');
-      setPeerMultiaddr('');
+      // Check if it's a harbor:// contact string (new simplified flow)
+      if (input.startsWith('harbor://')) {
+        await networkService.addContactFromString(input);
+        toast.success('Contact added successfully!');
+        refreshContacts();
+        setPeerAddress('');
+      } else if (input.includes('/p2p/')) {
+        // Legacy multiaddr format - just connect (requires identity exchange)
+        await connectToPeer(input);
+        toast.success('Connection initiated!');
+        setPeerAddress('');
+      } else {
+        toast.error('Invalid address format. Use a harbor:// link or multiaddress with /p2p/');
+      }
     } catch (err) {
-      toast.error(`Failed to connect: ${err}`);
+      toast.error(`Failed: ${err}`);
     } finally {
       setIsConnectingPeer(false);
-    }
-  };
-
-  const handleAddContactByPeerId = async () => {
-    if (!manualPeerId.trim()) {
-      toast.error('Please enter a Peer ID');
-      return;
-    }
-    if (!manualPeerId.startsWith('12D3KooW') || manualPeerId.length < 50) {
-      toast.error("Invalid Peer ID format. Should start with '12D3KooW' and be ~52 characters.");
-      return;
-    }
-    setIsAddingContact(true);
-    try {
-      await contactsService.requestPeerIdentity(manualPeerId.trim());
-      toast.success('Identity request sent! Contact will be added when they respond.');
-      setManualPeerId('');
-    } catch (err) {
-      toast.error(`Failed to add contact: ${err}`);
-    } finally {
-      setIsAddingContact(false);
     }
   };
 
@@ -264,6 +356,11 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
+<<<<<<< Updated upstream
+=======
+    const contactName =
+      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
+>>>>>>> Stashed changes
     return (
       friendlyName.includes(query) ||
       peer.peerId.toLowerCase().includes(query) ||
@@ -282,9 +379,13 @@ export function NetworkPage() {
     );
   });
 
-  const localAddresses = listeningAddresses.filter(
-    (addr) => !addr.includes('127.0.0.1') && !addr.includes('::1') && !addr.includes('p2p-circuit'),
-  );
+  // Get the circuit address (the one shareable address for remote peers)
+  const circuitAddress =
+    shareableAddresses.length > 0
+      ? shareableAddresses[0]
+      : stats.relayAddresses.length > 0
+        ? stats.relayAddresses[0]
+        : null;
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
@@ -319,7 +420,9 @@ export function NetworkPage() {
               <div
                 className="w-4 h-4 border-2 rounded-full animate-spin"
                 style={{
-                  borderColor: isRunning ? 'hsl(var(--harbor-error) / 0.3)' : 'rgba(255,255,255,0.3)',
+                  borderColor: isRunning
+                    ? 'hsl(var(--harbor-error) / 0.3)'
+                    : 'rgba(255,255,255,0.3)',
                   borderTopColor: isRunning ? 'hsl(var(--harbor-error))' : 'white',
                 }}
               />
@@ -344,7 +447,10 @@ export function NetworkPage() {
                 border: '1px solid hsl(var(--harbor-error) / 0.2)',
               }}
             >
-              <XIcon className="w-5 h-5 flex-shrink-0" style={{ color: 'hsl(var(--harbor-error))' }} />
+              <XIcon
+                className="w-5 h-5 flex-shrink-0"
+                style={{ color: 'hsl(var(--harbor-error))' }}
+              />
               <p style={{ color: 'hsl(var(--harbor-error))' }}>{error}</p>
             </div>
           )}
@@ -352,56 +458,125 @@ export function NetworkPage() {
           {/* Stats row (when running) */}
           {isRunning && (
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="p-3 rounded-xl" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
-                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>Peers</p>
-                <p className="text-xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>{stats.connectedPeers}</p>
-              </div>
-              <div className="p-3 rounded-xl" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
-                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>Uptime</p>
-                <p className="text-xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>{formatUptime(stats.uptimeSeconds)}</p>
-              </div>
-              <div className="p-3 rounded-xl" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
-                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>Received</p>
-                <p className="text-xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>{formatBytes(stats.totalBytesIn)}</p>
-              </div>
-              <div className="p-3 rounded-xl" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
-                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>Sent</p>
-                <p className="text-xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>{formatBytes(stats.totalBytesOut)}</p>
+              <div
+                className="p-3 rounded-xl"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Peers
+                </p>
+                <p
+                  className="text-xl font-bold"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  {stats.connectedPeers}
+                </p>
               </div>
               <div
                 className="p-3 rounded-xl"
                 style={{
-                  background: stats.natStatus === 'public'
-                    ? 'hsl(var(--harbor-success) / 0.1)'
-                    : stats.natStatus === 'private'
-                      ? 'hsl(var(--harbor-warning) / 0.1)'
-                      : 'hsl(var(--harbor-bg-elevated))',
+                  background: 'hsl(var(--harbor-bg-elevated))',
                   border: '1px solid hsl(var(--harbor-border-subtle))',
                 }}
               >
-                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>NAT Status</p>
+                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Uptime
+                </p>
+                <p
+                  className="text-xl font-bold"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  {formatUptime(stats.uptimeSeconds)}
+                </p>
+              </div>
+              <div
+                className="p-3 rounded-xl"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Received
+                </p>
+                <p
+                  className="text-xl font-bold"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  {formatBytes(stats.totalBytesIn)}
+                </p>
+              </div>
+              <div
+                className="p-3 rounded-xl"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Sent
+                </p>
+                <p
+                  className="text-xl font-bold"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  {formatBytes(stats.totalBytesOut)}
+                </p>
+              </div>
+              <div
+                className="p-3 rounded-xl"
+                style={{
+                  background:
+                    stats.natStatus === 'public'
+                      ? 'hsl(var(--harbor-success) / 0.1)'
+                      : stats.natStatus === 'private'
+                        ? 'hsl(var(--harbor-warning) / 0.1)'
+                        : 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <p className="text-xs mb-1" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  NAT Status
+                </p>
                 <div className="flex items-center gap-2">
                   <div
                     className="w-2 h-2 rounded-full"
                     style={{
-                      background: stats.natStatus === 'public'
-                        ? 'hsl(var(--harbor-success))'
-                        : stats.natStatus === 'private'
-                          ? 'hsl(var(--harbor-warning))'
-                          : 'hsl(var(--harbor-text-tertiary))',
+                      background:
+                        stats.natStatus === 'public'
+                          ? 'hsl(var(--harbor-success))'
+                          : stats.natStatus === 'private'
+                            ? 'hsl(var(--harbor-warning))'
+                            : 'hsl(var(--harbor-text-tertiary))',
                     }}
                   />
                   <p
                     className="text-sm font-semibold capitalize"
                     style={{
-                      color: stats.natStatus === 'public'
-                        ? 'hsl(var(--harbor-success))'
-                        : stats.natStatus === 'private'
-                          ? 'hsl(var(--harbor-warning))'
-                          : 'hsl(var(--harbor-text-primary))',
+                      color:
+                        stats.natStatus === 'public'
+                          ? 'hsl(var(--harbor-success))'
+                          : stats.natStatus === 'private'
+                            ? 'hsl(var(--harbor-warning))'
+                            : 'hsl(var(--harbor-text-primary))',
                     }}
                   >
+<<<<<<< Updated upstream
                     {stats.natStatus === 'unknown' ? 'Detecting...' : stats.natStatus === 'public' ? 'Public' : stats.natStatus === 'private' ? 'Relayed' : 'Behind NAT'}
+=======
+                    {stats.natStatus === 'unknown'
+                      ? natDetectionTimedOut
+                        ? 'Unable to detect'
+                        : 'Detecting...'
+                      : stats.natStatus === 'public'
+                        ? 'Public'
+                        : stats.natStatus === 'private'
+                          ? 'Relayed'
+                          : 'Behind NAT'}
+>>>>>>> Stashed changes
                   </p>
                 </div>
               </div>
@@ -416,8 +591,11 @@ export function NetworkPage() {
               border: '1px solid hsl(var(--harbor-border-subtle))',
             }}
           >
-            <h3 className="text-sm font-medium mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              Relay Connection
+            <h3
+              className="text-sm font-medium mb-4"
+              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+            >
+              Harbor Relay
             </h3>
 
             {relayStatus === 'connected' && stats.relayAddresses.length > 0 ? (
@@ -435,8 +613,11 @@ export function NetworkPage() {
                     style={{ background: 'hsl(var(--harbor-success))' }}
                   />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-success))' }}>
-                      Connected to relay
+                    <p
+                      className="text-sm font-medium"
+                      style={{ color: 'hsl(var(--harbor-success))' }}
+                    >
+                      Connected to Harbor Relay
                     </p>
                     <code
                       className="text-xs break-all font-mono block mt-1"
@@ -481,7 +662,8 @@ export function NetworkPage() {
                   disabled={!isRunning || isConnectingRelay}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
-                    background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                    background:
+                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                     color: 'white',
                     boxShadow: '0 2px 8px hsl(var(--harbor-primary) / 0.3)',
                   }}
@@ -504,7 +686,9 @@ export function NetworkPage() {
                       color: 'hsl(var(--harbor-text-primary))',
                     }}
                     disabled={!isRunning || isConnectingRelay}
-                    onKeyDown={(event) => { if (event.key === 'Enter') handleConnectToRelay(); }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') handleConnectToRelay();
+                    }}
                   />
                   <button
                     onClick={handleConnectToRelay}
@@ -535,7 +719,10 @@ export function NetworkPage() {
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                  <p
+                    className="text-sm font-medium"
+                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                  >
                     Auto-connect on startup
                   </p>
                   <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
@@ -546,7 +733,10 @@ export function NetworkPage() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                  <p
+                    className="text-sm font-medium"
+                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                  >
                     Local network discovery
                   </p>
                   <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
@@ -558,8 +748,8 @@ export function NetworkPage() {
             </div>
           </div>
 
-          {/* Section C: Your Addresses (only when running) */}
-          {isRunning && (shareableAddresses.length > 0 || localAddresses.length > 0) && (
+          {/* Your Circuit Address (only when running) */}
+          {isRunning && (
             <div
               className="rounded-2xl p-6"
               style={{
@@ -567,120 +757,163 @@ export function NetworkPage() {
                 border: '1px solid hsl(var(--harbor-border-subtle))',
               }}
             >
-              <h3 className="text-sm font-medium mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                Your Addresses
+              <h3
+                className="text-sm font-medium mb-3"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                Your Address
               </h3>
 
-              {/* Shareable addresses (relay) */}
-              {shareableAddresses.length > 0 && (
-                <div className="mb-4">
-                  <label
-                    className="text-xs font-medium block mb-2 flex items-center gap-2"
-                    style={{ color: 'hsl(var(--harbor-success))' }}
+              {shareableContactString ? (
+                <div>
+                  <div
+                    className="flex items-center gap-2 p-3 rounded-lg mb-2"
+                    style={{
+                      background: 'hsl(var(--harbor-success) / 0.1)',
+                      border: '1px solid hsl(var(--harbor-success) / 0.2)',
+                    }}
                   >
                     <span
-                      className="w-2 h-2 rounded-full animate-pulse"
+                      className="w-2 h-2 rounded-full animate-pulse flex-shrink-0"
                       style={{ background: 'hsl(var(--harbor-success))' }}
                     />
-                    Shareable Address (works anywhere)
-                  </label>
-                  {shareableAddresses.map((addr, index) => (
-                    <div
-                      key={`shareable-${index}`}
-                      className="flex items-center gap-2 p-3 rounded-lg mb-2"
-                      style={{
-                        background: 'hsl(var(--harbor-success) / 0.1)',
-                        border: '1px solid hsl(var(--harbor-success) / 0.2)',
-                      }}
+                    <code
+                      className="text-xs flex-1 break-all font-mono"
+                      style={{ color: 'hsl(var(--harbor-success))' }}
                     >
-                      <code
-                        className="text-xs flex-1 break-all font-mono"
-                        style={{ color: 'hsl(var(--harbor-success))' }}
-                      >
-                        {addr}
-                      </code>
-                      <CopyButton text={addr} label="Address copied! Share this with remote peers." />
-                    </div>
-                  ))}
+                      {shareableContactString}
+                    </code>
+                    <CopyButton
+                      text={shareableContactString}
+                      label="Contact link copied! Share this with your contact."
+                    />
+                  </div>
                   <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                    Share this address with peers anywhere on the internet.
+                    Copy this link and send it to the person you want to connect with. They can
+                    paste it below to instantly add you.
+                  </p>
+                </div>
+              ) : circuitAddress ? (
+                <div>
+                  <div
+                    className="flex items-center gap-2 p-3 rounded-lg mb-2"
+                    style={{
+                      background: 'hsl(var(--harbor-warning) / 0.1)',
+                      border: '1px solid hsl(var(--harbor-warning) / 0.2)',
+                    }}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ background: 'hsl(var(--harbor-warning))' }}
+                    />
+                    <code
+                      className="text-xs flex-1 break-all font-mono"
+                      style={{ color: 'hsl(var(--harbor-warning))' }}
+                    >
+                      {circuitAddress}
+                    </code>
+                    <CopyButton text={circuitAddress} label="Address copied (legacy format)" />
+                  </div>
+                  <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    Generating shareable contact link...
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className="p-3 rounded-lg"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                  }}
+                >
+                  <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    {relayStatus === 'connecting'
+                      ? 'Waiting for relay connection to generate your address...'
+                      : 'Connect to the Harbor relay to get your shareable address.'}
                   </p>
                 </div>
               )}
+            </div>
+          )}
 
-              {/* Fallback: show relay addresses from stats if no shareable addresses */}
-              {shareableAddresses.length === 0 && stats.relayAddresses.length > 0 && (
-                <div className="mb-4">
-                  <label
-                    className="text-xs font-medium block mb-2 flex items-center gap-2"
-                    style={{ color: 'hsl(var(--harbor-success))' }}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full animate-pulse"
-                      style={{ background: 'hsl(var(--harbor-success))' }}
-                    />
-                    Relay Address (works anywhere)
-                  </label>
-                  {stats.relayAddresses.map((addr, index) => (
-                    <div
-                      key={`relay-${index}`}
-                      className="flex items-center gap-2 p-3 rounded-lg mb-2"
-                      style={{
-                        background: 'hsl(var(--harbor-success) / 0.1)',
-                        border: '1px solid hsl(var(--harbor-success) / 0.2)',
-                      }}
+          {/* Connect to a Peer */}
+          {isRunning && (
+            <div
+              className="rounded-2xl p-6"
+              style={{
+                background: 'hsl(var(--harbor-bg-elevated))',
+                border: '1px solid hsl(var(--harbor-border-subtle))',
+              }}
+            >
+              <h3
+                className="text-sm font-medium mb-3"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                Add a Contact
+              </h3>
+
+              <div className="flex gap-2 mb-3">
+                <input
+                  type="text"
+                  value={peerAddress}
+                  onChange={(event) => setPeerAddress(event.target.value)}
+                  placeholder="Paste a harbor:// link here"
+                  className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                  }}
+                  disabled={isConnectingPeer}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleConnectToPeer();
+                  }}
+                />
+                <button
+                  onClick={handleConnectToPeer}
+                  disabled={isConnectingPeer || !peerAddress.trim()}
+                  className="px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+                  style={{
+                    background:
+                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                    color: 'white',
+                  }}
+                >
+                  {isConnectingPeer ? 'Adding...' : 'Add Contact'}
+                </button>
+              </div>
+
+              <div
+                className="p-3 rounded-lg"
+                style={{ background: 'hsl(var(--harbor-surface-1))' }}
+              >
+                <p
+                  className="text-xs font-medium mb-2"
+                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                >
+                  How to connect with someone:
+                </p>
+                <ol
+                  className="text-xs space-y-1 list-decimal list-inside"
+                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                >
+                  <li>Both users start their network (auto-connects to relay)</li>
+                  <li>
+                    Copy your{' '}
+                    <code
+                      className="px-1 py-0.5 rounded"
+                      style={{ background: 'hsl(var(--harbor-surface-2))' }}
                     >
-                      <code
-                        className="text-xs flex-1 break-all font-mono"
-                        style={{ color: 'hsl(var(--harbor-success))' }}
-                      >
-                        {addr}
-                      </code>
-                      <CopyButton text={addr} label="Relay address copied!" />
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Local addresses - collapsible */}
-              {localAddresses.length > 0 && (
-                <div>
-                  <button
-                    onClick={() => setShowLocalAddresses(!showLocalAddresses)}
-                    className="flex items-center gap-2 text-xs font-medium mb-2 transition-colors"
-                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                  >
-                    {showLocalAddresses ? (
-                      <ChevronDownIcon className="w-3 h-3" />
-                    ) : (
-                      <ChevronRightIcon className="w-3 h-3" />
-                    )}
-                    Local network addresses ({localAddresses.length})
-                  </button>
-                  {showLocalAddresses && (
-                    <div className="space-y-2">
-                      {localAddresses.slice(0, 5).map((addr, index) => (
-                        <div
-                          key={index}
-                          className="flex items-center gap-2 p-2 rounded-lg"
-                          style={{ background: 'hsl(var(--harbor-surface-1))' }}
-                        >
-                          <code
-                            className="text-xs flex-1 break-all font-mono"
-                            style={{ color: 'hsl(var(--harbor-primary))' }}
-                          >
-                            {addr}
-                          </code>
-                          <CopyButton text={addr} label="Address copied!" />
-                        </div>
-                      ))}
-                      <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                        These addresses only work for peers on your local network.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
+                      harbor://
+                    </code>{' '}
+                    link from above and send it to your contact
+                  </li>
+                  <li>Ask your contact to send you their link</li>
+                  <li>
+                    Paste their link here and click Add - they'll be instantly added as a contact!
+                  </li>
+                </ol>
+              </div>
             </div>
           )}
 
@@ -697,13 +930,20 @@ export function NetworkPage() {
               className="p-4 border-b flex items-center gap-4"
               style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
             >
-              <div className="flex rounded-lg p-1" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
+              <div
+                className="flex rounded-lg p-1"
+                style={{ background: 'hsl(var(--harbor-surface-1))' }}
+              >
                 <button
                   onClick={() => setActiveTab('discovered')}
                   className="px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200"
                   style={{
-                    background: activeTab === 'discovered' ? 'hsl(var(--harbor-bg-elevated))' : 'transparent',
-                    color: activeTab === 'discovered' ? 'hsl(var(--harbor-text-primary))' : 'hsl(var(--harbor-text-tertiary))',
+                    background:
+                      activeTab === 'discovered' ? 'hsl(var(--harbor-bg-elevated))' : 'transparent',
+                    color:
+                      activeTab === 'discovered'
+                        ? 'hsl(var(--harbor-text-primary))'
+                        : 'hsl(var(--harbor-text-tertiary))',
                     boxShadow: activeTab === 'discovered' ? 'var(--shadow-sm)' : 'none',
                   }}
                 >
@@ -712,7 +952,10 @@ export function NetworkPage() {
                   {discoveredPeers.length > 0 && (
                     <span
                       className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs"
-                      style={{ background: 'hsl(var(--harbor-primary) / 0.15)', color: 'hsl(var(--harbor-primary))' }}
+                      style={{
+                        background: 'hsl(var(--harbor-primary) / 0.15)',
+                        color: 'hsl(var(--harbor-primary))',
+                      }}
                     >
                       {discoveredPeers.length}
                     </span>
@@ -722,8 +965,12 @@ export function NetworkPage() {
                   onClick={() => setActiveTab('connected')}
                   className="px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200"
                   style={{
-                    background: activeTab === 'connected' ? 'hsl(var(--harbor-bg-elevated))' : 'transparent',
-                    color: activeTab === 'connected' ? 'hsl(var(--harbor-text-primary))' : 'hsl(var(--harbor-text-tertiary))',
+                    background:
+                      activeTab === 'connected' ? 'hsl(var(--harbor-bg-elevated))' : 'transparent',
+                    color:
+                      activeTab === 'connected'
+                        ? 'hsl(var(--harbor-text-primary))'
+                        : 'hsl(var(--harbor-text-tertiary))',
                     boxShadow: activeTab === 'connected' ? 'var(--shadow-sm)' : 'none',
                   }}
                 >
@@ -732,7 +979,10 @@ export function NetworkPage() {
                   {connectedPeersList.length > 0 && (
                     <span
                       className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs"
-                      style={{ background: 'hsl(var(--harbor-success) / 0.15)', color: 'hsl(var(--harbor-success))' }}
+                      style={{
+                        background: 'hsl(var(--harbor-success) / 0.15)',
+                        color: 'hsl(var(--harbor-success))',
+                      }}
                     >
                       {connectedPeersList.length}
                     </span>
@@ -742,8 +992,12 @@ export function NetworkPage() {
                   onClick={() => setActiveTab('contacts')}
                   className="px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200"
                   style={{
-                    background: activeTab === 'contacts' ? 'hsl(var(--harbor-bg-elevated))' : 'transparent',
-                    color: activeTab === 'contacts' ? 'hsl(var(--harbor-text-primary))' : 'hsl(var(--harbor-text-tertiary))',
+                    background:
+                      activeTab === 'contacts' ? 'hsl(var(--harbor-bg-elevated))' : 'transparent',
+                    color:
+                      activeTab === 'contacts'
+                        ? 'hsl(var(--harbor-text-primary))'
+                        : 'hsl(var(--harbor-text-tertiary))',
                     boxShadow: activeTab === 'contacts' ? 'var(--shadow-sm)' : 'none',
                   }}
                 >
@@ -752,7 +1006,10 @@ export function NetworkPage() {
                   {contacts.length > 0 && (
                     <span
                       className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs"
-                      style={{ background: 'hsl(var(--harbor-primary) / 0.15)', color: 'hsl(var(--harbor-primary))' }}
+                      style={{
+                        background: 'hsl(var(--harbor-primary) / 0.15)',
+                        color: 'hsl(var(--harbor-primary))',
+                      }}
                     >
                       {contacts.length}
                     </span>
@@ -788,9 +1045,15 @@ export function NetworkPage() {
                     className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
                     style={{ background: 'hsl(var(--harbor-surface-1))' }}
                   >
-                    <NetworkIcon className="w-8 h-8" style={{ color: 'hsl(var(--harbor-text-tertiary))' }} />
+                    <NetworkIcon
+                      className="w-8 h-8"
+                      style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                    />
                   </div>
-                  <p className="font-medium mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                  <p
+                    className="font-medium mb-1"
+                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                  >
                     Network is offline
                   </p>
                   <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
@@ -805,17 +1068,26 @@ export function NetworkPage() {
                       className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
                       style={{ background: 'hsl(var(--harbor-surface-1))' }}
                     >
-                      <SearchIcon className="w-8 h-8" style={{ color: 'hsl(var(--harbor-text-tertiary))' }} />
+                      <SearchIcon
+                        className="w-8 h-8"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      />
                     </div>
-                    <p className="font-medium mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                    <p
+                      className="font-medium mb-1"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
                       {searchQuery ? 'No peers found' : 'No discovered peers'}
                     </p>
                     <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                      {searchQuery ? 'Try a different search term' : 'Peers will appear here as they are discovered via mDNS or DHT'}
+                      {searchQuery
+                        ? 'Try a different search term'
+                        : 'Peers will appear here as they are discovered via mDNS or DHT'}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-2">
+<<<<<<< Updated upstream
                     {discoveredPeers.map((peer) => (
                       <PeerRow
                         key={peer.peerId}
@@ -830,6 +1102,29 @@ export function NetworkPage() {
                               toast.success('Connecting...');
                             } catch (err) {
                               toast.error(`Failed: ${err}`);
+=======
+                    {discoveredPeers.map((peer) => {
+                      const knownContact = contacts.find(
+                        (contact) => contact.peerId === peer.peerId,
+                      );
+                      return (
+                        <PeerRow
+                          key={peer.peerId}
+                          peerId={peer.peerId}
+                          displayName={knownContact?.displayName}
+                          actionLabel="Connect"
+                          actionStyle="primary"
+                          onAction={async () => {
+                            if (peer.addresses.length > 0) {
+                              try {
+                                await connectToPeer(peer.addresses[0]);
+                                toast.success('Connecting...');
+                              } catch (err) {
+                                toast.error(`Failed: ${err}`);
+                              }
+                            } else {
+                              toast.error('No address available for this peer');
+>>>>>>> Stashed changes
                             }
                           } else {
                             toast.error('No address available for this peer');
@@ -847,17 +1142,26 @@ export function NetworkPage() {
                       className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
                       style={{ background: 'hsl(var(--harbor-surface-1))' }}
                     >
-                      <UsersIcon className="w-8 h-8" style={{ color: 'hsl(var(--harbor-text-tertiary))' }} />
+                      <UsersIcon
+                        className="w-8 h-8"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      />
                     </div>
-                    <p className="font-medium mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                    <p
+                      className="font-medium mb-1"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
                       {searchQuery ? 'No peers found' : 'No connected peers'}
                     </p>
                     <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                      {searchQuery ? 'Try a different search term' : 'Connected peers will appear here'}
+                      {searchQuery
+                        ? 'Try a different search term'
+                        : 'Connected peers will appear here'}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-2">
+<<<<<<< Updated upstream
                     {connectedPeersList.map((peer) => (
                       <PeerRow
                         key={peer.peerId}
@@ -876,33 +1180,73 @@ export function NetworkPage() {
                         }}
                       />
                     ))}
+=======
+                    {connectedPeersList.map((peer) => {
+                      const knownContact = contacts.find(
+                        (contact) => contact.peerId === peer.peerId,
+                      );
+                      const displayName = knownContact?.displayName;
+                      return (
+                        <PeerRow
+                          key={peer.peerId}
+                          peerId={peer.peerId}
+                          displayName={displayName}
+                          isConnected
+                          actionLabel={knownContact ? 'Message' : 'Add Contact'}
+                          actionStyle="success"
+                          onAction={async () => {
+                            try {
+                              await contactsService.requestPeerIdentity(peer.peerId);
+                              toast.success(
+                                `Requesting identity from ${displayName ?? getPeerFriendlyName(peer.peerId)}...`,
+                              );
+                            } catch (err) {
+                              toast.error(`Failed to add contact: ${err}`);
+                            }
+                          }}
+                        />
+                      );
+                    })}
+>>>>>>> Stashed changes
                   </div>
                 )
+              ) : // Contacts tab
+              filteredContacts.length === 0 ? (
+                <div className="text-center py-12">
+                  <div
+                    className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+                    style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                  >
+                    <UserIcon
+                      className="w-8 h-8"
+                      style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                    />
+                  </div>
+                  <p
+                    className="font-medium mb-1"
+                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                  >
+                    {searchQuery ? 'No contacts found' : 'No contacts yet'}
+                  </p>
+                  <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    {searchQuery
+                      ? 'Try a different search term'
+                      : 'Add contacts by connecting to peers or using their Peer ID'}
+                  </p>
+                </div>
               ) : (
-                // Contacts tab
-                filteredContacts.length === 0 ? (
-                  <div className="text-center py-12">
+                <div className="space-y-2">
+                  {filteredContacts.map((contact) => (
                     <div
-                      className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+                      key={contact.peerId}
+                      className="flex items-center gap-4 p-3 rounded-xl"
                       style={{ background: 'hsl(var(--harbor-surface-1))' }}
                     >
-                      <UserIcon className="w-8 h-8" style={{ color: 'hsl(var(--harbor-text-tertiary))' }} />
-                    </div>
-                    <p className="font-medium mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                      {searchQuery ? 'No contacts found' : 'No contacts yet'}
-                    </p>
-                    <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                      {searchQuery ? 'Try a different search term' : 'Add contacts by connecting to peers or using their Peer ID'}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {filteredContacts.map((contact) => (
                       <div
-                        key={contact.peerId}
-                        className="flex items-center gap-4 p-3 rounded-xl"
-                        style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
+                        style={{ background: getPeerColor(contact.peerId) }}
                       >
+<<<<<<< Updated upstream
                         <div
                           className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                           style={{ background: getPeerColor(contact.peerId) }}
@@ -929,15 +1273,62 @@ export function NetworkPage() {
                             {contact.bio}
                           </p>
                         )}
+=======
+                        {contact.displayName
+                          .split(' ')
+                          .map((word) => word[0])
+                          .join('')
+                          .toUpperCase()
+                          .slice(0, 2)}
+>>>>>>> Stashed changes
                       </div>
-                    ))}
-                  </div>
-                )
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className="font-medium text-sm"
+                          style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                        >
+                          {contact.displayName}
+                        </p>
+                        <p
+                          className="text-xs font-mono truncate"
+                          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                          title={contact.peerId}
+                        >
+                          {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
+                        </p>
+                      </div>
+                      {contact.bio && (
+                        <p
+                          className="text-xs truncate max-w-[200px]"
+                          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                        >
+                          {contact.bio}
+                        </p>
+                      )}
+                      <button
+                        className="p-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                        title="Remove contact"
+                        onClick={async () => {
+                          try {
+                            await contactsService.removeContact(contact.peerId);
+                            await refreshContacts();
+                            toast.success(`Removed ${contact.displayName} from contacts`);
+                          } catch (err) {
+                            toast.error(`Failed to remove contact: ${err}`);
+                          }
+                        }}
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
 
-          {/* Section E: Manual Connection (collapsible) */}
+          {/* Advanced (collapsible) */}
           <div
             className="rounded-2xl p-6"
             style={{
@@ -946,116 +1337,21 @@ export function NetworkPage() {
             }}
           >
             <button
-              onClick={() => setShowManualConnect(!showManualConnect)}
+              onClick={() => setShowAdvanced(!showAdvanced)}
               className="flex items-center gap-2 text-sm font-medium transition-colors w-full"
               style={{ color: 'hsl(var(--harbor-text-secondary))' }}
             >
-              {showManualConnect ? (
+              {showAdvanced ? (
                 <ChevronDownIcon className="w-4 h-4" />
               ) : (
                 <ChevronRightIcon className="w-4 h-4" />
               )}
-              Manual Connection
+              Advanced
             </button>
 
-            {showManualConnect && (
-              <div className="mt-4 space-y-6">
-                {/* Connect by Address */}
-                <div>
-                  <label className="text-xs font-medium block mb-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                    Connect by Address
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={peerMultiaddr}
-                      onChange={(event) => setPeerMultiaddr(event.target.value)}
-                      placeholder="/ip4/1.2.3.4/tcp/9000/p2p/12D3KooW..."
-                      className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
-                      style={{
-                        background: 'hsl(var(--harbor-surface-1))',
-                        border: '1px solid hsl(var(--harbor-border-subtle))',
-                        color: 'hsl(var(--harbor-text-primary))',
-                      }}
-                      disabled={!isRunning || isConnectingPeer}
-                      onKeyDown={(event) => { if (event.key === 'Enter') handleConnectToPeer(); }}
-                    />
-                    <button
-                      onClick={handleConnectToPeer}
-                      disabled={!isRunning || isConnectingPeer || !peerMultiaddr.trim()}
-                      className="px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
-                      style={{
-                        background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                        color: 'white',
-                      }}
-                    >
-                      {isConnectingPeer ? 'Connecting...' : 'Connect'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Add by Peer ID */}
-                <div>
-                  <label className="text-xs font-medium block mb-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                    Add Contact by Peer ID
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={manualPeerId}
-                      onChange={(event) => setManualPeerId(event.target.value)}
-                      placeholder="12D3KooW..."
-                      className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
-                      style={{
-                        background: 'hsl(var(--harbor-surface-1))',
-                        border: '1px solid hsl(var(--harbor-border-subtle))',
-                        color: 'hsl(var(--harbor-text-primary))',
-                      }}
-                      disabled={!isRunning || isAddingContact}
-                      onKeyDown={(event) => { if (event.key === 'Enter') handleAddContactByPeerId(); }}
-                    />
-                    <button
-                      onClick={handleAddContactByPeerId}
-                      disabled={!isRunning || isAddingContact || !manualPeerId.trim()}
-                      className="px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
-                      style={{
-                        background: 'hsl(var(--harbor-success) / 0.15)',
-                        color: 'hsl(var(--harbor-success))',
-                        border: '1px solid hsl(var(--harbor-success) / 0.2)',
-                      }}
-                    >
-                      {isAddingContact ? 'Adding...' : 'Add Contact'}
-                    </button>
-                  </div>
-                  {!isRunning && (
-                    <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-warning))' }}>
-                      Start the network first.
-                    </p>
-                  )}
-                </div>
-
-                {/* Deploy Your Own Relay - deeply collapsed */}
-                <div
-                  className="pt-4 border-t"
-                  style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-                >
-                  <button
-                    onClick={() => setShowDeployRelay(!showDeployRelay)}
-                    className="flex items-center gap-2 text-xs font-medium transition-colors"
-                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                  >
-                    {showDeployRelay ? (
-                      <ChevronDownIcon className="w-3 h-3" />
-                    ) : (
-                      <ChevronRightIcon className="w-3 h-3" />
-                    )}
-                    Deploy Your Own Relay Server (AWS)
-                  </button>
-
-                  {showDeployRelay && (
-                    <DeployRelayContent />
-                  )}
-                </div>
+            {showAdvanced && (
+              <div className="mt-4">
+                <DeployRelayContent />
               </div>
             )}
           </div>
@@ -1082,7 +1378,16 @@ function PeerRow({
 }) {
   const friendlyName = getPeerFriendlyName(peerId);
   const avatarColor = getPeerColor(peerId);
+<<<<<<< Updated upstream
   const initials = friendlyName.split(' ').map((word) => word[0]).join('');
+=======
+  const initials = friendlyName
+    .split(' ')
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+>>>>>>> Stashed changes
 
   return (
     <div
@@ -1129,7 +1434,8 @@ function PeerRow({
                 color: 'hsl(var(--harbor-success))',
               }
             : {
-                background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                background:
+                  'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                 color: 'white',
               }
         }
@@ -1194,7 +1500,10 @@ function DeployRelayContent() {
           >
             1
           </span>
-          <span className="text-xs font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+          <span
+            className="text-xs font-medium"
+            style={{ color: 'hsl(var(--harbor-text-primary))' }}
+          >
             Download template
           </span>
         </div>
@@ -1215,7 +1524,12 @@ function DeployRelayContent() {
           style={{ background: 'linear-gradient(135deg, #FF9900, #FF6600)', color: 'white' }}
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+            />
           </svg>
           Download Template
         </button>
@@ -1230,7 +1544,10 @@ function DeployRelayContent() {
           >
             2
           </span>
-          <span className="text-xs font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+          <span
+            className="text-xs font-medium"
+            style={{ color: 'hsl(var(--harbor-text-primary))' }}
+          >
             Upload to AWS CloudFormation
           </span>
         </div>
@@ -1243,7 +1560,10 @@ function DeployRelayContent() {
         >
           Open AWS CloudFormation
         </a>
-        <div className="text-xs mt-2 space-y-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+        <div
+          className="text-xs mt-2 space-y-0.5"
+          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+        >
           <p>Select "Upload a template file", choose the downloaded file, click "Next"</p>
         </div>
       </div>
@@ -1257,7 +1577,10 @@ function DeployRelayContent() {
           >
             3
           </span>
-          <span className="text-xs font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+          <span
+            className="text-xs font-medium"
+            style={{ color: 'hsl(var(--harbor-text-primary))' }}
+          >
             Configure: stack name "harbor-relay", leave defaults, click Submit
           </span>
         </div>
@@ -1269,7 +1592,10 @@ function DeployRelayContent() {
       {/* Step 4: Get address */}
       <div
         className="p-3 rounded-lg"
-        style={{ background: 'hsl(var(--harbor-success) / 0.1)', border: '1px solid hsl(var(--harbor-success) / 0.2)' }}
+        style={{
+          background: 'hsl(var(--harbor-success) / 0.1)',
+          border: '1px solid hsl(var(--harbor-success) / 0.2)',
+        }}
       >
         <div className="flex items-center gap-2 mb-2">
           <span
@@ -1283,7 +1609,8 @@ function DeployRelayContent() {
           </span>
         </div>
         <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Go to your stack's "Outputs" tab, click "Step2GetYourRelayAddress", copy the value. Paste it in the relay input above.
+          Go to your stack's "Outputs" tab, click "Step2GetYourRelayAddress", copy the value. Paste
+          it in the relay input above.
         </p>
       </div>
 
@@ -1299,11 +1626,16 @@ function DeployRelayContent() {
           viewBox="0 0 24 24"
           style={{ color: 'hsl(var(--harbor-success))' }}
         >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          <strong style={{ color: 'hsl(var(--harbor-success))' }}>Free for 12 months!</strong>{' '}
-          AWS Free Tier includes 750 hours/month of t2.micro. After: ~$9-12/month.
+          <strong style={{ color: 'hsl(var(--harbor-success))' }}>Free for 12 months!</strong> AWS
+          Free Tier includes 750 hours/month of t2.micro. After: ~$9-12/month.
         </p>
       </div>
 
@@ -1317,7 +1649,10 @@ function DeployRelayContent() {
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium flex-shrink-0"
-          style={{ background: 'hsl(var(--harbor-error) / 0.1)', color: 'hsl(var(--harbor-error))' }}
+          style={{
+            background: 'hsl(var(--harbor-error) / 0.1)',
+            color: 'hsl(var(--harbor-error))',
+          }}
         >
           Manage Stacks
         </a>

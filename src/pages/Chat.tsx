@@ -64,7 +64,12 @@ function ConversationMenu({
         style={{ color: 'hsl(var(--harbor-text-primary))' }}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
+          />
         </svg>
         {isArchived ? 'Unarchive' : 'Archive'}
       </button>
@@ -77,7 +82,12 @@ function ConversationMenu({
         style={{ color: 'hsl(var(--harbor-text-primary))' }}
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+          />
         </svg>
         Clear History
       </button>
@@ -91,7 +101,12 @@ function ConversationMenu({
           style={{ color: 'hsl(var(--harbor-error))' }}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
           Delete Conversation
         </button>
@@ -213,6 +228,7 @@ export function ChatPage() {
     setCurrentSearchIndex(0);
   }, [messageSearchQuery]);
 
+<<<<<<< Updated upstream
   // Get active or archived mock conversations based on toggle
   const displayMockConversations = showArchived
     ? getArchivedConversationsList()
@@ -254,6 +270,27 @@ export function ChatPage() {
       }),
     ),
   ];
+=======
+  // Build conversation list from real contacts
+  const unifiedConversations: UnifiedConversation[] = contacts.map(
+    (contact): UnifiedConversation => {
+      const realConv = realConversations.find((c) => c.peerId === contact.peerId);
+      return {
+        id: `real-${contact.peerId}`,
+        peerId: contact.peerId,
+        name: contact.displayName,
+        online: true, // Assume online for now - would need presence tracking
+        avatarGradient: getContactColor(contact.peerId),
+        lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
+        timestamp: realConv
+          ? new Date(realConv.lastMessageAt * 1000)
+          : new Date(contact.addedAt * 1000),
+        unread: realConv?.unreadCount || 0,
+        isReal: true,
+      };
+    },
+  );
+>>>>>>> Stashed changes
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -263,11 +300,15 @@ export function ChatPage() {
   const selectedConv = unifiedConversations.find((c) => c.id === selectedConversation);
 
   // Get messages for current conversation
+<<<<<<< Updated upstream
   const currentMessages = selectedConv
     ? selectedConv.isReal
       ? realMessages[selectedConv.peerId] || []
       : mockConversations.find((c) => c.id === selectedConversation)?.messages || []
     : [];
+=======
+  const currentMessages = selectedConv ? realMessages[selectedConv.peerId] || [] : [];
+>>>>>>> Stashed changes
 
   // Calculate search results
   const searchResults = messageSearchQuery.trim()
@@ -773,10 +814,7 @@ export function ChatPage() {
           </div>
           {searchResults.length > 0 && (
             <div className="flex items-center gap-2">
-              <span
-                className="text-sm"
-                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-              >
+              <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {currentSearchIndex + 1} of {searchResults.length}
               </span>
               <button

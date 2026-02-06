@@ -153,8 +153,7 @@ impl ChatBehaviour {
 
         // Kademlia DHT — use custom protocol name matching bootstrap node
         // to avoid pollution from the public IPFS DHT
-        let mut kad_config =
-            kad::Config::new(StreamProtocol::new("/harbor/kad/1.0.0"));
+        let mut kad_config = kad::Config::new(StreamProtocol::new("/harbor/kad/1.0.0"));
         kad_config.set_query_timeout(Duration::from_secs(60));
         let store = kad::store::MemoryStore::new(local_peer_id);
         let kademlia = kad::Behaviour::with_config(local_peer_id, store, kad_config);

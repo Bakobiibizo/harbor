@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import toast from 'react-hot-toast';
 import type { NetworkEvent } from '../types';
-import { useNetworkStore, useContactsStore, useMessagingStore } from '../stores';
+import { useNetworkStore, useContactsStore, useMessagingStore, useFeedStore } from '../stores';
 
 /**
  * Hook to listen to Tauri events from the Rust backend.
@@ -59,14 +59,14 @@ export function useTauriEvents() {
           console.log(`[Network] Message received from ${event.peerId} via ${event.protocol}`);
           // Use getState() to avoid stale closures - call functions directly from the store
           const messagingState = useMessagingStore.getState();
-          // Refresh conversations to show new message
+          // Always refresh conversations to update previews and unread counts
           messagingState.loadConversations();
-          // Reload messages for the active conversation
+          // Reload messages if we're viewing the sender's conversation
           const activeConv = messagingState.activeConversation;
           console.log(
             `[Network] Active conversation: ${activeConv}, message from: ${event.peerId}`,
           );
-          if (activeConv) {
+          if (activeConv === event.peerId) {
             console.log(`[Network] Reloading messages for active conversation: ${activeConv}`);
             messagingState.loadMessages(activeConv);
           }
@@ -106,6 +106,8 @@ export function useTauriEvents() {
 
         case 'relay_connected':
           console.log(`[Network] Relay connected: ${event.relayAddress}`);
+          // Dismiss any pending timeout/warning toasts
+          toast.dismiss();
           // Add relay address to store
           useNetworkStore.getState().addRelayAddress(event.relayAddress);
           // Update relay status
@@ -113,12 +115,28 @@ export function useTauriEvents() {
           // Refresh addresses to update the UI
           useNetworkStore.getState().refreshAddresses();
           useNetworkStore.getState().refreshShareableAddresses();
-          toast.success('Connected to relay server');
+          toast.success('Connected to Harbor relay');
           break;
 
         case 'hole_punch_succeeded':
           console.log(`[Network] Hole punch succeeded with: ${event.peerId}`);
           toast.success('Direct connection established!');
+          break;
+
+        case 'content_manifest_received':
+          console.log(
+            `[Network] Content manifest received from ${event.peerId}: ${event.postCount} posts, hasMore: ${event.hasMore}`,
+          );
+          break;
+
+        case 'content_fetched':
+          console.log(`[Network] Content fetched from ${event.peerId}: post ${event.postId}`);
+          // Refresh the feed to show new posts
+          useFeedStore.getState().loadFeed();
+          break;
+
+        case 'content_sync_error':
+          console.warn(`[Network] Content sync error from ${event.peerId}: ${event.error}`);
           break;
       }
     }
