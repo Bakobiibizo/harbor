@@ -57,10 +57,7 @@ function PostCard({
             {(post.authorDisplayName || post.authorPeerId).slice(0, 2).toUpperCase()}
           </div>
           <div>
-            <p
-              className="text-sm font-medium"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               {post.authorDisplayName || shortPeerId(post.authorPeerId)}
             </p>
             <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
@@ -206,9 +203,7 @@ function BoardTabs({
               background: isActive
                 ? 'linear-gradient(135deg, hsl(var(--harbor-primary) / 0.15), hsl(var(--harbor-accent) / 0.1))'
                 : 'transparent',
-              color: isActive
-                ? 'hsl(var(--harbor-primary))'
-                : 'hsl(var(--harbor-text-secondary))',
+              color: isActive ? 'hsl(var(--harbor-primary))' : 'hsl(var(--harbor-text-secondary))',
               border: isActive
                 ? '1px solid hsl(var(--harbor-primary) / 0.2)'
                 : '1px solid transparent',
@@ -240,9 +235,7 @@ function CommunityItem({
       onClick={onSelect}
       style={{
         background: isActive ? 'hsl(var(--harbor-surface-1))' : 'transparent',
-        border: isActive
-          ? '1px solid hsl(var(--harbor-primary) / 0.2)'
-          : '1px solid transparent',
+        border: isActive ? '1px solid hsl(var(--harbor-primary) / 0.2)' : '1px solid transparent',
       }}
     >
       <div
@@ -261,10 +254,7 @@ function CommunityItem({
         >
           {community.communityName || shortPeerId(community.relayPeerId)}
         </p>
-        <p
-          className="text-xs truncate"
-          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-        >
+        <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           {shortPeerId(community.relayPeerId)}
         </p>
       </div>
@@ -397,14 +387,8 @@ export function BoardsPage() {
     return (
       <div className="h-full flex flex-col">
         {/* Header */}
-        <div
-          className="p-6 border-b"
-          style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-        >
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: 'hsl(var(--harbor-text-primary))' }}
-          >
+        <div className="p-6 border-b" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
+          <h1 className="text-2xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
             Community Boards
           </h1>
           <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
@@ -443,10 +427,7 @@ export function BoardsPage() {
             >
               Join a Community
             </h2>
-            <p
-              className="text-sm mb-6"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mb-6" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               Communities are hosted on relay servers. Enter a relay address to join and start
               browsing boards.
             </p>
@@ -462,22 +443,13 @@ export function BoardsPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div
-        className="p-6 border-b"
-        style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-      >
+      <div className="p-6 border-b" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1
-              className="text-2xl font-bold"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <h1 className="text-2xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               Community Boards
             </h1>
-            <p
-              className="text-sm mt-1"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               {activeCommunity
                 ? activeCommunity.communityName || shortPeerId(activeCommunity.relayPeerId)
                 : 'Select a community'}
@@ -536,10 +508,7 @@ export function BoardsPage() {
         <div className="flex-1 overflow-y-auto">
           {!activeCommunity ? (
             <div className="flex items-center justify-center h-full">
-              <p
-                className="text-sm"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
+              <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                 Select a community to browse boards
               </p>
             </div>
@@ -568,10 +537,7 @@ export function BoardsPage() {
               {/* Posts */}
               {boardPosts.length === 0 && !isLoading ? (
                 <div className="text-center py-12">
-                  <p
-                    className="text-sm"
-                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                  >
+                  <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     {activeBoard ? 'No posts yet. Be the first to post!' : 'No boards available.'}
                   </p>
                 </div>

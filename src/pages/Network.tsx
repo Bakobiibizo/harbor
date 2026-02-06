@@ -16,7 +16,10 @@ import {
   ChevronRightIcon,
   TrashIcon,
 } from '../components/icons';
-import { RELAY_CLOUDFORMATION_TEMPLATE, COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE } from '../constants/cloudformation-template';
+import {
+  RELAY_CLOUDFORMATION_TEMPLATE,
+  COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
+} from '../constants/cloudformation-template';
 
 // Adjectives and animals for generating human-friendly peer names
 const ADJECTIVES = [
@@ -384,7 +387,8 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-    const contactName = contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
+    const contactName =
+      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
     return (
       friendlyName.includes(query) ||
       contactName.includes(query) ||
@@ -590,8 +594,14 @@ export function NetworkPage() {
                     }}
                   >
                     {stats.natStatus === 'unknown'
-                      ? (natDetectionTimedOut ? 'Unable to detect' : 'Detecting...')
-                      : stats.natStatus === 'public' ? 'Public' : stats.natStatus === 'private' ? 'Relayed' : 'Behind NAT'}
+                      ? natDetectionTimedOut
+                        ? 'Unable to detect'
+                        : 'Detecting...'
+                      : stats.natStatus === 'public'
+                        ? 'Public'
+                        : stats.natStatus === 'private'
+                          ? 'Relayed'
+                          : 'Behind NAT'}
                   </p>
                 </div>
               </div>
@@ -1103,7 +1113,9 @@ export function NetworkPage() {
                 ) : (
                   <div className="space-y-2">
                     {discoveredPeers.map((peer) => {
-                      const knownContact = contacts.find((contact) => contact.peerId === peer.peerId);
+                      const knownContact = contacts.find(
+                        (contact) => contact.peerId === peer.peerId,
+                      );
                       return (
                         <PeerRow
                           key={peer.peerId}
@@ -1156,7 +1168,9 @@ export function NetworkPage() {
                 ) : (
                   <div className="space-y-2">
                     {connectedPeersList.map((peer) => {
-                      const knownContact = contacts.find((contact) => contact.peerId === peer.peerId);
+                      const knownContact = contacts.find(
+                        (contact) => contact.peerId === peer.peerId,
+                      );
                       const displayName = knownContact?.displayName;
                       return (
                         <PeerRow
@@ -1169,7 +1183,9 @@ export function NetworkPage() {
                           onAction={async () => {
                             try {
                               await contactsService.requestPeerIdentity(peer.peerId);
-                              toast.success(`Requesting identity from ${displayName ?? getPeerFriendlyName(peer.peerId)}...`);
+                              toast.success(
+                                `Requesting identity from ${displayName ?? getPeerFriendlyName(peer.peerId)}...`,
+                              );
                             } catch (err) {
                               toast.error(`Failed to add contact: ${err}`);
                             }
@@ -1320,7 +1336,12 @@ function PeerRow({
 }) {
   const friendlyName = displayName ?? getPeerFriendlyName(peerId);
   const avatarColor = getPeerColor(peerId);
-  const initials = friendlyName.split(' ').map((word) => word[0]).join('').toUpperCase().slice(0, 2);
+  const initials = friendlyName
+    .split(' ')
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
 
   return (
     <div
@@ -1437,7 +1458,8 @@ function DeployRelayContent() {
             Deploy Your Own Server
           </p>
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Choose between a lightweight relay or a full community server. Both are free tier eligible!
+            Choose between a lightweight relay or a full community server. Both are free tier
+            eligible!
           </p>
         </div>
       </div>
@@ -1452,7 +1474,10 @@ function DeployRelayContent() {
       >
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <p className="text-sm font-semibold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+            <p
+              className="text-sm font-semibold"
+              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+            >
               Option A: Relay Server (Free)
             </p>
             <span
@@ -1466,15 +1491,18 @@ function DeployRelayContent() {
             </span>
           </div>
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            A lightweight relay for NAT traversal. Lets peers behind firewalls connect to each other. No storage required.
+            A lightweight relay for NAT traversal. Lets peers behind firewalls connect to each
+            other. No storage required.
           </p>
         </div>
         <button
-          onClick={() => handleDownloadTemplate(
-            'harbor-relay-cloudformation.yaml',
-            RELAY_CLOUDFORMATION_TEMPLATE,
-            'Relay template',
-          )}
+          onClick={() =>
+            handleDownloadTemplate(
+              'harbor-relay-cloudformation.yaml',
+              RELAY_CLOUDFORMATION_TEMPLATE,
+              'Relay template',
+            )
+          }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
           style={{ background: 'linear-gradient(135deg, #FF9900, #FF6600)', color: 'white' }}
         >
@@ -1500,7 +1528,10 @@ function DeployRelayContent() {
       >
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <p className="text-sm font-semibold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+            <p
+              className="text-sm font-semibold"
+              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+            >
               Option B: Community Relay
             </p>
             <span
@@ -1514,18 +1545,22 @@ function DeployRelayContent() {
             </span>
           </div>
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            A full community server with boards and posts. Peers can join, post, and discuss. Requires minimal storage.
+            A full community server with boards and posts. Peers can join, post, and discuss.
+            Requires minimal storage.
           </p>
         </div>
         <button
-          onClick={() => handleDownloadTemplate(
-            'harbor-community-relay-cloudformation.yaml',
-            COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
-            'Community template',
-          )}
+          onClick={() =>
+            handleDownloadTemplate(
+              'harbor-community-relay-cloudformation.yaml',
+              COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
+              'Community template',
+            )
+          }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
           style={{
-            background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+            background:
+              'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
             color: 'white',
           }}
         >
@@ -1540,19 +1575,29 @@ function DeployRelayContent() {
           Download Community Template
         </button>
         <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-          You can customize the <code className="px-1 py-0.5 rounded" style={{ background: 'hsl(var(--harbor-surface-2))' }}>CommunityName</code> parameter during CloudFormation setup.
+          You can customize the{' '}
+          <code
+            className="px-1 py-0.5 rounded"
+            style={{ background: 'hsl(var(--harbor-surface-2))' }}
+          >
+            CommunityName
+          </code>{' '}
+          parameter during CloudFormation setup.
         </p>
       </div>
 
       {/* Shared deployment steps */}
-      <div
-        className="p-3 rounded-lg"
-        style={{ background: 'hsl(var(--harbor-surface-1))' }}
-      >
-        <p className="text-xs font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+      <div className="p-3 rounded-lg" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
+        <p
+          className="text-xs font-medium mb-2"
+          style={{ color: 'hsl(var(--harbor-text-primary))' }}
+        >
           Deployment steps (same for both):
         </p>
-        <ol className="text-xs space-y-1.5 list-decimal list-inside" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+        <ol
+          className="text-xs space-y-1.5 list-decimal list-inside"
+          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+        >
           <li>Download the template above</li>
           <li>
             Open{' '}
@@ -1568,7 +1613,9 @@ function DeployRelayContent() {
             , select "Upload a template file", choose the downloaded file
           </li>
           <li>Set stack name (e.g. "harbor-relay"), leave defaults, check IAM box, click Submit</li>
-          <li>Wait ~2 min, then copy the relay address from the Outputs tab into the relay input above</li>
+          <li>
+            Wait ~2 min, then copy the relay address from the Outputs tab into the relay input above
+          </li>
         </ol>
       </div>
 

@@ -1,9 +1,11 @@
 // CloudFormation template for deploying a libp2p relay server on AWS
 // This template is embedded in the app for easy copy-paste deployment
 
-export const RELAY_BINARY_SHA256 = '8b78854e4311520337ffa908ee94f8ec28886371ede09ea426546e54191fc0fe';
+export const RELAY_BINARY_SHA256 =
+  '8b78854e4311520337ffa908ee94f8ec28886371ede09ea426546e54191fc0fe';
 export const RELAY_PEER_ID = '12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9';
-export const RELAY_IDENTITY_KEY_B64 = 'CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo=';
+export const RELAY_IDENTITY_KEY_B64 =
+  'CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo=';
 
 export const RELAY_CLOUDFORMATION_TEMPLATE = `AWSTemplateFormatVersion: "2010-09-09"
 Description: "Harbor libp2p Relay Server - Enables NAT traversal for Harbor chat app users"

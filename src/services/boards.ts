@@ -39,11 +39,7 @@ export const boardsService = {
   },
 
   /** Submit a post to a board */
-  async submitBoardPost(
-    relayPeerId: string,
-    boardId: string,
-    contentText: string,
-  ): Promise<void> {
+  async submitBoardPost(relayPeerId: string, boardId: string, contentText: string): Promise<void> {
     return invoke<void>('submit_board_post', {
       relayPeerId,
       boardId,
