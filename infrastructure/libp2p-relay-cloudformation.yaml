@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Harbor libp2p Relay Server - Enables NAT traversal for Harbor chat app users"
+Description: "Harbor Relay Server (Lightweight) - NAT traversal only, no community boards or storage"
 
 Metadata:
   AWS::CloudFormation::Interface:

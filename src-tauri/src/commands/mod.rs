@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod boards;
 pub mod bootstrap;
 pub mod calling;
 pub mod contacts;
@@ -15,6 +16,7 @@ pub mod posts;
 pub mod rss;
 
 pub use accounts::*;
+pub use boards::*;
 pub use bootstrap::*;
 pub use calling::*;
 pub use contacts::*;

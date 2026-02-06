@@ -80,6 +80,23 @@ commands = [
   "rust_test"
 ]
 
+# ===================== Relay Server ========================
+
+[tasks.relay_build]
+commands = [["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/build-relay.ps1"]]
+
+[tasks.relay_check]
+commands = [["cargo", "check", "--manifest-path", "relay-server/Cargo.toml"]]
+
+[tasks.relay_fmt]
+commands = [["cargo", "fmt", "--manifest-path", "relay-server/Cargo.toml"]]
+
+[tasks.relay_fmt_check]
+commands = [["cargo", "fmt", "--manifest-path", "relay-server/Cargo.toml", "--", "--check"]]
+
+[tasks.relay_clippy]
+commands = [["cargo", "clippy", "--manifest-path", "relay-server/Cargo.toml", "--", "-D", "warnings"]]
+
 # ===================== Combined/Tauri ========================
 
 [tasks.fmt_all]

@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 /// and RSA-based peer IDs that are incompatible with relay v2.
 const PUBLIC_RELAYS: &[&str] = &[
     // Harbor community relay (primary) - IPv6
-    "/ip4/18.204.214.94/tcp/4001/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9",
+    "/ip4/52.200.206.197/tcp/4001/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9",
 ];
 
 /// Public relay servers specifically for relay circuits (if available)
@@ -33,14 +33,18 @@ use super::behaviour::{
     PostSummaryProto,
 };
 use super::config::NetworkConfig;
+use super::protocols::board_sync::{
+    BoardSyncRequest as WireBoardSyncRequest, BoardSyncResponse as WireBoardSyncResponse,
+};
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
 use super::swarm::build_swarm;
 use super::types::*;
 use crate::db::Capability;
 use crate::error::{AppError, Result};
+use crate::services::board_service::StorableBoardPost;
 use crate::services::{
-    ContactsService, ContentSyncService, IdentityService, MessagingService, PermissionsService,
-    PostsService,
+    BoardService, ContactsService, ContentSyncService, IdentityService, MessagingService,
+    PermissionsService, PostsService,
 };
 use std::sync::Arc;
 
@@ -234,6 +238,119 @@ impl NetworkHandle {
         }
     }
 
+    /// Join a community (register peer and list boards)
+    pub async fn join_community(&self, relay_peer_id: PeerId, relay_address: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::JoinCommunity {
+                    relay_peer_id,
+                    relay_address,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// List boards on a relay
+    pub async fn list_boards(&self, relay_peer_id: PeerId) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::ListBoards { relay_peer_id }, Some(tx)))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Get board posts from a relay
+    pub async fn get_board_posts(
+        &self,
+        relay_peer_id: PeerId,
+        board_id: String,
+        after_timestamp: Option<i64>,
+        limit: u32,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::GetBoardPosts {
+                    relay_peer_id,
+                    board_id,
+                    after_timestamp,
+                    limit,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Submit a board post to a relay
+    pub async fn submit_board_post(
+        &self,
+        relay_peer_id: PeerId,
+        board_id: String,
+        content_text: String,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::SubmitBoardPost {
+                    relay_peer_id,
+                    board_id,
+                    content_text,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Delete a board post on a relay
+    pub async fn delete_board_post(&self, relay_peer_id: PeerId, post_id: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::DeleteBoardPost {
+                    relay_peer_id,
+                    post_id,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
     /// Connect to public relay servers for NAT traversal
     pub async fn connect_to_public_relays(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
@@ -304,6 +421,7 @@ pub struct NetworkService {
     permissions_service: Option<Arc<PermissionsService>>,
     posts_service: Option<Arc<PostsService>>,
     content_sync_service: Option<Arc<ContentSyncService>>,
+    board_service: Option<Arc<BoardService>>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
     event_tx: mpsc::Sender<NetworkEvent>,
     connected_peers: HashMap<PeerId, PeerInfo>,
@@ -344,6 +462,7 @@ impl NetworkService {
             permissions_service: None,
             posts_service: None,
             content_sync_service: None,
+            board_service: None,
             command_rx,
             event_tx,
             connected_peers: HashMap::new(),
@@ -383,6 +502,11 @@ impl NetworkService {
     /// Set content sync service for handling manifest processing + storage
     pub fn set_content_sync_service(&mut self, service: Arc<ContentSyncService>) {
         self.content_sync_service = Some(service);
+    }
+
+    /// Set board service for community board operations
+    pub fn set_board_service(&mut self, service: Arc<BoardService>) {
+        self.board_service = Some(service);
     }
 
     /// Get the local peer ID
@@ -521,6 +645,14 @@ impl NetworkService {
                         address: address.to_string(),
                     })
                     .await;
+            }
+
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                if let Some(peer_id) = peer_id {
+                    warn!("Failed to connect to peer {}: {}", peer_id, error);
+                } else {
+                    warn!("Outgoing connection error: {}", error);
+                }
             }
 
             SwarmEvent::Behaviour(behaviour_event) => {
@@ -976,6 +1108,26 @@ impl NetworkService {
                 }
             },
 
+            // Board sync events
+            ChatBehaviourEvent::BoardSync(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => match message {
+                request_response::Message::Request { channel, .. } => {
+                    // Client doesn't serve board requests; send error
+                    let _ = self.swarm.behaviour_mut().board_sync.send_response(
+                        channel,
+                        WireBoardSyncResponse::Error {
+                            error: "Not a relay server".to_string(),
+                        },
+                    );
+                }
+                request_response::Message::Response { response, .. } => {
+                    self.handle_board_sync_response(peer, response).await;
+                }
+            },
+
             // Relay client events for NAT traversal
             ChatBehaviourEvent::RelayClient(event) => {
                 self.handle_relay_client_event(event).await;
@@ -1210,12 +1362,17 @@ impl NetworkService {
                         if let Err(e) = self.swarm.dial(relay_addr.clone()) {
                             warn!("Failed to dial relay {}: {}", relay_addr, e);
                         } else {
-                            info!("Dial initiated to relay: {}", relay_peer_id);
+                            info!(
+                                "Dial initiated to relay: {} (waiting for connection...)",
+                                relay_peer_id
+                            );
                         }
 
-                        // Listen on the relay circuit address to request a reservation.
+                        // Request a relay reservation by listening on a p2p-circuit address.
                         // In relay v2, the client MUST explicitly listen on a
                         // p2p-circuit address — it does NOT happen automatically.
+                        // Note: this just registers the listener; the actual reservation
+                        // happens asynchronously after the TCP connection is established.
                         let relay_circuit_listen_addr: Multiaddr =
                             format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
                                 .parse()
@@ -1223,11 +1380,14 @@ impl NetworkService {
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!("Listening on relay circuit: {}", relay_circuit_listen_addr);
+                                info!(
+                                    "Relay reservation requested via: {} (awaiting acceptance...)",
+                                    relay_circuit_listen_addr
+                                );
                             }
                             Err(e) => {
                                 warn!(
-                                    "Failed to listen on relay circuit {}: {}",
+                                    "Failed to request relay reservation {}: {}",
                                     relay_circuit_listen_addr, e
                                 );
                             }
@@ -1237,6 +1397,104 @@ impl NetworkService {
                 Err(e) => {
                     warn!("Failed to parse relay address '{}': {}", relay_addr_str, e);
                 }
+            }
+        }
+    }
+
+    async fn handle_board_sync_response(&mut self, peer: PeerId, response: WireBoardSyncResponse) {
+        let Some(ref board_service) = self.board_service else {
+            return;
+        };
+        let relay_peer_id = peer.to_string();
+
+        match response {
+            WireBoardSyncResponse::BoardList { boards, .. } => {
+                let board_data: Vec<(String, String, Option<String>, bool)> = boards
+                    .iter()
+                    .map(|b| {
+                        (
+                            b.board_id.clone(),
+                            b.name.clone(),
+                            b.description.clone(),
+                            b.is_default,
+                        )
+                    })
+                    .collect();
+                match board_service.store_boards(&relay_peer_id, &board_data) {
+                    Ok(()) => {
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::BoardListReceived {
+                                relay_peer_id,
+                                board_count: boards.len(),
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        warn!("Failed to store boards from {}: {}", peer, e);
+                    }
+                }
+            }
+            WireBoardSyncResponse::BoardPosts {
+                board_id, posts, ..
+            } => {
+                let storable: Vec<StorableBoardPost> = posts
+                    .iter()
+                    .map(|p| StorableBoardPost {
+                        post_id: p.post_id.clone(),
+                        board_id: p.board_id.clone(),
+                        author_peer_id: p.author_peer_id.clone(),
+                        author_display_name: p.author_display_name.clone(),
+                        content_type: p.content_type.clone(),
+                        content_text: p.content_text.clone(),
+                        lamport_clock: p.lamport_clock as i64,
+                        created_at: p.created_at,
+                        deleted_at: p.deleted_at,
+                        signature: p.signature.clone(),
+                    })
+                    .collect();
+                let post_count = storable.len();
+                match board_service.store_board_posts(&relay_peer_id, &storable) {
+                    Ok(()) => {
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::BoardPostsReceived {
+                                relay_peer_id,
+                                board_id,
+                                post_count,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        warn!("Failed to store board posts from {}: {}", peer, e);
+                    }
+                }
+            }
+            WireBoardSyncResponse::PostAccepted { post_id } => {
+                info!("Board post {} accepted by relay {}", post_id, peer);
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::BoardPostSubmitted {
+                        relay_peer_id,
+                        post_id,
+                    })
+                    .await;
+            }
+            WireBoardSyncResponse::PeerRegistered { peer_id } => {
+                info!("Registered with relay {} as {}", peer, peer_id);
+            }
+            WireBoardSyncResponse::PostDeleted { post_id } => {
+                info!("Board post {} deleted on relay {}", post_id, peer);
+            }
+            WireBoardSyncResponse::Error { error } => {
+                warn!("Board sync error from {}: {}", peer, error);
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::BoardSyncError {
+                        relay_peer_id,
+                        error,
+                    })
+                    .await;
             }
         }
     }
@@ -1668,11 +1926,14 @@ impl NetworkService {
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!("Listening on relay circuit: {}", relay_circuit_listen_addr);
+                                info!(
+                                    "Relay reservation requested via: {} (awaiting acceptance...)",
+                                    relay_circuit_listen_addr
+                                );
                             }
                             Err(e) => {
                                 warn!(
-                                    "Failed to listen on relay circuit {}: {}",
+                                    "Failed to request relay reservation {}: {}",
                                     relay_circuit_listen_addr, e
                                 );
                             }
@@ -1822,6 +2083,211 @@ impl NetworkService {
                     .send_request(&peer_id, wire_message);
 
                 NetworkResponse::Ok
+            }
+
+            NetworkCommand::JoinCommunity {
+                relay_peer_id,
+                relay_address,
+            } => {
+                let Some(ref board_service) = self.board_service else {
+                    return NetworkResponse::Error("Board service unavailable".to_string());
+                };
+
+                // Store community locally
+                if let Err(e) =
+                    board_service.join_community(&relay_peer_id.to_string(), &relay_address, None)
+                {
+                    return NetworkResponse::Error(format!("Failed to join community: {}", e));
+                }
+
+                // Register peer with relay
+                match board_service.create_peer_registration() {
+                    Ok(reg) => {
+                        let request = WireBoardSyncRequest::RegisterPeer {
+                            peer_id: reg.peer_id,
+                            public_key: reg.public_key,
+                            display_name: reg.display_name,
+                            timestamp: reg.timestamp,
+                            signature: reg.signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+
+                        // Also list boards
+                        if let Ok(list_req) = board_service.create_list_boards_request() {
+                            let request = WireBoardSyncRequest::ListBoards {
+                                requester_peer_id: list_req.requester_peer_id,
+                                timestamp: list_req.timestamp,
+                                signature: list_req.signature,
+                            };
+                            self.swarm
+                                .behaviour_mut()
+                                .board_sync
+                                .send_request(&relay_peer_id, request);
+                        }
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to create registration: {}", e))
+                    }
+                }
+            }
+
+            NetworkCommand::ListBoards { relay_peer_id } => {
+                let Some(ref board_service) = self.board_service else {
+                    return NetworkResponse::Error("Board service unavailable".to_string());
+                };
+
+                match board_service.create_list_boards_request() {
+                    Ok(req) => {
+                        let request = WireBoardSyncRequest::ListBoards {
+                            requester_peer_id: req.requester_peer_id,
+                            timestamp: req.timestamp,
+                            signature: req.signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to create list boards request: {}",
+                        e
+                    )),
+                }
+            }
+
+            NetworkCommand::GetBoardPosts {
+                relay_peer_id,
+                board_id,
+                after_timestamp,
+                limit,
+            } => {
+                let Some(ref board_service) = self.board_service else {
+                    return NetworkResponse::Error("Board service unavailable".to_string());
+                };
+
+                match board_service.create_get_board_posts_request(
+                    &board_id,
+                    after_timestamp,
+                    limit,
+                ) {
+                    Ok(req) => {
+                        let request = WireBoardSyncRequest::GetBoardPosts {
+                            requester_peer_id: req.requester_peer_id,
+                            board_id: req.board_id,
+                            after_timestamp: req.after_timestamp,
+                            limit: req.limit,
+                            timestamp: req.timestamp,
+                            signature: req.signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to create get board posts request: {}",
+                        e
+                    )),
+                }
+            }
+
+            NetworkCommand::SubmitBoardPost {
+                relay_peer_id,
+                board_id,
+                content_text,
+            } => {
+                let Some(ref board_service) = self.board_service else {
+                    return NetworkResponse::Error("Board service unavailable".to_string());
+                };
+
+                match board_service.create_board_post(&board_id, &content_text) {
+                    Ok(post) => {
+                        let request = WireBoardSyncRequest::SubmitPost {
+                            post_id: post.post_id,
+                            board_id: post.board_id,
+                            author_peer_id: post.author_peer_id,
+                            content_type: post.content_type,
+                            content_text: post.content_text,
+                            lamport_clock: post.lamport_clock,
+                            created_at: post.created_at,
+                            signature: post.signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!("Failed to create board post: {}", e)),
+                }
+            }
+
+            NetworkCommand::DeleteBoardPost {
+                relay_peer_id,
+                post_id,
+            } => {
+                let Some(ref board_service) = self.board_service else {
+                    return NetworkResponse::Error("Board service unavailable".to_string());
+                };
+
+                match board_service.create_delete_post_request(&post_id) {
+                    Ok(req) => {
+                        let request = WireBoardSyncRequest::DeletePost {
+                            post_id: req.post_id,
+                            author_peer_id: req.author_peer_id,
+                            timestamp: req.timestamp,
+                            signature: req.signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to create delete request: {}", e))
+                    }
+                }
+            }
+
+            NetworkCommand::SyncBoard {
+                relay_peer_id,
+                board_id,
+            } => {
+                let Some(ref board_service) = self.board_service else {
+                    return NetworkResponse::Error("Board service unavailable".to_string());
+                };
+
+                let after_timestamp = board_service
+                    .get_sync_cursor(&relay_peer_id.to_string(), &board_id)
+                    .unwrap_or(None);
+
+                match board_service.create_get_board_posts_request(&board_id, after_timestamp, 50) {
+                    Ok(req) => {
+                        let request = WireBoardSyncRequest::GetBoardPosts {
+                            requester_peer_id: req.requester_peer_id,
+                            board_id: req.board_id,
+                            after_timestamp: req.after_timestamp,
+                            limit: req.limit,
+                            timestamp: req.timestamp,
+                            signature: req.signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to create sync request: {}", e))
+                    }
+                }
             }
 
             NetworkCommand::Shutdown => NetworkResponse::Ok,

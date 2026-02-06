@@ -9,6 +9,7 @@ import {
 import { useKeyboardNavigation } from '../../hooks';
 import { KeyboardShortcutsModal } from '../common';
 import {
+  BoardsIcon,
   ChatIcon,
   WallIcon,
   FeedIcon,
@@ -48,6 +49,12 @@ const navItems: NavItem[] = [
     label: 'Feed',
     icon: FeedIcon,
     description: 'Updates from contacts',
+  },
+  {
+    to: '/boards',
+    label: 'Boards',
+    icon: BoardsIcon,
+    description: 'Community discussions',
   },
   {
     to: '/network',

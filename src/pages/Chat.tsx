@@ -213,22 +213,24 @@ export function ChatPage() {
   }, [messageSearchQuery]);
 
   // Build conversation list from real contacts
-  const unifiedConversations: UnifiedConversation[] = contacts.map((contact): UnifiedConversation => {
-    const realConv = realConversations.find((c) => c.peerId === contact.peerId);
-    return {
-      id: `real-${contact.peerId}`,
-      peerId: contact.peerId,
-      name: contact.displayName,
-      online: true, // Assume online for now - would need presence tracking
-      avatarGradient: getContactColor(contact.peerId),
-      lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
-      timestamp: realConv
-        ? new Date(realConv.lastMessageAt * 1000)
-        : new Date(contact.addedAt * 1000),
-      unread: realConv?.unreadCount || 0,
-      isReal: true,
-    };
-  });
+  const unifiedConversations: UnifiedConversation[] = contacts.map(
+    (contact): UnifiedConversation => {
+      const realConv = realConversations.find((c) => c.peerId === contact.peerId);
+      return {
+        id: `real-${contact.peerId}`,
+        peerId: contact.peerId,
+        name: contact.displayName,
+        online: true, // Assume online for now - would need presence tracking
+        avatarGradient: getContactColor(contact.peerId),
+        lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
+        timestamp: realConv
+          ? new Date(realConv.lastMessageAt * 1000)
+          : new Date(contact.addedAt * 1000),
+        unread: realConv?.unreadCount || 0,
+        isReal: true,
+      };
+    },
+  );
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -238,9 +240,7 @@ export function ChatPage() {
   const selectedConv = unifiedConversations.find((c) => c.id === selectedConversation);
 
   // Get messages for current conversation
-  const currentMessages = selectedConv
-    ? realMessages[selectedConv.peerId] || []
-    : [];
+  const currentMessages = selectedConv ? realMessages[selectedConv.peerId] || [] : [];
 
   // Calculate search results
   const searchResults = messageSearchQuery.trim()

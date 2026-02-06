@@ -10,6 +10,7 @@ const MIGRATION_004: &str = include_str!("migrations/004_messages_nonce.sql");
 const MIGRATION_005: &str = include_str!("migrations/005_post_likes.sql");
 const MIGRATION_006: &str = include_str!("migrations/006_bootstrap_nodes.sql");
 const MIGRATION_007: &str = include_str!("migrations/007_passphrase_hint.sql");
+const MIGRATION_008: &str = include_str!("migrations/008_boards.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -110,6 +111,12 @@ impl Database {
             info!("Running migration 007...");
             conn.execute_batch(MIGRATION_007)?;
             info!("Migration 007 complete");
+        }
+
+        if version < 8 {
+            info!("Running migration 008...");
+            conn.execute_batch(MIGRATION_008)?;
+            info!("Migration 008 complete");
         }
 
         Ok(())

@@ -1,4 +1,5 @@
 export * from './accounts';
+export * from './boards';
 export * from './identity';
 export * from './network';
 export * from './contacts';

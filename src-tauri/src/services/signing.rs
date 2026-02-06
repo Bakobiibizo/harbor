@@ -229,6 +229,63 @@ pub struct SignablePostLike {
 impl Signable for SignablePostLike {}
 
 // ============================================================
+// BOARD MESSAGES
+// ============================================================
+
+/// Signable version of a board post submission (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableBoardPost {
+    pub post_id: String,
+    pub board_id: String,
+    pub author_peer_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub lamport_clock: u64,
+    pub created_at: i64,
+}
+
+impl Signable for SignableBoardPost {}
+
+/// Signable version of a board post delete (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableBoardPostDelete {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableBoardPostDelete {}
+
+/// Signable version of a peer registration (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignablePeerRegistration {
+    pub peer_id: String,
+    pub display_name: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignablePeerRegistration {}
+
+/// Signable version of a board list request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableBoardListRequest {
+    pub requester_peer_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableBoardListRequest {}
+
+/// Signable version of a board posts request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableBoardPostsRequest {
+    pub requester_peer_id: String,
+    pub board_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableBoardPostsRequest {}
+
+// ============================================================
 // SIGNALING (Voice Calls)
 // ============================================================
 

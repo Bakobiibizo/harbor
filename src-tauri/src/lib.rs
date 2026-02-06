@@ -10,8 +10,8 @@ use commands::NetworkState;
 use db::Database;
 use logging::{get_log_directory, LogConfig};
 use services::{
-    AccountsService, CallingService, ContactsService, ContentSyncService, FeedService,
-    IdentityService, MessagingService, PermissionsService, PostsService,
+    AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
+    FeedService, IdentityService, MessagingService, PermissionsService, PostsService,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -161,6 +161,7 @@ pub fn run() {
                 contacts_service.clone(),
                 permissions_service.clone(),
             ));
+            let board_service = Arc::new(BoardService::new(db.clone(), identity_service.clone()));
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
@@ -176,6 +177,7 @@ pub fn run() {
             app.manage(content_sync_service);
             app.manage(feed_service);
             app.manage(calling_service);
+            app.manage(board_service);
             app.manage(network_state);
 
             info!("Application setup complete");
@@ -294,6 +296,15 @@ pub fn run() {
             commands::request_content_fetch,
             commands::get_sync_cursor,
             commands::sync_with_all_peers,
+            // Board commands
+            commands::get_communities,
+            commands::join_community,
+            commands::leave_community,
+            commands::get_boards,
+            commands::get_board_posts,
+            commands::submit_board_post,
+            commands::delete_board_post,
+            commands::sync_board,
             // File commands
             commands::save_to_downloads,
         ])

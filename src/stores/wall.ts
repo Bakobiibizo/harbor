@@ -40,7 +40,7 @@ function toWallPost(post: Post, media?: PostMedia[]): WallPost {
   return {
     postId: post.postId,
     content: post.contentText || '',
-    timestamp: new Date(post.createdAt),
+    timestamp: new Date(post.createdAt * 1000),
     likes: 0, // Backend doesn't track likes yet
     comments: 0, // Backend doesn't track comments yet
     liked: false,
@@ -117,7 +117,7 @@ export const useWallStore = create<WallState>((set) => ({
       const newPost: WallPost = {
         postId: result.postId,
         content,
-        timestamp: new Date(result.createdAt),
+        timestamp: new Date(result.createdAt * 1000),
         likes: 0,
         comments: 0,
         liked: false,

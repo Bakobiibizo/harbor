@@ -1,4 +1,5 @@
 pub mod accounts_service;
+pub mod board_service;
 pub mod calling_service;
 pub mod contacts_service;
 pub mod content_sync_service;
@@ -11,6 +12,7 @@ pub mod posts_service;
 pub mod signing;
 
 pub use accounts_service::AccountsService;
+pub use board_service::BoardService;
 pub use calling_service::{
     Call, CallState, CallingService, OutgoingAnswer, OutgoingHangup, OutgoingIce, OutgoingOffer,
 };
@@ -32,6 +34,11 @@ pub use signing::{
     PermissionProof,
     PostSummary,
     Signable,
+    // Board messages
+    SignableBoardListRequest,
+    SignableBoardPost,
+    SignableBoardPostDelete,
+    SignableBoardPostsRequest,
     // Content sync
     SignableContentManifestRequest,
     SignableContentManifestResponse,
@@ -41,6 +48,7 @@ pub use signing::{
     SignableIdentityRequest,
     SignableIdentityResponse,
     SignableMessageAck,
+    SignablePeerRegistration,
     SignablePermissionGrant,
     // Permission messages
     SignablePermissionRequest,

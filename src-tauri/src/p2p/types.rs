@@ -99,6 +99,27 @@ pub enum NetworkEvent {
     ContentFetched { peer_id: String, post_id: String },
     /// Content sync error
     ContentSyncError { peer_id: String, error: String },
+    /// Board list received from a relay
+    BoardListReceived {
+        relay_peer_id: String,
+        board_count: usize,
+    },
+    /// Board posts received from a relay
+    BoardPostsReceived {
+        relay_peer_id: String,
+        board_id: String,
+        post_count: usize,
+    },
+    /// Board post submitted successfully
+    BoardPostSubmitted {
+        relay_peer_id: String,
+        post_id: String,
+    },
+    /// Board sync error
+    BoardSyncError {
+        relay_peer_id: String,
+        error: String,
+    },
 }
 
 /// Commands that can be sent to the network service
@@ -147,6 +168,36 @@ pub enum NetworkCommand {
     },
     /// Sync feed content from connected peers
     SyncFeed { limit: u32 },
+    /// Join a community (register peer + list boards)
+    JoinCommunity {
+        relay_peer_id: PeerId,
+        relay_address: String,
+    },
+    /// List boards on a relay
+    ListBoards { relay_peer_id: PeerId },
+    /// Get board posts from a relay
+    GetBoardPosts {
+        relay_peer_id: PeerId,
+        board_id: String,
+        after_timestamp: Option<i64>,
+        limit: u32,
+    },
+    /// Submit a board post to a relay
+    SubmitBoardPost {
+        relay_peer_id: PeerId,
+        board_id: String,
+        content_text: String,
+    },
+    /// Delete a board post on a relay
+    DeleteBoardPost {
+        relay_peer_id: PeerId,
+        post_id: String,
+    },
+    /// Sync a board (get latest posts)
+    SyncBoard {
+        relay_peer_id: PeerId,
+        board_id: String,
+    },
     /// Shutdown the network
     Shutdown,
 }
