@@ -898,9 +898,7 @@ impl NetworkService {
                             // Strip /p2p/ from the address to get transport-only
                             let transport_addr: Multiaddr = addr
                                 .iter()
-                                .filter(|p| {
-                                    !matches!(p, libp2p::multiaddr::Protocol::P2p(_))
-                                })
+                                .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
                                 .collect();
 
                             if transport_addr.to_string().is_empty() {
@@ -929,8 +927,7 @@ impl NetworkService {
                 });
 
                 // Register as external address so Identify advertises it to other peers
-                self.swarm
-                    .add_external_address(relay_circuit_addr.clone());
+                self.swarm.add_external_address(relay_circuit_addr.clone());
                 info!(
                     "Added relay circuit as external address: {}",
                     relay_circuit_addr
@@ -1097,19 +1094,14 @@ impl NetworkService {
                         // Listen on the relay circuit address to request a reservation.
                         // In relay v2, the client MUST explicitly listen on a
                         // p2p-circuit address — it does NOT happen automatically.
-                        let relay_circuit_listen_addr: Multiaddr = format!(
-                            "{}/p2p/{}/p2p-circuit",
-                            addr_without_peer, relay_peer_id
-                        )
-                        .parse()
-                        .expect("valid relay circuit multiaddr");
+                        let relay_circuit_listen_addr: Multiaddr =
+                            format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
+                                .parse()
+                                .expect("valid relay circuit multiaddr");
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!(
-                                    "Listening on relay circuit: {}",
-                                    relay_circuit_listen_addr
-                                );
+                                info!("Listening on relay circuit: {}", relay_circuit_listen_addr);
                             }
                             Err(e) => {
                                 warn!(
@@ -1547,19 +1539,14 @@ impl NetworkService {
                     // In relay v2, the client MUST explicitly listen on a
                     // p2p-circuit address — it does NOT happen automatically.
                     if !addr_without_peer.is_empty() {
-                        let relay_circuit_listen_addr: Multiaddr = format!(
-                            "{}/p2p/{}/p2p-circuit",
-                            addr_without_peer, relay_peer_id
-                        )
-                        .parse()
-                        .expect("valid relay circuit multiaddr");
+                        let relay_circuit_listen_addr: Multiaddr =
+                            format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
+                                .parse()
+                                .expect("valid relay circuit multiaddr");
 
                         match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
                             Ok(_) => {
-                                info!(
-                                    "Listening on relay circuit: {}",
-                                    relay_circuit_listen_addr
-                                );
+                                info!("Listening on relay circuit: {}", relay_circuit_listen_addr);
                             }
                             Err(e) => {
                                 warn!(
