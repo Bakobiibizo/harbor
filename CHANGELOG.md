@@ -87,3 +87,7 @@
 - fixed p2p communications
 - fix: updating p2p communications to work with the relay and simplify the network menu options
 
+## 2026-02-06 - v0.2.0
+
+- Describe the notable changes here.
+
