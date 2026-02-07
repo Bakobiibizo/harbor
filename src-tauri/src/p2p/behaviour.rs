@@ -1,7 +1,7 @@
 use libp2p::{
     autonat, dcutr, identify, kad, mdns, ping, relay,
     request_response::{self, ProtocolSupport},
-    swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour},
     StreamProtocol,
 };
 use std::collections::HashMap;
