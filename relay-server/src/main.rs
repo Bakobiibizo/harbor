@@ -260,11 +260,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let local_peer_id = PeerId::from(keypair.public());
             let local_public_key = keypair.public();
 
-            // Configure relay server with limits from CLI args
+            // Configure relay server with limits from CLI args.
+            // Durations are set very high — Harbor is a social app where users
+            // stay connected for days. The libp2p defaults (1h reservation,
+            // 2min circuit, 128KiB circuit bytes) are far too aggressive.
             let relay_config = relay::Config {
                 max_reservations: args.max_reservations,
                 max_circuits: args.max_circuits,
                 max_circuits_per_peer: args.max_circuits_per_peer,
+                reservation_duration: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+                max_circuit_duration: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+                max_circuit_bytes: 0, // unlimited
                 ..Default::default()
             };
 
