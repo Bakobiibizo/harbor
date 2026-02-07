@@ -437,6 +437,10 @@ pub struct NetworkService {
     external_addresses: Vec<Multiaddr>,
     /// Whether we've attempted to connect to relays
     relay_connection_attempted: bool,
+    /// Relay peers we've dialed but haven't yet requested a reservation for.
+    /// Key: relay peer ID, Value: full relay multiaddr (transport + /p2p/<id>).
+    /// Reservation is requested in Identify::Received after the connection is fully negotiated.
+    pending_relay_reservations: HashMap<PeerId, Multiaddr>,
 }
 
 impl NetworkService {
@@ -474,6 +478,7 @@ impl NetworkService {
             relay_addresses: Vec::new(),
             external_addresses: Vec::new(),
             relay_connection_attempted: false,
+            pending_relay_reservations: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -1021,6 +1026,33 @@ impl NetworkService {
                         .kademlia
                         .add_address(&peer_id, addr);
                 }
+
+                // If this peer is a relay we're waiting on, request the reservation NOW.
+                // This is the correct timing — the connection is fully negotiated and
+                // the relay client transport knows about it.
+                if let Some(relay_addr) = self.pending_relay_reservations.remove(&peer_id) {
+                    let circuit_listen_addr: Multiaddr = relay_addr
+                        .clone()
+                        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+                    info!(
+                        "Requesting relay reservation on {} (post-identify)",
+                        circuit_listen_addr
+                    );
+                    match self.swarm.listen_on(circuit_listen_addr.clone()) {
+                        Ok(id) => {
+                            info!(
+                                "Relay listener registered: {:?} on {}",
+                                id, circuit_listen_addr
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to request relay reservation {}: {}",
+                                circuit_listen_addr, e
+                            );
+                        }
+                    }
+                }
             }
 
             ChatBehaviourEvent::Kademlia(kad::Event::RoutingUpdated { peer, .. }) => {
@@ -1368,30 +1400,16 @@ impl NetworkService {
                             );
                         }
 
-                        // Request a relay reservation by listening on a p2p-circuit address.
-                        // In relay v2, the client MUST explicitly listen on a
-                        // p2p-circuit address — it does NOT happen automatically.
-                        // Note: this just registers the listener; the actual reservation
-                        // happens asynchronously after the TCP connection is established.
-                        let relay_circuit_listen_addr: Multiaddr =
-                            format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
-                                .parse()
-                                .expect("valid relay circuit multiaddr");
-
-                        match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
-                            Ok(_) => {
-                                info!(
-                                    "Relay reservation requested via: {} (awaiting acceptance...)",
-                                    relay_circuit_listen_addr
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to request relay reservation {}: {}",
-                                    relay_circuit_listen_addr, e
-                                );
-                            }
-                        }
+                        // Queue relay reservation for after Identify completes.
+                        // listen_on must be called AFTER the connection is fully negotiated
+                        // (Identify::Received), not immediately after dial — otherwise the
+                        // relay client transport doesn't know about the connection yet.
+                        self.pending_relay_reservations
+                            .insert(relay_peer_id, relay_addr.clone());
+                        info!(
+                            "Relay reservation queued for {} (will request after identify)",
+                            relay_peer_id
+                        );
                     }
                 }
                 Err(e) => {
@@ -1915,30 +1933,15 @@ impl NetworkService {
                         }
                     }
 
-                    // Listen on the relay circuit address to request a reservation.
-                    // In relay v2, the client MUST explicitly listen on a
-                    // p2p-circuit address — it does NOT happen automatically.
-                    if !addr_without_peer.is_empty() {
-                        let relay_circuit_listen_addr: Multiaddr =
-                            format!("{}/p2p/{}/p2p-circuit", addr_without_peer, relay_peer_id)
-                                .parse()
-                                .expect("valid relay circuit multiaddr");
-
-                        match self.swarm.listen_on(relay_circuit_listen_addr.clone()) {
-                            Ok(_) => {
-                                info!(
-                                    "Relay reservation requested via: {} (awaiting acceptance...)",
-                                    relay_circuit_listen_addr
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to request relay reservation {}: {}",
-                                    relay_circuit_listen_addr, e
-                                );
-                            }
-                        }
-                    }
+                    // Queue relay reservation for after Identify completes.
+                    // listen_on must be called AFTER the connection is fully negotiated
+                    // (Identify::Received), not immediately after dial.
+                    self.pending_relay_reservations
+                        .insert(relay_peer_id, address.clone());
+                    info!(
+                        "Relay reservation queued for {} (will request after identify)",
+                        relay_peer_id
+                    );
 
                     NetworkResponse::Ok
                 } else {

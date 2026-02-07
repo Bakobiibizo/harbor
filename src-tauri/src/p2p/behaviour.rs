@@ -1,7 +1,7 @@
 use libp2p::{
     autonat, dcutr, identify, kad, mdns, ping, relay,
     request_response::{self, ProtocolSupport},
-    swarm::NetworkBehaviour,
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviour},
     StreamProtocol,
 };
 use std::collections::HashMap;
@@ -27,8 +27,9 @@ pub struct ChatBehaviour {
     pub mdns: mdns::tokio::Behaviour,
     /// Relay client for NAT traversal
     pub relay_client: relay::client::Behaviour,
-    /// DCUtR for direct connection upgrade through relay
-    pub dcutr: dcutr::Behaviour,
+    /// DCUtR for direct connection upgrade through relay (disabled by default —
+    /// hole punching fails in most agent topologies and destabilises relay circuits)
+    pub dcutr: Toggle<dcutr::Behaviour>,
     /// AutoNAT for external address discovery
     pub autonat: autonat::Behaviour,
     /// Request-response for identity exchange
@@ -167,8 +168,10 @@ impl ChatBehaviour {
         let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
             .expect("Failed to create mDNS behaviour");
 
-        // DCUtR for hole punching
-        let dcutr = dcutr::Behaviour::new(local_peer_id);
+        // DCUtR for hole punching — disabled by default.
+        // When enabled, failed hole-punch attempts destabilise relay circuits
+        // causing disconnections every ~2 minutes.
+        let dcutr = Toggle::from(None::<dcutr::Behaviour>);
 
         // AutoNAT
         let autonat = autonat::Behaviour::new(local_peer_id, autonat::Config::default());
