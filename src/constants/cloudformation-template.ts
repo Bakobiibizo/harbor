@@ -643,7 +643,7 @@ Resources:
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print \\$1}')
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print $1}')
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
@@ -754,10 +754,6 @@ Outputs:
   Step3CopyRelayAddress:
     Description: "STEP 3: Copy the 'Value' field and paste it into Harbor"
     Value: "On that page, find the 'Value' field. It looks like: /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."
-
-  CommunityNameOutput:
-    Description: "Community name"
-    Value: !Ref CommunityName
 
   CommunityNameOutput:
     Description: "Community name"

@@ -7,7 +7,7 @@ import {
   SecuritySection,
   PrivacySection,
   UpdatesSection,
-} from './settings';
+} from './settings/index';
 
 const sections = [
   { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
