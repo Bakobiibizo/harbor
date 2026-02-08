@@ -15,8 +15,8 @@ use tracing::{debug, error, info, warn};
 /// Only Harbor relay servers are listed here. IPFS bootstrap nodes use relay v1
 /// and RSA-based peer IDs that are incompatible with relay v2.
 const PUBLIC_RELAYS: &[&str] = &[
-    // Harbor community relay (primary) - IPv6
-    "/ip4/23.20.163.210/tcp/4001/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9",
+    // Harbor community relay (primary)
+    // TODO(#relay-redeploy): Update with new relay address after redeployment
 ];
 
 use super::behaviour::{

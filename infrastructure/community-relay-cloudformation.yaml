@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Harbor Community Relay Server - NAT traversal + community boards with storage"
+Description: "Harbor Community Relay Server - NAT traversal + community boards with SQLite storage"
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -19,6 +19,8 @@ Metadata:
           default: "Community Configuration"
         Parameters:
           - CommunityName
+          - RateLimitMaxRequests
+          - RateLimitWindowSecs
 
 Parameters:
   InstanceType:
@@ -41,7 +43,7 @@ Parameters:
     Default: 4001
     MinValue: 1024
     MaxValue: 65535
-    Description: "Port for the libp2p relay server"
+    Description: "Port for the libp2p relay server (TCP + UDP/QUIC)"
 
   MaxReservations:
     Type: Number
@@ -57,6 +59,16 @@ Parameters:
     Type: String
     Default: "Harbor Community"
     Description: "Name for your community (shown to peers who join)"
+
+  RateLimitMaxRequests:
+    Type: Number
+    Default: 60
+    Description: "Maximum board sync requests per peer within the rate limit window"
+
+  RateLimitWindowSecs:
+    Type: Number
+    Default: 60
+    Description: "Rate limit window duration in seconds"
 
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
@@ -126,16 +138,14 @@ Resources:
   RelaySecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: !Sub "Security group for ${AWS::StackName} Harbor community relay server"
+      GroupDescription: !Sub "Security group for ${AWS::StackName} Harbor community relay"
       VpcId: !Ref RelayVPC
       SecurityGroupIngress:
-        # libp2p relay port (TCP)
         - IpProtocol: tcp
           FromPort: !Ref RelayPort
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay TCP
-        # libp2p relay port (UDP for QUIC)
         - IpProtocol: udp
           FromPort: !Ref RelayPort
           ToPort: !Ref RelayPort
@@ -236,7 +246,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 8
+            VolumeSize: 20
             VolumeType: gp3
             Encrypted: true
       UserData:
@@ -250,7 +260,7 @@ Resources:
           echo "RelayPort: ${RelayPort}"
           echo "CommunityName: ${CommunityName}"
 
-          EXPECTED_SHA256="c5dcb143d69558107ced27a0dfd30542a88a69906aa53404d9b31ef97a1c66a3"
+          EXPECTED_SHA256="9425ab1d055fa3ceb4f2cc6eba6b29571e12fe2da868f305374d000d3892a05d"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
 
           # Download pre-compiled binary
@@ -270,13 +280,8 @@ Resources:
 
           chmod +x /usr/local/bin/harbor-relay
 
-          # The relay binary auto-generates an identity key on first run
-          # at ~/.config/harbor-relay/id.key if none exists.
-          # This identity persists across service restarts.
+          # Create identity and data directories
           mkdir -p /root/.config/harbor-relay
-
-          # Create data directory for SQLite storage
-          echo "Creating data directory..."
           mkdir -p /var/lib/harbor-relay/data
 
           # Get public IP using IMDSv2
@@ -290,9 +295,9 @@ Resources:
           fi
           echo "Public IP: $PUBLIC_IP"
 
-          # Create systemd service (community mode with --community flag)
+          # Create systemd service (full community mode)
           echo "Creating systemd service..."
-          cat > /etc/systemd/system/libp2p-relay.service << SERVICEEOF
+          cat > /etc/systemd/system/harbor-relay.service << SERVICEEOF
           [Unit]
           Description=Harbor Community Relay Server
           After=network.target
@@ -302,7 +307,16 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --max-reservations ${MaxReservations} --max-circuits-per-peer ${MaxCircuits} --community --community-name "${CommunityName}" --data-dir /var/lib/harbor-relay/data
+          ExecStart=/usr/local/bin/harbor-relay \
+            --port ${RelayPort} \
+            --announce-ip $PUBLIC_IP \
+            --max-reservations ${MaxReservations} \
+            --max-circuits-per-peer ${MaxCircuits} \
+            --community \
+            --community-name "${CommunityName}" \
+            --data-dir /var/lib/harbor-relay/data \
+            --rate-limit-max-requests ${RateLimitMaxRequests} \
+            --rate-limit-window-secs ${RateLimitWindowSecs}
           StandardOutput=journal
           StandardError=journal
 
@@ -313,21 +327,21 @@ Resources:
           # Start the relay service
           echo "Starting relay service..."
           systemctl daemon-reload
-          systemctl enable libp2p-relay
-          systemctl start libp2p-relay
+          systemctl enable harbor-relay
+          systemctl start harbor-relay
 
           # Wait for startup
           echo "Waiting for relay to start (10 seconds)..."
           sleep 10
 
-          systemctl status libp2p-relay --no-pager || true
+          systemctl status harbor-relay --no-pager || true
 
-          # Extract peer ID from service logs (auto-generated on first run)
+          # Extract peer ID from service logs
           echo "Getting peer ID from logs..."
           PEER_ID=""
           for i in {1..30}; do
             echo "Attempt $i to get peer ID..."
-            PEER_ID=$(journalctl -u libp2p-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
+            PEER_ID=$(journalctl -u harbor-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
             if [ -n "$PEER_ID" ]; then
               echo "Found Peer ID: $PEER_ID"
               break
@@ -377,7 +391,7 @@ Resources:
 Outputs:
   Step1WaitTwoMinutes:
     Description: "STEP 1: Wait ~2 minutes for the server to start"
-    Value: "The relay generates a unique identity on first boot. Allow a couple of minutes for startup."
+    Value: "The relay downloads a pre-compiled binary and generates a unique identity on first boot."
 
   Step2GetYourRelayAddress:
     Description: "STEP 2: Click this link to get your relay address"
