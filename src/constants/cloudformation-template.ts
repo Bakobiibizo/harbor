@@ -246,7 +246,7 @@ Resources:
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print $1}')
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | cut -d ' ' -f 1)
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
@@ -643,7 +643,7 @@ Resources:
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print $1}')
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | cut -d ' ' -f 1)
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
