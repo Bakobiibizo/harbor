@@ -634,7 +634,7 @@ Resources:
           echo "RelayPort: \${RelayPort}"
           echo "CommunityName: \${CommunityName}"
 
-          EXPECTED_SHA256="PLACEHOLDER_UPDATE_WITH_BUILD_RELAY_SH"
+          EXPECTED_SHA256="9425ab1d055fa3ceb4f2cc6eba6b29571e12fe2da868f305374d000d3892a05d"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
 
           # Download pre-compiled binary
