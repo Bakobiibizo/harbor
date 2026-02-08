@@ -273,12 +273,70 @@ Resources:
           fi
           echo "Public IP: $PUBLIC_IP"
 
-          # Create systemd service
-          echo "Creating systemd service..."
+          # Start relay without announce-ip so it generates its identity
+          echo "Creating initial systemd service..."
           cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
           [Unit]
           Description=Harbor Relay Server ($SERVICE_NAME)
-          After=network.target
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          Restart=always
+          RestartSec=10
+          Environment=RUST_LOG=info
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICEEOF
+
+          systemctl daemon-reload
+          systemctl enable $SERVICE_NAME
+          systemctl start $SERVICE_NAME
+
+          echo "Waiting for relay to start..."
+          sleep 10
+          PEER_ID=""
+          for i in {1..30}; do
+            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
+            if [ -n "$PEER_ID" ]; then
+              echo "Found Peer ID: $PEER_ID"
+              break
+            fi
+            sleep 2
+          done
+
+          # Wait for Elastic IP to be associated (happens after UserData)
+          echo "Waiting for Elastic IP association..."
+          PREV_IP=""
+          STABLE_COUNT=0
+          for attempt in {1..60}; do
+            CURRENT_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\\n')
+            if [ "$CURRENT_IP" = "$PREV_IP" ] && [ -n "$CURRENT_IP" ]; then
+              STABLE_COUNT=$((STABLE_COUNT + 1))
+            else
+              STABLE_COUNT=0
+            fi
+            PREV_IP="$CURRENT_IP"
+            if [ "$STABLE_COUNT" -ge 3 ]; then
+              echo "Public IP stabilized at $CURRENT_IP"
+              break
+            fi
+            sleep 5
+          done
+          PUBLIC_IP="$CURRENT_IP"
+          echo "Public IP: $PUBLIC_IP"
+
+          # Rewrite service with correct announce-ip and restart
+          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
+          [Unit]
+          Description=Harbor Relay Server ($SERVICE_NAME)
+          After=network-online.target
+          Wants=network-online.target
 
           [Service]
           Type=simple
@@ -293,30 +351,9 @@ Resources:
           WantedBy=multi-user.target
           SERVICEEOF
 
-          # Start the relay service
-          echo "Starting relay service..."
           systemctl daemon-reload
-          systemctl enable $SERVICE_NAME
-          systemctl start $SERVICE_NAME
-
-          # Wait for startup
-          echo "Waiting for relay to start (10 seconds)..."
-          sleep 10
-
-          systemctl status $SERVICE_NAME --no-pager || true
-
-          # Extract peer ID from service logs (auto-generated on first run)
-          echo "Getting peer ID from logs..."
-          PEER_ID=""
-          for i in {1..30}; do
-            echo "Attempt $i to get peer ID..."
-            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
-            if [ -n "$PEER_ID" ]; then
-              echo "Found Peer ID: $PEER_ID"
-              break
-            fi
-            sleep 2
-          done
+          systemctl restart $SERVICE_NAME
+          sleep 5
 
           SSM_PARAM_NAME="/harbor/\${AWS::StackName}/relay-address"
 
@@ -336,13 +373,12 @@ Resources:
             echo "$RELAY_ADDRESS"
           else
             echo "=== PARTIAL FAILURE ==="
-            echo "Could not build complete relay address"
             echo "Public IP: $PUBLIC_IP"
             echo "Peer ID: $PEER_ID"
 
             aws ssm put-parameter \\
               --name "$SSM_PARAM_NAME" \\
-              --value "ERROR: Setup incomplete. Check /var/log/user-data.log on EC2 instance" \\
+              --value "ERROR: Setup incomplete. Check /var/log/user-data.log" \\
               --type String \\
               --overwrite \\
               --region \${AWS::Region}
@@ -658,23 +694,70 @@ Resources:
           mkdir -p /root/.config/$SERVICE_NAME
           mkdir -p /var/lib/$SERVICE_NAME/data
 
-          # Get public IP using IMDSv2
-          echo "Getting public IP..."
-          IMDS_TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
-          PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null)
-
-          if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -q "<?xml"; then
-            echo "IMDSv2 failed, trying external IP service..."
-            PUBLIC_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\\n')
-          fi
-          echo "Public IP: $PUBLIC_IP"
-
-          # Create systemd service (full community mode)
-          echo "Creating systemd service..."
+          # Start relay without announce-ip so it generates its identity
+          echo "Creating initial systemd service..."
           cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
           [Unit]
           Description=Harbor Community Relay Server ($SERVICE_NAME)
-          After=network.target
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          Restart=always
+          RestartSec=10
+          Environment=RUST_LOG=info
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir /var/lib/$SERVICE_NAME/data --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICEEOF
+
+          systemctl daemon-reload
+          systemctl enable $SERVICE_NAME
+          systemctl start $SERVICE_NAME
+
+          echo "Waiting for relay to start..."
+          sleep 10
+          PEER_ID=""
+          for i in {1..30}; do
+            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
+            if [ -n "$PEER_ID" ]; then
+              echo "Found Peer ID: $PEER_ID"
+              break
+            fi
+            sleep 2
+          done
+
+          # Wait for Elastic IP to be associated (happens after UserData)
+          echo "Waiting for Elastic IP association..."
+          PREV_IP=""
+          STABLE_COUNT=0
+          for attempt in {1..60}; do
+            CURRENT_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\\n')
+            if [ "$CURRENT_IP" = "$PREV_IP" ] && [ -n "$CURRENT_IP" ]; then
+              STABLE_COUNT=$((STABLE_COUNT + 1))
+            else
+              STABLE_COUNT=0
+            fi
+            PREV_IP="$CURRENT_IP"
+            if [ "$STABLE_COUNT" -ge 3 ]; then
+              echo "Public IP stabilized at $CURRENT_IP"
+              break
+            fi
+            sleep 5
+          done
+          PUBLIC_IP="$CURRENT_IP"
+          echo "Public IP: $PUBLIC_IP"
+
+          # Rewrite service with correct announce-ip and restart
+          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
+          [Unit]
+          Description=Harbor Community Relay Server ($SERVICE_NAME)
+          After=network-online.target
+          Wants=network-online.target
 
           [Service]
           Type=simple
@@ -690,21 +773,8 @@ Resources:
           SERVICEEOF
 
           systemctl daemon-reload
-          systemctl enable $SERVICE_NAME
-          systemctl start $SERVICE_NAME
-
-          sleep 10
-          systemctl status $SERVICE_NAME --no-pager || true
-
-          PEER_ID=""
-          for i in {1..30}; do
-            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
-            if [ -n "$PEER_ID" ]; then
-              echo "Found Peer ID: $PEER_ID"
-              break
-            fi
-            sleep 2
-          done
+          systemctl restart $SERVICE_NAME
+          sleep 5
 
           SSM_PARAM_NAME="/harbor/\${AWS::StackName}/relay-address"
 

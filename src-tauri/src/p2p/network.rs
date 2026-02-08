@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 /// and RSA-based peer IDs that are incompatible with relay v2.
 const PUBLIC_RELAYS: &[&str] = &[
     // Harbor community relay (primary)
-    "/ip4/44.204.222.59/tcp/4001/p2p/12D3KooWAEm2TCWfVf4XcNonHFzrV1rhGarTFF1iaYMRsLh3WsUY",
+    "/ip4/34.194.15.67/tcp/4001/p2p/12D3KooWCPbmZtdd7kUQMMRvAEvM9cSBeQarpGr511jxRu5xT8wg",
 ];
 
 use super::behaviour::{
