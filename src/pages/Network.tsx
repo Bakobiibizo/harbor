@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
@@ -20,6 +20,7 @@ import {
   RELAY_CLOUDFORMATION_TEMPLATE,
   COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
 } from '../constants/cloudformation-template';
+import { getInitials, getContactColor, shortPeerId } from '../utils/formatting';
 
 // Adjectives and animals for generating human-friendly peer names
 const ADJECTIVES = [
@@ -102,24 +103,6 @@ function getPeerFriendlyName(peerId: string): string {
   const adjIndex = Math.abs(hash) % ADJECTIVES.length;
   const animalIndex = Math.abs(hash >> 8) % ANIMALS.length;
   return `${ADJECTIVES[adjIndex]} ${ANIMALS[animalIndex]}`;
-}
-
-function getPeerColor(peerId: string): string {
-  const colors = [
-    'linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))',
-    'linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))',
-    'linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))',
-    'linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))',
-    'linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))',
-    'linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))',
-    'linear-gradient(135deg, hsl(280 70% 50%), hsl(320 75% 55%))',
-    'linear-gradient(135deg, hsl(170 65% 45%), hsl(200 70% 50%))',
-  ];
-  let hash = 0;
-  for (let characterIndex = 0; characterIndex < peerId.length; characterIndex++) {
-    hash = peerId.charCodeAt(characterIndex) + ((hash << 5) - hash);
-  }
-  return colors[Math.abs(hash) % colors.length];
 }
 
 // Inline toggle component
@@ -383,30 +366,45 @@ export function NetworkPage() {
   };
 
   // Filter peers by search (also checks contact display names)
-  const filteredPeers = connectedPeers.filter((peer) => {
-    const query = searchQuery.toLowerCase();
-    if (!query) return true;
-    const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-    const contactName =
-      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
-    return (
-      friendlyName.includes(query) ||
-      contactName.includes(query) ||
-      peer.peerId.toLowerCase().includes(query) ||
-      peer.addresses.some((addr) => addr.toLowerCase().includes(query))
-    );
-  });
+  const filteredPeers = useMemo(
+    () =>
+      connectedPeers.filter((peer) => {
+        const query = searchQuery.toLowerCase();
+        if (!query) return true;
+        const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
+        const contactName =
+          contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ??
+          '';
+        return (
+          friendlyName.includes(query) ||
+          contactName.includes(query) ||
+          peer.peerId.toLowerCase().includes(query) ||
+          peer.addresses.some((addr) => addr.toLowerCase().includes(query))
+        );
+      }),
+    [connectedPeers, searchQuery, contacts],
+  );
 
-  const discoveredPeers = filteredPeers.filter((peer) => !peer.isConnected);
-  const connectedPeersList = filteredPeers.filter((peer) => peer.isConnected);
-  const filteredContacts = contacts.filter((contact) => {
-    const query = searchQuery.toLowerCase();
-    if (!query) return true;
-    return (
-      contact.displayName.toLowerCase().includes(query) ||
-      contact.peerId.toLowerCase().includes(query)
-    );
-  });
+  const discoveredPeers = useMemo(
+    () => filteredPeers.filter((peer) => !peer.isConnected),
+    [filteredPeers],
+  );
+  const connectedPeersList = useMemo(
+    () => filteredPeers.filter((peer) => peer.isConnected),
+    [filteredPeers],
+  );
+  const filteredContacts = useMemo(
+    () =>
+      contacts.filter((contact) => {
+        const query = searchQuery.toLowerCase();
+        if (!query) return true;
+        return (
+          contact.displayName.toLowerCase().includes(query) ||
+          contact.peerId.toLowerCase().includes(query)
+        );
+      }),
+    [contacts, searchQuery],
+  );
 
   // Get the circuit address (the one shareable address for remote peers)
   const circuitAddress =
@@ -1229,14 +1227,9 @@ export function NetworkPage() {
                     >
                       <div
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
-                        style={{ background: getPeerColor(contact.peerId) }}
+                        style={{ background: getContactColor(contact.peerId) }}
                       >
-                        {contact.displayName
-                          .split(' ')
-                          .map((word) => word[0])
-                          .join('')
-                          .toUpperCase()
-                          .slice(0, 2)}
+                        {getInitials(contact.displayName)}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p
@@ -1250,7 +1243,7 @@ export function NetworkPage() {
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                           title={contact.peerId}
                         >
-                          {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
+                          {shortPeerId(contact.peerId)}
                         </p>
                       </div>
                       {contact.bio && (
@@ -1335,13 +1328,8 @@ function PeerRow({
   onAction: () => Promise<void>;
 }) {
   const friendlyName = displayName ?? getPeerFriendlyName(peerId);
-  const avatarColor = getPeerColor(peerId);
-  const initials = friendlyName
-    .split(' ')
-    .map((word) => word[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2);
+  const avatarColor = getContactColor(peerId);
+  const initials = getInitials(friendlyName);
 
   return (
     <div
@@ -1363,7 +1351,7 @@ function PeerRow({
           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
           title={peerId}
         >
-          {peerId.slice(0, 12)}...{peerId.slice(-6)}
+          {shortPeerId(peerId)}
         </p>
       </div>
 

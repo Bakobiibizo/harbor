@@ -116,7 +116,13 @@ impl BootstrapNodesRepo {
         })
     }
 
-    /// Update a bootstrap node
+    /// Update a bootstrap node.
+    ///
+    /// Only the provided `Option` fields are included in the SET clause. The SQL
+    /// is built dynamically with `format!()`, but the only values interpolated
+    /// into the query structure are hardcoded column-name fragments (see the
+    /// `SAFETY` comment below). All user-supplied data is bound via parameterized
+    /// placeholders (`?`).
     pub fn update(
         db: &Database,
         id: i64,
@@ -127,28 +133,32 @@ impl BootstrapNodesRepo {
         db.with_connection(|conn| {
             let now = chrono::Utc::now().timestamp();
 
-            // Build dynamic update query
-            let mut updates = vec!["updated_at = ?".to_string()];
+            // Each entry is a hardcoded "column = ?" fragment -- never user input.
+            let mut set_clauses: Vec<&str> = vec!["updated_at = ?"];
             let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now)];
 
-            if let Some(ref n) = name {
-                updates.push("name = ?".to_string());
-                params.push(Box::new(n.clone()));
+            if let Some(ref node_name) = name {
+                set_clauses.push("name = ?");
+                params.push(Box::new(node_name.clone()));
             }
             if let Some(enabled) = is_enabled {
-                updates.push("is_enabled = ?".to_string());
+                set_clauses.push("is_enabled = ?");
                 params.push(Box::new(enabled as i32));
             }
             if let Some(prio) = priority {
-                updates.push("priority = ?".to_string());
+                set_clauses.push("priority = ?");
                 params.push(Box::new(prio));
             }
 
             params.push(Box::new(id));
 
+            // SAFETY: `set_clauses` contains only hardcoded string literals defined
+            // directly above (e.g., "updated_at = ?", "name = ?"). No user input is
+            // interpolated into the SQL structure. All actual values are bound via
+            // parameterized placeholders through `params_from_iter`.
             let query = format!(
                 "UPDATE bootstrap_nodes SET {} WHERE id = ?",
-                updates.join(", ")
+                set_clauses.join(", ")
             );
 
             let rows = conn.execute(

@@ -91,7 +91,7 @@ pub async fn get_wall_preview(
 ) -> Result<Vec<FeedItemInfo>, AppError> {
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     let limit = limit.unwrap_or(50);
 
@@ -132,7 +132,7 @@ pub async fn get_wall_visibility_stats(
 ) -> Result<WallVisibilityStats, AppError> {
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     // Get all posts (using a large limit)
     let posts = PostsRepository::get_by_author(&db, &identity.peer_id, 1000, None)

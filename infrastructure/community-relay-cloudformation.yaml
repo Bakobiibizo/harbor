@@ -141,12 +141,6 @@ Resources:
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay UDP/QUIC
-        # SSH access (only if key pair provided)
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
-          Description: SSH access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -154,6 +148,18 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-sg"
+
+  # SSH access - only created when a key pair is configured
+  SSHIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasKeyPair
+    Properties:
+      GroupId: !Ref RelaySecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 0.0.0.0/0
+      Description: SSH access (only when key pair is provided)
 
   # SSM Parameter to store the relay address
   RelayAddressParameter:
@@ -246,8 +252,6 @@ Resources:
 
           EXPECTED_SHA256="c5dcb143d69558107ced27a0dfd30542a88a69906aa53404d9b31ef97a1c66a3"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
-          RELAY_PEER_ID="12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
-          IDENTITY_KEY_B64="CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo="
 
           # Download pre-compiled binary
           echo "Downloading pre-compiled relay binary..."
@@ -266,11 +270,10 @@ Resources:
 
           chmod +x /usr/local/bin/harbor-relay
 
-          # Install static identity key (same peer ID across restarts/redeployments)
-          echo "Installing static relay identity key..."
+          # The relay binary auto-generates an identity key on first run
+          # at ~/.config/harbor-relay/id.key if none exists.
+          # This identity persists across service restarts.
           mkdir -p /root/.config/harbor-relay
-          echo "$IDENTITY_KEY_B64" | base64 -d > /root/.config/harbor-relay/id.key
-          echo "Relay Peer ID: $RELAY_PEER_ID"
 
           # Create data directory for SQLite storage
           echo "Creating data directory..."
@@ -319,23 +322,50 @@ Resources:
 
           systemctl status libp2p-relay --no-pager || true
 
-          # Build relay address using known peer ID (no need to extract from logs)
+          # Extract peer ID from service logs (auto-generated on first run)
+          echo "Getting peer ID from logs..."
+          PEER_ID=""
+          for i in {1..30}; do
+            echo "Attempt $i to get peer ID..."
+            PEER_ID=$(journalctl -u libp2p-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
+            if [ -n "$PEER_ID" ]; then
+              echo "Found Peer ID: $PEER_ID"
+              break
+            fi
+            sleep 2
+          done
+
           SSM_PARAM_NAME="/harbor/${AWS::StackName}/relay-address"
-          RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/${RelayPort}/p2p/$RELAY_PEER_ID"
 
-          echo "Relay address: $RELAY_ADDRESS"
+          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
+            RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/${RelayPort}/p2p/$PEER_ID"
+            echo "Relay address: $RELAY_ADDRESS"
 
-          aws ssm put-parameter \
-            --name "$SSM_PARAM_NAME" \
-            --value "$RELAY_ADDRESS" \
-            --type String \
-            --overwrite \
-            --region ${AWS::Region}
+            aws ssm put-parameter \
+              --name "$SSM_PARAM_NAME" \
+              --value "$RELAY_ADDRESS" \
+              --type String \
+              --overwrite \
+              --region ${AWS::Region}
 
-          echo "=== SUCCESS ==="
-          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
-          echo "$RELAY_ADDRESS"
-          echo "Community: ${CommunityName}"
+            echo "=== SUCCESS ==="
+            echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+            echo "$RELAY_ADDRESS"
+            echo "Community: ${CommunityName}"
+          else
+            echo "=== PARTIAL FAILURE ==="
+            echo "Could not build complete relay address"
+            echo "Public IP: $PUBLIC_IP"
+            echo "Peer ID: $PEER_ID"
+
+            aws ssm put-parameter \
+              --name "$SSM_PARAM_NAME" \
+              --value "ERROR: Setup incomplete. Check /var/log/user-data.log on EC2 instance" \
+              --type String \
+              --overwrite \
+              --region ${AWS::Region}
+          fi
+
           echo "=== Setup Complete ==="
 
       Tags:
@@ -345,17 +375,17 @@ Resources:
           Value: harbor-chat
 
 Outputs:
-  RelayAddress:
-    Description: "Your relay address (once the EIP is assigned)"
-    Value: !Sub "/ip4/${RelayEIP}/tcp/${RelayPort}/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
-
   Step1WaitTwoMinutes:
-    Description: "STEP 1: Wait ~1 minute for the server to start"
-    Value: "Uses pre-compiled binary with static identity - starts quickly."
+    Description: "STEP 1: Wait ~2 minutes for the server to start"
+    Value: "The relay generates a unique identity on first boot. Allow a couple of minutes for startup."
 
-  Step2CopyRelayAddress:
-    Description: "STEP 2: Copy the RelayAddress output above into Harbor"
-    Value: "Paste it into Network > Advanced > Add Relay Address"
+  Step2GetYourRelayAddress:
+    Description: "STEP 2: Click this link to get your relay address"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/systems-manager/parameters/harbor/${AWS::StackName}/relay-address/description?region=${AWS::Region}"
+
+  Step3CopyRelayAddress:
+    Description: "STEP 3: Copy the 'Value' field and paste it into Harbor"
+    Value: "On that page, find the 'Value' field. It looks like: /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."
 
   CommunityNameOutput:
     Description: "Community name"
@@ -366,8 +396,8 @@ Outputs:
     Value: !Ref RelayEIP
 
   RelayPeerID:
-    Description: "Relay Peer ID (static, survives restarts)"
-    Value: "12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+    Description: "Relay Peer ID (auto-generated on first boot, persists across restarts)"
+    Value: "Check SSM Parameter Store for the full relay address including Peer ID"
 
   EstimatedMonthlyCost:
     Description: "Cost: FREE for 12 months, then ~$9/month"

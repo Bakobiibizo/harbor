@@ -19,14 +19,6 @@ const PUBLIC_RELAYS: &[&str] = &[
     "/ip4/35.173.176.243/tcp/4001/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9",
 ];
 
-/// Public relay servers specifically for relay circuits (if available)
-/// These can be used as fallback when the bootstrap nodes don't provide relay service
-#[allow(dead_code)]
-const FALLBACK_RELAYS: &[&str] = &[
-    // Placeholder for future Harbor-specific relay servers
-    // Users can deploy their own using the AWS CloudFormation template
-];
-
 use super::behaviour::{
     ChatBehaviour, ChatBehaviourEvent, ContentSyncRequest, ContentSyncResponse,
     IdentityExchangeRequest, IdentityExchangeResponse, MessagingRequest, MessagingResponse,
@@ -61,7 +53,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::Dial { peer_id, addresses }, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -76,7 +68,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::GetConnectedPeers, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Peers(peers)) => Ok(peers),
@@ -91,7 +83,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::GetStats, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Stats(stats)) => Ok(stats),
@@ -106,7 +98,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::Bootstrap, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -120,7 +112,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::Shutdown, None))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
         Ok(())
     }
 
@@ -142,7 +134,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -157,7 +149,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::RequestIdentity { peer_id }, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -172,7 +164,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::GetListeningAddresses, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Addresses(addrs)) => Ok(addrs),
@@ -187,7 +179,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::AddBootstrapNode { address }, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -202,7 +194,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::AddRelayServer { address }, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -229,7 +221,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -250,7 +242,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -265,7 +257,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::ListBoards { relay_peer_id }, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -294,7 +286,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -321,7 +313,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -342,7 +334,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -357,7 +349,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::ConnectToPublicRelays, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -384,7 +376,7 @@ impl NetworkHandle {
                 Some(tx),
             ))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -399,7 +391,7 @@ impl NetworkHandle {
         self.command_tx
             .send((NetworkCommand::SyncFeed { limit }, Some(tx)))
             .await
-            .map_err(|_| AppError::Internal("Network service unavailable".into()))?;
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network service unavailable".into()))?;
 
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
@@ -524,7 +516,7 @@ impl NetworkService {
         let info = self
             .identity_service
             .get_identity_info()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
         let signature = self
@@ -1611,8 +1603,67 @@ impl NetworkService {
                 return;
             }
 
-            // TODO: Verify signature on the response
-            // For now, we trust the identity since we're getting it from a direct connection
+            // Verify the Ed25519 signature on the identity response.
+            // The sender signs the string "{peer_id}:{display_name}:{timestamp}"
+            // using their Ed25519 signing key. We reconstruct that payload and
+            // verify against the public key included in the response.
+            let signature_is_valid = {
+                let public_key_bytes: [u8; 32] = match response.public_key.clone().try_into() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        warn!(
+                            "Identity response from {} has invalid public key length (expected 32, got {})",
+                            peer,
+                            response.public_key.len()
+                        );
+                        return;
+                    }
+                };
+
+                let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)
+                {
+                    Ok(key) => key,
+                    Err(error) => {
+                        warn!(
+                            "Identity response from {} has invalid Ed25519 public key: {}",
+                            peer, error
+                        );
+                        return;
+                    }
+                };
+
+                let signed_payload = format!(
+                    "{}:{}:{}",
+                    response.peer_id, response.display_name, response.timestamp
+                );
+
+                let signature =
+                    match ed25519_dalek::Signature::from_slice(&response.signature) {
+                        Ok(sig) => sig,
+                        Err(error) => {
+                            warn!(
+                                "Identity response from {} has invalid signature format: {}",
+                                peer, error
+                            );
+                            return;
+                        }
+                    };
+
+                use ed25519_dalek::Verifier;
+                verifying_key
+                    .verify(signed_payload.as_bytes(), &signature)
+                    .is_ok()
+            };
+
+            if !signature_is_valid {
+                warn!(
+                    "Identity response from {} failed signature verification - rejecting identity",
+                    peer
+                );
+                return;
+            }
+
+            info!("Signature verified for identity response from {}", peer);
 
             match contacts_service.add_contact(
                 &response.peer_id,

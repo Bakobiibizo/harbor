@@ -4,6 +4,21 @@ use crate::db::Database;
 use rusqlite::{params, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 
+/// Build a comma-separated string of `?` placeholders for use in SQL `IN` clauses.
+///
+/// This is safe to interpolate into a SQL query via `format!()` because the returned
+/// string contains only literal `?` characters and commas -- no user-supplied data.
+/// The actual values must be bound separately via parameterized query bindings.
+///
+/// # Panics
+///
+/// Panics if `count` is zero, since an empty `IN ()` clause is invalid SQL.
+fn build_in_clause_placeholders(count: usize) -> String {
+    assert!(count > 0, "Cannot build IN clause with zero placeholders");
+    let placeholders: Vec<&str> = (0..count).map(|_| "?").collect();
+    placeholders.join(",")
+}
+
 /// Represents a like on a post
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostLike {
@@ -169,11 +184,11 @@ impl LikesRepository {
         }
 
         db.with_connection(|conn| {
-            // Build placeholders for IN clause
-            let placeholders: Vec<&str> = post_ids.iter().map(|_| "?").collect();
-            let placeholders_str = placeholders.join(",");
+            // SAFETY: `build_in_clause_placeholders` returns only literal "?" characters
+            // joined by commas (e.g., "?,?,?"). No user input is interpolated into the
+            // SQL structure. All actual values are bound via `params_from_iter`.
+            let placeholders_str = build_in_clause_placeholders(post_ids.len());
 
-            // Query for total likes per post
             let likes_query = format!(
                 "SELECT post_id, COUNT(*) as count FROM post_likes WHERE post_id IN ({}) GROUP BY post_id",
                 placeholders_str
@@ -197,7 +212,6 @@ impl LikesRepository {
                 like_counts.insert(post_id, count);
             }
 
-            // Query for which posts the user has liked
             let user_likes_query = format!(
                 "SELECT post_id FROM post_likes WHERE post_id IN ({}) AND liker_peer_id = ?",
                 placeholders_str

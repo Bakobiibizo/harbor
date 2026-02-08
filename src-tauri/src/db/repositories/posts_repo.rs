@@ -98,6 +98,18 @@ pub struct PostMediaData {
 }
 
 /// Repository for post operations
+/// Parameters for recording a post event
+pub struct RecordPostEventParams<'a> {
+    pub event_id: &'a str,
+    pub event_type: &'a str,
+    pub post_id: &'a str,
+    pub author_peer_id: &'a str,
+    pub lamport_clock: i64,
+    pub timestamp: i64,
+    pub payload_cbor: &'a [u8],
+    pub signature: &'a [u8],
+}
+
 pub struct PostsRepository;
 
 impl PostsRepository {
@@ -236,6 +248,34 @@ impl PostsRepository {
                 }
             }
 
+            Ok(posts)
+        })
+    }
+
+    /// Get posts by author with lamport_clock greater than the given cursor value.
+    /// Results are ordered by lamport_clock ascending so the caller receives posts
+    /// in causal order, which is the expected ordering for sync cursor advancement.
+    pub fn get_by_author_after_cursor(
+        db: &Database,
+        author_peer_id: &str,
+        cursor: i64,
+        limit: i64,
+    ) -> SqliteResult<Vec<Post>> {
+        db.with_connection(|conn| {
+            let mut posts = Vec::new();
+            let mut stmt = conn.prepare(
+                "SELECT id, post_id, author_peer_id, content_type, content_text,
+                        visibility, lamport_clock, created_at, updated_at,
+                        deleted_at, is_local, signature
+                 FROM posts
+                 WHERE author_peer_id = ? AND deleted_at IS NULL AND lamport_clock > ?
+                 ORDER BY lamport_clock ASC
+                 LIMIT ?",
+            )?;
+            let mut rows = stmt.query(params![author_peer_id, cursor, limit])?;
+            while let Some(row) = rows.next()? {
+                posts.push(Self::row_to_post(row)?);
+            }
             Ok(posts)
         })
     }
@@ -386,17 +426,9 @@ impl PostsRepository {
     }
 
     /// Record a post event (for event sourcing)
-    #[allow(clippy::too_many_arguments)]
     pub fn record_post_event(
         db: &Database,
-        event_id: &str,
-        event_type: &str,
-        post_id: &str,
-        author_peer_id: &str,
-        lamport_clock: i64,
-        timestamp: i64,
-        payload_cbor: &[u8],
-        signature: &[u8],
+        params: &RecordPostEventParams<'_>,
     ) -> SqliteResult<i64> {
         db.with_connection(|conn| {
             let received_at = chrono::Utc::now().timestamp();
@@ -406,14 +438,14 @@ impl PostsRepository {
                     lamport_clock, timestamp, payload_cbor, signature, received_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
-                    event_id,
-                    event_type,
-                    post_id,
-                    author_peer_id,
-                    lamport_clock,
-                    timestamp,
-                    payload_cbor,
-                    signature,
+                    params.event_id,
+                    params.event_type,
+                    params.post_id,
+                    params.author_peer_id,
+                    params.lamport_clock,
+                    params.timestamp,
+                    params.payload_cbor,
+                    params.signature,
                     received_at,
                 ],
             )?;

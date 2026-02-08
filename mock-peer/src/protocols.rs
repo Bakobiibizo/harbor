@@ -74,13 +74,13 @@ pub struct DirectMessage {
     pub sender_peer_id: String,
     /// Recipient's peer ID
     pub recipient_peer_id: String,
-    /// Encrypted message content (AES-256-GCM with counter-based nonce)
+    /// Encrypted message content (AES-256-GCM with nonce derived from nonce_counter)
     pub content_encrypted: Vec<u8>,
     /// Content type (text, image, etc.)
     pub content_type: String,
     /// ID of message being replied to (optional)
     pub reply_to: Option<String>,
-    /// Counter used for AES-GCM nonce generation (for replay protection)
+    /// Random value used for AES-GCM nonce derivation and replay protection
     pub nonce_counter: u64,
     /// Lamport timestamp for ordering
     pub lamport_clock: u64,

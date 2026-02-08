@@ -1,6 +1,6 @@
 //! Relay server SQLite database for community board data
 
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS banned_peers (
     reason TEXT,
     banned_at INTEGER NOT NULL,
     banned_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS author_lamport_clocks (
+    author_peer_id TEXT PRIMARY KEY,
+    last_seen_clock INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (author_peer_id) REFERENCES known_peers(peer_id) ON DELETE CASCADE
 );
 "#;
 
@@ -226,6 +233,19 @@ impl RelayDatabase {
         Ok(())
     }
 
+    /// Retrieve the stored public key for a registered peer
+    pub fn get_peer_public_key(&self, peer_id: &str) -> SqliteResult<Option<Vec<u8>>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT public_key FROM known_peers WHERE peer_id = ?",
+        )?;
+        let mut rows = stmt.query([peer_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn is_peer_known(&self, peer_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap();
         let count: i64 = conn.query_row(
@@ -244,6 +264,46 @@ impl RelayDatabase {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Get the highest lamport clock value ever seen for a given author peer.
+    ///
+    /// This reads from the dedicated `author_lamport_clocks` table, which is
+    /// monotonically updated and never decreases -- even when posts are deleted.
+    /// Returns 0 if no clock entry exists for this author yet.
+    pub fn get_last_lamport_clock(&self, author_peer_id: &str) -> SqliteResult<u64> {
+        let conn = self.conn.lock().unwrap();
+        let last_clock: Option<i64> = conn
+            .query_row(
+                "SELECT last_seen_clock FROM author_lamport_clocks WHERE author_peer_id = ?",
+                [author_peer_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(last_clock.unwrap_or(0) as u64)
+    }
+
+    /// Record a new lamport clock value for an author.
+    ///
+    /// The caller must ensure `new_clock` is strictly greater than the
+    /// previously stored value. This method performs an upsert so that
+    /// the first post from a new author creates the tracking row.
+    pub fn update_lamport_clock(
+        &self,
+        author_peer_id: &str,
+        new_clock: u64,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO author_lamport_clocks (author_peer_id, last_seen_clock, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(author_peer_id) DO UPDATE SET
+                 last_seen_clock = excluded.last_seen_clock,
+                 updated_at = excluded.updated_at",
+            params![author_peer_id, new_clock as i64, now],
+        )?;
+        Ok(())
     }
 
     pub fn board_exists(&self, board_id: &str) -> SqliteResult<bool> {

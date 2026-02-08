@@ -1,6 +1,6 @@
 [package]
 name = "harbor-relay-server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "libp2p relay server for Harbor chat app - enables NAT traversal"
 

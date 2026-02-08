@@ -42,6 +42,11 @@ mock-peer/target/
 *.sqlite
 *.sqlite3
 
+# Identity keys (secrets - never commit)
+*.key
+*.key.b64
+id.key
+
 # Environment
 .env
 .env.local

@@ -84,7 +84,7 @@ impl BoardService {
         let info = self
             .identity_service
             .get_identity_info()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let post_id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
@@ -119,7 +119,7 @@ impl BoardService {
         let info = self
             .identity_service
             .get_identity_info()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let now = chrono::Utc::now().timestamp();
 
@@ -150,7 +150,7 @@ impl BoardService {
         let info = self
             .identity_service
             .get_identity_info()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let now = chrono::Utc::now().timestamp();
         let signable = SignableBoardListRequest {
@@ -176,7 +176,7 @@ impl BoardService {
         let info = self
             .identity_service
             .get_identity_info()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let now = chrono::Utc::now().timestamp();
         let signable = SignableBoardPostsRequest {
@@ -201,7 +201,7 @@ impl BoardService {
         let info = self
             .identity_service
             .get_identity_info()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let now = chrono::Utc::now().timestamp();
         let signable = SignableBoardPostDelete {

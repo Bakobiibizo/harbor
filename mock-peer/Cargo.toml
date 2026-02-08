@@ -1,6 +1,6 @@
 [package]
 name = "harbor-mock-peer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Mock peer server for testing Harbor P2P connectivity"
 

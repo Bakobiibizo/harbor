@@ -25,6 +25,8 @@ pub enum ErrorCode {
     ValidationError,
     NetworkError,
     NetworkConnectionFailed,
+    NetworkNotInitialized,
+    NetworkServiceUnavailable,
     NetworkPeerUnreachable,
     NetworkTimeout,
     InternalError,
@@ -54,6 +56,8 @@ impl ErrorCode {
             ErrorCode::ValidationError => "Please check your input",
             ErrorCode::NetworkError => "A network error occurred",
             ErrorCode::NetworkConnectionFailed => "Failed to connect to the network",
+            ErrorCode::NetworkNotInitialized => "Network has not been started",
+            ErrorCode::NetworkServiceUnavailable => "Network service is unavailable",
             ErrorCode::NetworkPeerUnreachable => "Could not reach the peer",
             ErrorCode::NetworkTimeout => "The connection timed out",
             ErrorCode::InternalError => "An unexpected error occurred",
@@ -67,6 +71,12 @@ impl ErrorCode {
             ErrorCode::IdentityInvalidPassphrase => Some("Check your passphrase and try again"),
             ErrorCode::NetworkConnectionFailed => {
                 Some("Check your internet connection and try again")
+            }
+            ErrorCode::NetworkNotInitialized => {
+                Some("Start the network from the Network page first")
+            }
+            ErrorCode::NetworkServiceUnavailable => {
+                Some("Try restarting the network or the application")
             }
             ErrorCode::NetworkPeerUnreachable => Some("The peer may be offline. Try again later"),
             ErrorCode::NetworkTimeout => Some("Try again or check your connection"),
@@ -113,7 +123,16 @@ pub enum AppError {
     Crypto(String),
 
     #[error("Identity error: {0}")]
-    Identity(String),
+    IdentityLocked(String),
+
+    #[error("Identity error: {0}")]
+    IdentityNotFound(String),
+
+    #[error("Identity error: {0}")]
+    IdentityInvalidPassphrase(String),
+
+    #[error("Identity error: {0}")]
+    IdentityGeneric(String),
 
     #[error("Serialization error: {0}")]
     Serialization(String),
@@ -142,6 +161,21 @@ pub enum AppError {
     #[error("Network error: {0}")]
     Network(String),
 
+    #[error("Network error: {0}")]
+    NetworkConnectionFailed(String),
+
+    #[error("Network not initialized: {0}")]
+    NetworkNotInitialized(String),
+
+    #[error("Network service unavailable: {0}")]
+    NetworkServiceUnavailable(String),
+
+    #[error("Network error: {0}")]
+    NetworkPeerUnreachable(String),
+
+    #[error("Network error: {0}")]
+    NetworkTimeout(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -152,17 +186,10 @@ impl AppError {
             AppError::Database(_) => ErrorCode::DatabaseError,
             AppError::DatabaseString(_) => ErrorCode::DatabaseError,
             AppError::Crypto(_) => ErrorCode::CryptoError,
-            AppError::Identity(msg) => {
-                if msg.contains("locked") {
-                    ErrorCode::IdentityLocked
-                } else if msg.contains("not found") || msg.contains("No identity") {
-                    ErrorCode::IdentityNotFound
-                } else if msg.contains("passphrase") || msg.contains("Passphrase") {
-                    ErrorCode::IdentityInvalidPassphrase
-                } else {
-                    ErrorCode::IdentityError
-                }
-            }
+            AppError::IdentityLocked(_) => ErrorCode::IdentityLocked,
+            AppError::IdentityNotFound(_) => ErrorCode::IdentityNotFound,
+            AppError::IdentityInvalidPassphrase(_) => ErrorCode::IdentityInvalidPassphrase,
+            AppError::IdentityGeneric(_) => ErrorCode::IdentityError,
             AppError::Serialization(_) => ErrorCode::SerializationError,
             AppError::Io(_) => ErrorCode::IoError,
             AppError::InvalidData(_) => ErrorCode::InvalidData,
@@ -171,17 +198,12 @@ impl AppError {
             AppError::PermissionDenied(_) => ErrorCode::PermissionDenied,
             AppError::Unauthorized(_) => ErrorCode::Unauthorized,
             AppError::Validation(_) => ErrorCode::ValidationError,
-            AppError::Network(msg) => {
-                if msg.contains("timeout") || msg.contains("Timeout") {
-                    ErrorCode::NetworkTimeout
-                } else if msg.contains("unreachable") {
-                    ErrorCode::NetworkPeerUnreachable
-                } else if msg.contains("connection") || msg.contains("Connection") {
-                    ErrorCode::NetworkConnectionFailed
-                } else {
-                    ErrorCode::NetworkError
-                }
-            }
+            AppError::Network(_) => ErrorCode::NetworkError,
+            AppError::NetworkConnectionFailed(_) => ErrorCode::NetworkConnectionFailed,
+            AppError::NetworkNotInitialized(_) => ErrorCode::NetworkNotInitialized,
+            AppError::NetworkServiceUnavailable(_) => ErrorCode::NetworkServiceUnavailable,
+            AppError::NetworkPeerUnreachable(_) => ErrorCode::NetworkPeerUnreachable,
+            AppError::NetworkTimeout(_) => ErrorCode::NetworkTimeout,
             AppError::Internal(_) => ErrorCode::InternalError,
         }
     }

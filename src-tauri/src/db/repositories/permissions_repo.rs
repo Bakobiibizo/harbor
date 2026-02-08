@@ -104,6 +104,23 @@ pub struct GrantData {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for recording a permission event
+pub struct RecordPermissionEventParams<'a> {
+    pub event_id: &'a str,
+    pub event_type: &'a str,
+    pub entity_id: &'a str,
+    pub author_peer_id: &'a str,
+    pub issuer_peer_id: Option<&'a str>,
+    pub subject_peer_id: &'a str,
+    pub capability: &'a str,
+    pub scope_json: Option<&'a str>,
+    pub lamport_clock: i64,
+    pub issued_at: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub payload_cbor: &'a [u8],
+    pub signature: &'a [u8],
+}
+
 /// Repository for permission operations
 pub struct PermissionsRepository;
 
@@ -113,22 +130,9 @@ impl PermissionsRepository {
     // ============================================================
 
     /// Record a permission event (request, grant, or revoke)
-    #[allow(clippy::too_many_arguments)]
     pub fn record_event(
         db: &Database,
-        event_id: &str,
-        event_type: &str,
-        entity_id: &str,
-        author_peer_id: &str,
-        issuer_peer_id: Option<&str>,
-        subject_peer_id: &str,
-        capability: &str,
-        scope_json: Option<&str>,
-        lamport_clock: i64,
-        issued_at: Option<i64>,
-        expires_at: Option<i64>,
-        payload_cbor: &[u8],
-        signature: &[u8],
+        params: &RecordPermissionEventParams<'_>,
     ) -> SqliteResult<i64> {
         db.with_connection(|conn| {
             let now = chrono::Utc::now().timestamp();
@@ -138,8 +142,10 @@ impl PermissionsRepository {
                   capability, scope_json, lamport_clock, issued_at, expires_at, payload_cbor, signature, received_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
-                    event_id, event_type, entity_id, author_peer_id, issuer_peer_id, subject_peer_id,
-                    capability, scope_json, lamport_clock, issued_at, expires_at, payload_cbor, signature, now
+                    params.event_id, params.event_type, params.entity_id, params.author_peer_id,
+                    params.issuer_peer_id, params.subject_peer_id, params.capability, params.scope_json,
+                    params.lamport_clock, params.issued_at, params.expires_at, params.payload_cbor,
+                    params.signature, now
                 ],
             )?;
             Ok(conn.last_insert_rowid())

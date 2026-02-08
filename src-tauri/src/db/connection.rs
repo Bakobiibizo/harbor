@@ -1,7 +1,7 @@
 use rusqlite::{Connection, Result as SqliteResult};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use tracing::info;
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::{error, info};
 
 const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
 const MIGRATION_002: &str = include_str!("migrations/002_schema_fixes.sql");
@@ -11,6 +11,7 @@ const MIGRATION_005: &str = include_str!("migrations/005_post_likes.sql");
 const MIGRATION_006: &str = include_str!("migrations/006_bootstrap_nodes.sql");
 const MIGRATION_007: &str = include_str!("migrations/007_passphrase_hint.sql");
 const MIGRATION_008: &str = include_str!("migrations/008_boards.sql");
+const MIGRATION_009: &str = include_str!("migrations/009_posts_lamport_index.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -58,9 +59,25 @@ impl Database {
         Ok(db)
     }
 
+    /// Acquire the database connection mutex, recovering from poisoned state.
+    ///
+    /// If a thread panics while holding the mutex, the mutex becomes "poisoned".
+    /// Rather than propagating the panic (which would crash the application),
+    /// we recover the inner connection and log a warning. The SQLite connection
+    /// itself is still valid even after a panic in another thread.
+    fn acquire_connection(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|poisoned| {
+            error!(
+                "Database mutex was poisoned (a thread panicked while holding it). \
+                 Recovering the connection."
+            );
+            poisoned.into_inner()
+        })
+    }
+
     /// Run database migrations
     fn migrate(&self) -> SqliteResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.acquire_connection();
 
         // Check current schema version
         let version: i32 = conn
@@ -119,6 +136,12 @@ impl Database {
             info!("Migration 008 complete");
         }
 
+        if version < 9 {
+            info!("Running migration 009...");
+            conn.execute_batch(MIGRATION_009)?;
+            info!("Migration 009 complete");
+        }
+
         Ok(())
     }
 
@@ -127,7 +150,7 @@ impl Database {
     where
         F: FnOnce(&Connection) -> SqliteResult<T>,
     {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.acquire_connection();
         f(&conn)
     }
 
@@ -136,7 +159,7 @@ impl Database {
     where
         F: FnOnce(&mut Connection) -> SqliteResult<T>,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection();
         f(&mut conn)
     }
 

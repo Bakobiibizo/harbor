@@ -4,7 +4,10 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::{Capability, Database, GrantData, Permission, PermissionsRepository};
+use crate::db::{
+    Capability, Database, GrantData, Permission, PermissionsRepository,
+    RecordPermissionEventParams,
+};
 use crate::error::{AppError, Result};
 use crate::services::{
     verify, IdentityService, Signable, SignablePermissionGrant, SignablePermissionRequest,
@@ -76,7 +79,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let request_id = Uuid::new_v4().to_string();
         let lamport_clock =
@@ -117,7 +120,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let grant_id = Uuid::new_v4().to_string();
         let lamport_clock =
@@ -163,19 +166,21 @@ impl PermissionsService {
         let event_id = Uuid::new_v4().to_string();
         PermissionsRepository::record_event(
             &self.db,
-            &event_id,
-            "grant",
-            &grant_id,
-            &identity.peer_id,
-            Some(&identity.peer_id),
-            subject_peer_id,
-            capability.as_str(),
-            None,
-            lamport_clock as i64,
-            Some(issued_at),
-            expires_at,
-            &payload_cbor,
-            &signature,
+            &RecordPermissionEventParams {
+                event_id: &event_id,
+                event_type: "grant",
+                entity_id: &grant_id,
+                author_peer_id: &identity.peer_id,
+                issuer_peer_id: Some(&identity.peer_id),
+                subject_peer_id,
+                capability: capability.as_str(),
+                scope_json: None,
+                lamport_clock: lamport_clock as i64,
+                issued_at: Some(issued_at),
+                expires_at,
+                payload_cbor: &payload_cbor,
+                signature: &signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -198,7 +203,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we issued this grant
         let grant = PermissionsRepository::get_by_grant_id(&self.db, grant_id)
@@ -235,19 +240,21 @@ impl PermissionsService {
         let event_id = Uuid::new_v4().to_string();
         PermissionsRepository::record_event(
             &self.db,
-            &event_id,
-            "revoke",
-            grant_id,
-            &identity.peer_id,
-            Some(&identity.peer_id),
-            &grant.subject_peer_id,
-            &grant.capability,
-            None,
-            lamport_clock as i64,
-            None,
-            None,
-            &payload_cbor,
-            &signature,
+            &RecordPermissionEventParams {
+                event_id: &event_id,
+                event_type: "revoke",
+                entity_id: grant_id,
+                author_peer_id: &identity.peer_id,
+                issuer_peer_id: Some(&identity.peer_id),
+                subject_peer_id: &grant.subject_peer_id,
+                capability: &grant.capability,
+                scope_json: None,
+                lamport_clock: lamport_clock as i64,
+                issued_at: None,
+                expires_at: None,
+                payload_cbor: &payload_cbor,
+                signature: &signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -326,19 +333,21 @@ impl PermissionsService {
         // Record event
         PermissionsRepository::record_event(
             &self.db,
-            &event_id,
-            "grant",
-            &grant.grant_id,
-            &grant.issuer_peer_id,
-            Some(&grant.issuer_peer_id),
-            &grant.subject_peer_id,
-            &grant.capability,
-            grant.scope.as_ref().map(|s| s.to_string()).as_deref(),
-            grant.lamport_clock as i64,
-            Some(grant.issued_at),
-            grant.expires_at,
-            &grant.payload_cbor,
-            &grant.signature,
+            &RecordPermissionEventParams {
+                event_id: &event_id,
+                event_type: "grant",
+                entity_id: &grant.grant_id,
+                author_peer_id: &grant.issuer_peer_id,
+                issuer_peer_id: Some(&grant.issuer_peer_id),
+                subject_peer_id: &grant.subject_peer_id,
+                capability: &grant.capability,
+                scope_json: grant.scope.as_ref().map(|s| s.to_string()).as_deref(),
+                lamport_clock: grant.lamport_clock as i64,
+                issued_at: Some(grant.issued_at),
+                expires_at: grant.expires_at,
+                payload_cbor: &grant.payload_cbor,
+                signature: &grant.signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -396,19 +405,21 @@ impl PermissionsService {
         if let Some(grant) = grant {
             PermissionsRepository::record_event(
                 &self.db,
-                &event_id,
-                "revoke",
-                &revoke.grant_id,
-                &revoke.issuer_peer_id,
-                Some(&revoke.issuer_peer_id),
-                &grant.subject_peer_id,
-                &grant.capability,
-                None,
-                revoke.lamport_clock as i64,
-                None,
-                None,
-                &payload_cbor,
-                &revoke.signature,
+                &RecordPermissionEventParams {
+                    event_id: &event_id,
+                    event_type: "revoke",
+                    entity_id: &revoke.grant_id,
+                    author_peer_id: &revoke.issuer_peer_id,
+                    issuer_peer_id: Some(&revoke.issuer_peer_id),
+                    subject_peer_id: &grant.subject_peer_id,
+                    capability: &grant.capability,
+                    scope_json: None,
+                    lamport_clock: revoke.lamport_clock as i64,
+                    issued_at: None,
+                    expires_at: None,
+                    payload_cbor: &payload_cbor,
+                    signature: &revoke.signature,
+                },
             )
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
         }
@@ -429,7 +440,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PermissionsRepository::has_capability(
             &self.db,
@@ -445,7 +456,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PermissionsRepository::has_capability(
             &self.db,
@@ -461,7 +472,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_permissions_by_issuer(&self.db, &identity.peer_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
@@ -472,7 +483,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_permissions_for_subject(&self.db, &identity.peer_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
@@ -483,7 +494,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_chat_contacts(&self.db, &identity.peer_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
@@ -498,7 +509,7 @@ impl PermissionsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PermissionsRepository::get_capability_grant(
             &self.db,

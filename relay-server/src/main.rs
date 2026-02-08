@@ -17,15 +17,105 @@ use libp2p::{
     tcp, yamux, Multiaddr, PeerId, StreamProtocol, SwarmBuilder,
     identity::Keypair,
 };
+use std::collections::HashMap;
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Board sync protocol version
 const BOARD_SYNC_PROTOCOL: &str = "/harbor/board/1.0.0";
+
+/// Default maximum requests per peer within the rate limit window
+const DEFAULT_RATE_LIMIT_MAX_REQUESTS: u64 = 60;
+
+/// Default rate limit window duration in seconds
+const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+
+/// How often to purge stale entries from the rate limiter (in seconds)
+const RATE_LIMITER_CLEANUP_INTERVAL_SECS: u64 = 300;
+
+/// Per-peer rate limiter for board sync requests.
+///
+/// Tracks the number of requests each peer has made within a sliding window.
+/// When a peer exceeds `max_requests` within `window_duration`, subsequent
+/// requests are rejected until the window resets.
+struct PeerRateLimiter {
+    /// Maps each peer to (request_count, window_start_time)
+    peers: HashMap<PeerId, (u64, Instant)>,
+    /// Maximum number of requests allowed per window
+    max_requests: u64,
+    /// Duration of the rate limit window
+    window_duration: Duration,
+}
+
+impl PeerRateLimiter {
+    fn new(max_requests: u64, window_duration: Duration) -> Self {
+        Self {
+            peers: HashMap::new(),
+            max_requests,
+            window_duration,
+        }
+    }
+
+    /// Check whether a peer is allowed to make a request.
+    ///
+    /// Returns `Ok(())` if the request is permitted, or `Err(message)` if the
+    /// peer has exceeded their rate limit for the current window.
+    fn check_rate_limit(&mut self, peer_id: &PeerId) -> Result<(), String> {
+        let now = Instant::now();
+
+        let (request_count, window_start) = self
+            .peers
+            .entry(*peer_id)
+            .or_insert((0, now));
+
+        // If the current window has expired, reset the counter
+        if now.duration_since(*window_start) >= self.window_duration {
+            *request_count = 0;
+            *window_start = now;
+        }
+
+        // Check if the peer has exceeded the limit
+        if *request_count >= self.max_requests {
+            warn!(
+                "Rate limit exceeded for peer {}: {} requests in {}s window",
+                peer_id, request_count, self.window_duration.as_secs()
+            );
+            return Err("Rate limit exceeded. Try again later.".to_string());
+        }
+
+        *request_count += 1;
+        Ok(())
+    }
+
+    /// Remove entries for peers whose windows have long since expired.
+    ///
+    /// This prevents unbounded memory growth from peers that connect once
+    /// and never return. An entry is considered stale if its window started
+    /// more than `2 * window_duration` ago.
+    fn cleanup_stale_entries(&mut self) {
+        let now = Instant::now();
+        let stale_threshold = self.window_duration * 2;
+        let initial_count = self.peers.len();
+
+        self.peers
+            .retain(|_peer_id, (_count, window_start)| {
+                now.duration_since(*window_start) < stale_threshold
+            });
+
+        let removed_count = initial_count - self.peers.len();
+        if removed_count > 0 {
+            info!(
+                "Rate limiter cleanup: removed {} stale entries, {} remaining",
+                removed_count,
+                self.peers.len()
+            );
+        }
+    }
+}
 
 /// Board sync request (wire protocol) — matches client types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -151,6 +241,14 @@ struct Args {
     /// Community name for this relay (only used with --community)
     #[arg(long, default_value = "Harbor Community")]
     community_name: String,
+
+    /// Maximum board sync requests per peer within the rate limit window (only used with --community)
+    #[arg(long, default_value_t = DEFAULT_RATE_LIMIT_MAX_REQUESTS)]
+    rate_limit_max_requests: u64,
+
+    /// Rate limit window duration in seconds (only used with --community)
+    #[arg(long, default_value_t = DEFAULT_RATE_LIMIT_WINDOW_SECS)]
+    rate_limit_window_secs: u64,
 }
 
 /// Combined behaviour for the relay server
@@ -241,6 +339,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let service = BoardService::new(relay_db, args.community_name.clone());
         info!("Database initialized at {}", db_path);
         Some(service)
+    } else {
+        None
+    };
+
+    // Initialize rate limiter for board sync requests (community mode only)
+    let mut rate_limiter: Option<PeerRateLimiter> = if args.community {
+        let limiter = PeerRateLimiter::new(
+            args.rate_limit_max_requests,
+            Duration::from_secs(args.rate_limit_window_secs),
+        );
+        info!(
+            "Rate limiter enabled: {} requests per {}s window",
+            args.rate_limit_max_requests, args.rate_limit_window_secs
+        );
+        Some(limiter)
     } else {
         None
     };
@@ -351,53 +464,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("========================================");
     }
 
+    // Periodic cleanup timer for the rate limiter
+    let mut cleanup_interval = tokio::time::interval(Duration::from_secs(
+        RATE_LIMITER_CLEANUP_INTERVAL_SECS,
+    ));
+    // The first tick completes immediately; consume it so we don't
+    // run cleanup at startup.
+    cleanup_interval.tick().await;
+
     // Run the event loop
     loop {
-        match swarm.select_next_some().await {
-            SwarmEvent::NewListenAddr { address, .. } => {
-                info!("Listening on: {}/p2p/{}", address, local_peer_id);
+        tokio::select! {
+            _ = cleanup_interval.tick() => {
+                if let Some(ref mut limiter) = rate_limiter {
+                    limiter.cleanup_stale_entries();
+                }
             }
-            SwarmEvent::Behaviour(RelayServerBehaviourEvent::Relay(event)) => {
-                info!("Relay event: {:?}", event);
-            }
-            SwarmEvent::Behaviour(RelayServerBehaviourEvent::Identify(identify::Event::Received {
-                peer_id,
-                info,
-                ..
-            })) => {
-                info!("Identified peer {}: {}", peer_id, info.agent_version);
-            }
-            SwarmEvent::Behaviour(RelayServerBehaviourEvent::BoardSync(
-                request_response::Event::Message { peer, message, .. },
-            )) => match message {
-                request_response::Message::Request {
-                    request, channel, ..
-                } => {
-                    if let Some(ref service) = board_service {
-                        let response =
-                            handle_board_request(service, &local_peer_id, &peer, request);
-                        if let Err(e) = swarm
-                            .behaviour_mut()
-                            .board_sync
-                            .as_mut()
-                            .expect("board_sync enabled in community mode")
-                            .send_response(channel, response)
-                        {
-                            warn!("Failed to send board sync response: {:?}", e);
+            event = swarm.select_next_some() => match event {
+                SwarmEvent::NewListenAddr { address, .. } => {
+                    info!("Listening on: {}/p2p/{}", address, local_peer_id);
+                }
+                SwarmEvent::Behaviour(RelayServerBehaviourEvent::Relay(event)) => {
+                    info!("Relay event: {:?}", event);
+                }
+                SwarmEvent::Behaviour(RelayServerBehaviourEvent::Identify(identify::Event::Received {
+                    peer_id,
+                    info,
+                    ..
+                })) => {
+                    info!("Identified peer {}: {}", peer_id, info.agent_version);
+                }
+                SwarmEvent::Behaviour(RelayServerBehaviourEvent::BoardSync(
+                    request_response::Event::Message { peer, message, .. },
+                )) => match message {
+                    request_response::Message::Request {
+                        request, channel, ..
+                    } => {
+                        if let Some(ref service) = board_service {
+                            // Check per-peer rate limit before processing the request
+                            let response = if let Some(ref mut limiter) = rate_limiter {
+                                match limiter.check_rate_limit(&peer) {
+                                    Ok(()) => handle_board_request(service, &local_peer_id, &peer, request),
+                                    Err(rate_limit_error) => BoardSyncResponse::Error {
+                                        error: rate_limit_error,
+                                    },
+                                }
+                            } else {
+                                handle_board_request(service, &local_peer_id, &peer, request)
+                            };
+
+                            if let Err(send_error) = swarm
+                                .behaviour_mut()
+                                .board_sync
+                                .as_mut()
+                                .expect("board_sync enabled in community mode")
+                                .send_response(channel, response)
+                            {
+                                warn!("Failed to send board sync response: {:?}", send_error);
+                            }
                         }
                     }
+                    request_response::Message::Response { .. } => {
+                        // Relay server doesn't send requests, so we shouldn't get responses
+                    }
+                },
+                SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } => {
+                    info!("Connection established with: {} via {:?} ({:?})", peer_id, connection_id, endpoint);
                 }
-                request_response::Message::Response { .. } => {
-                    // Relay server doesn't send requests, so we shouldn't get responses
+                SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, endpoint, .. } => {
+                    info!("Connection closed with: {} via {:?} ({:?}), cause: {:?}", peer_id, connection_id, endpoint, cause);
                 }
-            },
-            SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } => {
-                info!("Connection established with: {} via {:?} ({:?})", peer_id, connection_id, endpoint);
+                _ => {}
             }
-            SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, endpoint, .. } => {
-                info!("Connection closed with: {} via {:?} ({:?}), cause: {:?}", peer_id, connection_id, endpoint, cause);
-            }
-            _ => {}
         }
     }
 }
@@ -413,19 +551,24 @@ fn handle_board_request(
             peer_id,
             public_key,
             display_name,
-            ..
+            timestamp,
+            signature,
         } => {
             if peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
                     error: "peer_id mismatch".to_string(),
                 };
             }
-            match service.process_register_peer(&peer_id, &public_key, &display_name) {
+            match service.process_register_peer(&peer_id, &public_key, &display_name, timestamp, &signature) {
                 Ok(()) => BoardSyncResponse::PeerRegistered { peer_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
         }
-        BoardSyncRequest::ListBoards { .. } => match service.process_list_boards() {
+        BoardSyncRequest::ListBoards {
+            requester_peer_id,
+            timestamp,
+            signature,
+        } => match service.process_list_boards(&requester_peer_id, timestamp, &signature) {
             Ok(boards) => {
                 info!("Serving board list for community: {}", service.community_name());
                 BoardSyncResponse::BoardList {
@@ -444,11 +587,13 @@ fn handle_board_request(
             Err(e) => BoardSyncResponse::Error { error: e },
         },
         BoardSyncRequest::GetBoardPosts {
+            requester_peer_id,
             board_id,
             after_timestamp,
             limit,
-            ..
-        } => match service.process_get_board_posts(&board_id, after_timestamp, limit) {
+            timestamp,
+            signature,
+        } => match service.process_get_board_posts(&requester_peer_id, &board_id, after_timestamp, limit, timestamp, &signature) {
             Ok((posts, has_more)) => BoardSyncResponse::BoardPosts {
                 board_id,
                 posts: posts
@@ -502,14 +647,15 @@ fn handle_board_request(
         BoardSyncRequest::DeletePost {
             post_id,
             author_peer_id,
-            ..
+            timestamp,
+            signature,
         } => {
             if author_peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
                     error: "author_peer_id mismatch".to_string(),
                 };
             }
-            match service.process_delete_post(&post_id, &author_peer_id) {
+            match service.process_delete_post(&post_id, &author_peer_id, timestamp, &signature) {
                 Ok(()) => BoardSyncResponse::PostDeleted { post_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }

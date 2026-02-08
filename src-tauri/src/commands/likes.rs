@@ -18,7 +18,7 @@ pub async fn like_post(
     // Get current identity
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     // Create signable data for the like
     let timestamp = chrono::Utc::now().timestamp();
@@ -57,7 +57,7 @@ pub async fn unlike_post(
     // Get current identity
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     LikesRepository::remove_like(&db, &post_id, &identity.peer_id)
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
@@ -110,7 +110,7 @@ pub async fn get_my_liked_posts(
     // Get current identity
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     LikesRepository::get_liked_posts(&db, &identity.peer_id)
         .map_err(|e| AppError::DatabaseString(e.to_string()))

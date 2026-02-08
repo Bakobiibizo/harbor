@@ -4,11 +4,12 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::{Capability, Database};
+use crate::db::Capability;
 use crate::error::{AppError, Result};
 use crate::services::{
-    verify, ContactsService, IdentityService, PermissionsService, SignableSignalingAnswer,
-    SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
+    verify, ContactsService, IdentityService, PermissionsService,
+    SignableSignalingAnswer, SignableSignalingHangup, SignableSignalingIce,
+    SignableSignalingOffer,
 };
 
 /// Call state
@@ -49,8 +50,6 @@ pub struct Call {
 
 /// Service for managing voice calls
 pub struct CallingService {
-    #[allow(dead_code)]
-    db: Arc<Database>, // Reserved for future call history storage
     identity_service: Arc<IdentityService>,
     contacts_service: Arc<ContactsService>,
     permissions_service: Arc<PermissionsService>,
@@ -103,13 +102,11 @@ pub struct OutgoingHangup {
 impl CallingService {
     /// Create a new calling service
     pub fn new(
-        db: Arc<Database>,
         identity_service: Arc<IdentityService>,
         contacts_service: Arc<ContactsService>,
         permissions_service: Arc<PermissionsService>,
     ) -> Self {
         Self {
-            db,
             identity_service,
             contacts_service,
             permissions_service,
@@ -121,7 +118,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Check we have call permission with this peer
         if !self
@@ -169,7 +166,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we are the callee
         if callee_peer_id != identity.peer_id {
@@ -225,7 +222,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -262,7 +259,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we are the caller
         if caller_peer_id != identity.peer_id {
@@ -309,7 +306,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -384,7 +381,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 

@@ -5,8 +5,8 @@ use crate::models::{CreateIdentityRequest, IdentityInfo, LocalIdentity};
 use crate::services::{sign as signing_sign, CryptoService, Signable};
 
 use ed25519_dalek::SigningKey;
-use std::sync::{Arc, RwLock};
-use tracing::info;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tracing::{error, info};
 use x25519_dalek::StaticSecret as X25519Secret;
 
 /// Service for managing the local user's identity
@@ -31,6 +31,28 @@ impl IdentityService {
         }
     }
 
+    /// Acquire a read lock on the unlocked keys, recovering from poisoned state.
+    fn read_keys(&self) -> RwLockReadGuard<'_, Option<UnlockedKeys>> {
+        self.unlocked_keys.read().unwrap_or_else(|poisoned| {
+            error!(
+                "Identity keys RwLock was poisoned (a thread panicked while holding it). \
+                 Recovering read access."
+            );
+            poisoned.into_inner()
+        })
+    }
+
+    /// Acquire a write lock on the unlocked keys, recovering from poisoned state.
+    fn write_keys(&self) -> RwLockWriteGuard<'_, Option<UnlockedKeys>> {
+        self.unlocked_keys.write().unwrap_or_else(|poisoned| {
+            error!(
+                "Identity keys RwLock was poisoned (a thread panicked while holding it). \
+                 Recovering write access."
+            );
+            poisoned.into_inner()
+        })
+    }
+
     /// Check if an identity has been created
     pub fn has_identity(&self) -> Result<bool> {
         let repo = IdentityRepository::new(&self.db);
@@ -39,7 +61,7 @@ impl IdentityService {
 
     /// Check if the identity is currently unlocked
     pub fn is_unlocked(&self) -> bool {
-        self.unlocked_keys.read().unwrap().is_some()
+        self.read_keys().is_some()
     }
 
     /// Get identity info (public data only)
@@ -102,7 +124,7 @@ impl IdentityService {
 
         // Auto-unlock after creation
         {
-            let mut unlocked = self.unlocked_keys.write().unwrap();
+            let mut unlocked = self.write_keys();
             *unlocked = Some(UnlockedKeys {
                 ed25519_signing,
                 x25519_secret,
@@ -119,7 +141,7 @@ impl IdentityService {
 
         let identity = repo
             .get()?
-            .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
         // Decrypt private keys
         let keys = CryptoService::decrypt_keys(&identity.private_key_encrypted, passphrase)?;
@@ -140,7 +162,7 @@ impl IdentityService {
 
         // Store unlocked keys
         {
-            let mut unlocked = self.unlocked_keys.write().unwrap();
+            let mut unlocked = self.write_keys();
             *unlocked = Some(UnlockedKeys {
                 ed25519_signing,
                 x25519_secret,
@@ -153,17 +175,17 @@ impl IdentityService {
 
     /// Lock the identity (clear unlocked keys from memory)
     pub fn lock(&self) {
-        let mut unlocked = self.unlocked_keys.write().unwrap();
+        let mut unlocked = self.write_keys();
         *unlocked = None;
         info!("Identity locked");
     }
 
     /// Get the unlocked keys (for signing/encryption operations)
     pub fn get_unlocked_keys(&self) -> Result<UnlockedKeys> {
-        let unlocked = self.unlocked_keys.read().unwrap();
+        let unlocked = self.read_keys();
         unlocked
             .clone()
-            .ok_or_else(|| AppError::PermissionDenied("Identity is locked".to_string()))
+            .ok_or_else(|| AppError::IdentityLocked("Identity is locked".to_string()))
     }
 
     /// Sign raw data using the unlocked Ed25519 key
@@ -211,7 +233,7 @@ impl IdentityService {
         let repo = IdentityRepository::new(&self.db);
         let identity = repo
             .get()?
-            .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
         Ok(identity.peer_id)
     }
 }

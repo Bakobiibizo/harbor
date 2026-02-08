@@ -50,7 +50,7 @@ pub async fn generate_rss_feed(
 ) -> Result<String> {
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     let config = config.unwrap_or_else(|| RssFeedConfig {
         base_url: format!("harbor://peer/{}", identity.peer_id),
@@ -111,7 +111,7 @@ pub async fn get_peer_rss_feed(
 pub async fn get_rss_feed_url(identity_service: State<'_, Arc<IdentityService>>) -> Result<String> {
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("No identity found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
     // Return a shareable RSS feed URL
     Ok(format!("harbor://feed/{}", identity.peer_id))

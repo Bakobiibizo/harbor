@@ -89,7 +89,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -120,7 +120,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -152,7 +152,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Validate timestamp is within acceptable window (5 minutes)
         let now = chrono::Utc::now().timestamp();
@@ -243,7 +243,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify the requester's signature
         let requester_public_key = self
@@ -489,18 +489,15 @@ impl ContentSyncService {
         cursor: u64,
         limit: u32,
     ) -> Result<Vec<crate::db::Post>> {
-        // For now, just get posts and filter by lamport clock
-        // TODO: Add a more efficient query
-        let posts = PostsRepository::get_by_author(&self.db, author_peer_id, 1000, None)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let posts = PostsRepository::get_by_author_after_cursor(
+            &self.db,
+            author_peer_id,
+            cursor as i64,
+            limit as i64,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        let filtered: Vec<_> = posts
-            .into_iter()
-            .filter(|p| p.lamport_clock as u64 > cursor)
-            .take(limit as usize)
-            .collect();
-
-        Ok(filtered)
+        Ok(posts)
     }
 
     /// Store sync cursor for a peer
@@ -508,7 +505,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // We are syncing *from* peer_id, so the cursor is keyed by (source_peer_id=peer_id)
         // for our local identity.

@@ -31,7 +31,7 @@ impl NetworkState {
             self.handle.read().await;
         guard
             .clone()
-            .ok_or_else(|| AppError::Network("Network not initialized".to_string()))
+            .ok_or_else(|| AppError::NetworkNotInitialized("Network not initialized".to_string()))
     }
 }
 
@@ -87,7 +87,7 @@ pub async fn start_network(
 ) -> Result<(), AppError> {
     // Check if identity is unlocked
     if !identity_service.is_unlocked() {
-        return Err(AppError::PermissionDenied(
+        return Err(AppError::IdentityLocked(
             "Identity must be unlocked to start network".to_string(),
         ));
     }
@@ -237,7 +237,7 @@ pub async fn get_shareable_addresses(
     let peer_id = if let Ok(Some(identity)) = identity_service.get_identity_info() {
         identity.peer_id
     } else {
-        return Err(AppError::NotFound("Identity not found".to_string()));
+        return Err(AppError::IdentityNotFound("Identity not found".to_string()));
     };
 
     let mut addresses = Vec::new();
@@ -339,11 +339,11 @@ pub async fn get_shareable_contact_string(
     // Get our identity with keys
     let identity = identity_service
         .get_identity()?
-        .ok_or_else(|| AppError::NotFound("Identity not found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("Identity not found".to_string()))?;
 
     let keys = identity_service
         .get_identity_info()?
-        .ok_or_else(|| AppError::NotFound("Identity keys not found".to_string()))?;
+        .ok_or_else(|| AppError::IdentityNotFound("Identity keys not found".to_string()))?;
 
     // Get the best address to share
     let multiaddr = if !stats.relay_addresses.is_empty() {

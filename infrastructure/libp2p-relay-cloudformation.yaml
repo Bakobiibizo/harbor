@@ -133,12 +133,6 @@ Resources:
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay UDP/QUIC
-        # SSH access (only if key pair provided)
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
-          Description: SSH access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -146,6 +140,18 @@ Resources:
       Tags:
         - Key: Name
           Value: harbor-relay-sg
+
+  # SSH access - only created when a key pair is configured
+  SSHIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasKeyPair
+    Properties:
+      GroupId: !Ref RelaySecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 0.0.0.0/0
+      Description: SSH access (only when key pair is provided)
 
   # SSM Parameter to store the relay address (so users can easily find it)
   RelayAddressParameter:

@@ -98,7 +98,9 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       }));
 
       // Refresh conversations to update last message
-      get().loadConversations();
+      get()
+        .loadConversations()
+        .catch((err) => console.error('Failed to refresh conversations after send:', err));
 
       return result;
     } catch (error) {
@@ -111,7 +113,9 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
   setActiveConversation: (peerId: string | null) => {
     set({ activeConversation: peerId });
     if (peerId) {
-      get().loadMessages(peerId);
+      get()
+        .loadMessages(peerId)
+        .catch((err) => console.error('Failed to load messages for active conversation:', err));
     }
   },
 
@@ -137,7 +141,11 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
     }));
 
     // Refresh conversations to update last message
-    get().loadConversations();
+    get()
+      .loadConversations()
+      .catch((err) =>
+        console.error('Failed to refresh conversations after incoming message:', err),
+      );
   },
 
   // Mark conversation as read
@@ -145,7 +153,9 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
     try {
       await invoke('mark_conversation_read', { peerId });
       // Refresh conversations to update unread count
-      get().loadConversations();
+      get()
+        .loadConversations()
+        .catch((err) => console.error('Failed to refresh conversations after marking read:', err));
     } catch (error) {
       console.error('Failed to mark conversation read:', error);
     }

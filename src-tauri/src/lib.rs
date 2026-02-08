@@ -150,7 +150,6 @@ pub fn run() {
                 contacts_service.clone(),
             ));
             let calling_service = Arc::new(CallingService::new(
-                db.clone(),
                 identity_service.clone(),
                 contacts_service.clone(),
                 permissions_service.clone(),

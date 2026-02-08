@@ -77,7 +77,7 @@ struct MockPeer {
     x25519_public: [u8; 32],
     /// libp2p peer ID
     peer_id: PeerId,
-    /// Message counter for auto-replies
+    /// Message counter for auto-replies (used only for cycling responses)
     message_counter: u64,
     /// Lamport clock for message ordering
     lamport_clock: u64,
@@ -140,16 +140,11 @@ impl MockPeer {
             signature: vec![],
         };
 
-        // Sign the response
+        // Sign the response using the same payload format as the Harbor app:
+        // "{peer_id}:{display_name}:{timestamp}"
         let sign_data = format!(
-            "{}:{}:{}:{}:{}:{:?}:{}",
-            response.peer_id,
-            hex::encode(&response.public_key),
-            hex::encode(&response.x25519_public),
-            response.display_name,
-            response.avatar_hash.as_deref().unwrap_or(""),
-            response.bio,
-            response.timestamp,
+            "{}:{}:{}",
+            response.peer_id, response.display_name, response.timestamp,
         );
 
         let signature = self.signing_key.sign(sign_data.as_bytes());
@@ -190,9 +185,14 @@ impl MockPeer {
         // Use shared secret as AES-256-GCM key
         let cipher = Aes256Gcm::new(GenericArray::from_slice(shared_secret.as_bytes()));
 
-        // Generate nonce from counter (12 bytes: 4 zero bytes + 8 byte counter)
-        self.message_counter += 1;
-        let nonce_counter = self.message_counter;
+        // Generate a random nonce_counter (u64) and derive the 12-byte AES-GCM
+        // nonce from it, matching Harbor's nonce_from_counter() layout:
+        //   bytes [0..4]  = 0x00 (reserved)
+        //   bytes [4..12] = counter as big-endian u64
+        //
+        // Using a cryptographically random counter avoids the predictability and
+        // nonce-reuse vulnerabilities of a simple incrementing counter.
+        let nonce_counter: u64 = rand::random();
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes[4..12].copy_from_slice(&nonce_counter.to_be_bytes());
         let nonce = GenericArray::from_slice(&nonce_bytes);

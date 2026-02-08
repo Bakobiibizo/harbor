@@ -15,6 +15,19 @@ The relay server enables NAT traversal for Harbor users. When users are behind N
 2. **(Optional) EC2 Key Pair** - For SSH access to the server
    - Create at: AWS Console → EC2 → Key Pairs → Create key pair
 
+### How It Works
+
+The CloudFormation template provisions an EC2 instance with a UserData script that:
+
+1. Installs Rust and build dependencies on Amazon Linux 2023
+2. Clones the Harbor repository from GitHub
+3. Compiles the relay server binary from source using `cargo build --release`
+4. Installs the binary to `/usr/local/bin/harbor-relay`
+5. Creates and starts a systemd service (`libp2p-relay`)
+6. Extracts the relay's peer ID and writes the full relay address to SSM Parameter Store
+
+The initial build takes approximately 5 minutes. After that, the relay runs as a native systemd service with automatic restarts.
+
 ### One-Click Deploy
 
 Click the button for your preferred region:
@@ -57,24 +70,31 @@ aws cloudformation describe-stacks --stack-name harbor-relay \
 
 After deployment, you need to get the relay's peer ID to use it in Harbor:
 
-**Option 1: AWS Systems Manager (no SSH needed)**
+**Option 1: SSM Parameter Store (easiest, no SSH needed)**
+
+The CloudFormation stack automatically writes the full relay address (including peer ID) to SSM Parameter Store. Check the stack outputs for a direct link, or run:
+```bash
+aws ssm get-parameter --name "/harbor/relay-address" --query 'Parameter.Value' --output text
+```
+
+**Option 2: AWS Systems Manager Session (no SSH needed)**
 ```bash
 # Connect to the instance
 aws ssm start-session --target <instance-id>
 
 # Then run:
-docker logs harbor-relay 2>&1 | grep "Peer ID"
+journalctl -u libp2p-relay --no-pager | grep "Peer ID"
 ```
 
-**Option 2: SSH (if you provided a key pair)**
+**Option 3: SSH (if you provided a key pair)**
 ```bash
 ssh -i your-key.pem ec2-user@<public-ip>
-docker logs harbor-relay 2>&1 | grep "Peer ID"
+journalctl -u libp2p-relay --no-pager | grep "Peer ID"
 ```
 
 The output will look like:
 ```
-Peer ID: 12D3KooWAbCdEfGhIjKlMnOpQrStUvWxYz...
+Local Peer ID: 12D3KooWAbCdEfGhIjKlMnOpQrStUvWxYz...
 ```
 
 ### Adding Your Relay to Harbor
@@ -113,10 +133,7 @@ const PUBLIC_RELAYS: &[&str] = &[
 
 **View logs:**
 ```bash
-# SSH into the server, then:
-docker logs -f harbor-relay
-
-# Or via SSM:
+# Via SSM or SSH into the server, then:
 journalctl -u libp2p-relay -f
 ```
 
@@ -129,20 +146,20 @@ systemctl status libp2p-relay
 
 **Relay not starting:**
 ```bash
-# Check Docker status
-systemctl status docker
-
 # Check relay service status
 systemctl status libp2p-relay
 
 # View detailed logs
 journalctl -u libp2p-relay -n 100
+
+# Check the setup log for build or startup errors
+cat /var/log/user-data.log
 ```
 
 **Can't connect from Harbor:**
 1. Verify security group allows inbound on port 4001 (TCP and UDP)
 2. Check that the peer ID in your multiaddress is correct
-3. Ensure the relay container is running: `docker ps`
+3. Ensure the relay service is running: `systemctl status libp2p-relay`
 
 **High memory usage:**
 Reduce `MaxReservations` and `MaxCircuits` parameters in the CloudFormation stack.
@@ -168,7 +185,7 @@ This will remove the EC2 instance, VPC, security groups, and all associated reso
 │  │  │  ┌───────────────────────────────────────┐  │  │  │
 │  │  │  │         EC2 Instance (t2.micro)       │  │  │  │
 │  │  │  │  ┌─────────────────────────────────┐  │  │  │  │
-│  │  │  │  │   Docker: libp2p-relay-daemon   │  │  │  │  │
+│  │  │  │  │   harbor-relay (systemd service) │  │  │  │  │
 │  │  │  │  │   Port 4001 (TCP/UDP)           │  │  │  │  │
 │  │  │  │  └─────────────────────────────────┘  │  │  │  │
 │  │  │  └───────────────────────────────────────┘  │  │  │

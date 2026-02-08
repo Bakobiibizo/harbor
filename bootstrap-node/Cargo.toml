@@ -1,6 +1,6 @@
 [package]
 name = "harbor-bootstrap-node"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Bootstrap/rendezvous node for Harbor P2P network"
 

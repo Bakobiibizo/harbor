@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { useState, useMemo, useRef, useEffect, KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -13,6 +13,7 @@ import {
   XIcon,
 } from '../components/icons';
 import { useContactsStore, useMessagingStore } from '../stores';
+import { getInitials, getContactColor, formatRelativeTime } from '../utils/formatting';
 
 // Conversation menu component
 function ConversationMenu({
@@ -137,23 +138,6 @@ interface UnifiedConversation {
   isReal: boolean; // true = real contact, false = mock
 }
 
-// Generate consistent avatar color from peer ID
-function getContactColor(peerId: string): string {
-  const colors = [
-    'linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))',
-    'linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))',
-    'linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))',
-    'linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))',
-    'linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))',
-    'linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))',
-  ];
-  let hash = 0;
-  for (let i = 0; i < peerId.length; i++) {
-    hash = peerId.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return colors[Math.abs(hash) % colors.length];
-}
-
 export function ChatPage() {
   const navigate = useNavigate();
 
@@ -213,23 +197,25 @@ export function ChatPage() {
   }, [messageSearchQuery]);
 
   // Build conversation list from real contacts
-  const unifiedConversations: UnifiedConversation[] = contacts.map(
-    (contact): UnifiedConversation => {
-      const realConv = realConversations.find((c) => c.peerId === contact.peerId);
-      return {
-        id: `real-${contact.peerId}`,
-        peerId: contact.peerId,
-        name: contact.displayName,
-        online: true, // Assume online for now - would need presence tracking
-        avatarGradient: getContactColor(contact.peerId),
-        lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
-        timestamp: realConv
-          ? new Date(realConv.lastMessageAt * 1000)
-          : new Date(contact.addedAt * 1000),
-        unread: realConv?.unreadCount || 0,
-        isReal: true,
-      };
-    },
+  const unifiedConversations = useMemo<UnifiedConversation[]>(
+    () =>
+      contacts.map((contact): UnifiedConversation => {
+        const realConv = realConversations.find((c) => c.peerId === contact.peerId);
+        return {
+          id: `real-${contact.peerId}`,
+          peerId: contact.peerId,
+          name: contact.displayName,
+          online: true, // Assume online for now - would need presence tracking
+          avatarGradient: getContactColor(contact.peerId),
+          lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
+          timestamp: realConv
+            ? new Date(realConv.lastMessageAt * 1000)
+            : new Date(contact.addedAt * 1000),
+          unread: realConv?.unreadCount || 0,
+          isReal: true,
+        };
+      }),
+    [contacts, realConversations],
   );
 
   const scrollToBottom = () => {
@@ -243,15 +229,19 @@ export function ChatPage() {
   const currentMessages = selectedConv ? realMessages[selectedConv.peerId] || [] : [];
 
   // Calculate search results
-  const searchResults = messageSearchQuery.trim()
-    ? currentMessages
-        .map((message, index) => ({
-          message,
-          index,
-          content: message.content.toLowerCase(),
-        }))
-        .filter((item) => item.content.includes(messageSearchQuery.toLowerCase()))
-    : [];
+  const searchResults = useMemo(
+    () =>
+      messageSearchQuery.trim()
+        ? currentMessages
+            .map((message, index) => ({
+              message,
+              index,
+              content: message.content.toLowerCase(),
+            }))
+            .filter((item) => item.content.includes(messageSearchQuery.toLowerCase()))
+        : [],
+    [messageSearchQuery, currentMessages],
+  );
 
   // Navigate search results
   const navigateSearchResults = (direction: 'next' | 'prev') => {
@@ -276,30 +266,10 @@ export function ChatPage() {
     scrollToBottom();
   }, [currentMessages.length]);
 
-  const formatTime = (date: Date) => {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const mins = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (mins < 1) return 'now';
-    if (mins < 60) return `${mins}m`;
-    if (hours < 24) return `${hours}h`;
-    return `${days}d`;
-  };
-
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
-
-  const filteredConversations = unifiedConversations.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()),
+  const filteredConversations = useMemo(
+    () =>
+      unifiedConversations.filter((c) => c.name.toLowerCase().includes(searchQuery.toLowerCase())),
+    [unifiedConversations, searchQuery],
   );
 
   const handleSendMessage = async () => {
@@ -479,7 +449,7 @@ export function ChatPage() {
                           className="text-xs flex-shrink-0 ml-2"
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                         >
-                          {formatTime(conversation.timestamp)}
+                          {formatRelativeTime(conversation.timestamp)}
                         </span>
                       </div>
                       <div className="flex items-center justify-between">

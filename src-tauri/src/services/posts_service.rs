@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::db::{
     Capability, Database, Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
+    RecordPostEventParams,
 };
 use crate::error::{AppError, Result};
 use crate::services::{
@@ -82,7 +83,7 @@ impl PostsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let post_id = Uuid::new_v4().to_string();
         let lamport_clock =
@@ -125,14 +126,16 @@ impl PostsService {
         let payload_cbor = signable.signable_bytes()?;
         PostsRepository::record_post_event(
             &self.db,
-            &event_id,
-            "created",
-            &post_id,
-            &identity.peer_id,
-            lamport_clock as i64,
-            created_at,
-            &payload_cbor,
-            &signature,
+            &RecordPostEventParams {
+                event_id: &event_id,
+                event_type: "created",
+                post_id: &post_id,
+                author_peer_id: &identity.peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp: created_at,
+                payload_cbor: &payload_cbor,
+                signature: &signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -158,7 +161,7 @@ impl PostsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we own the post
         let post = PostsRepository::get_by_post_id(&self.db, post_id)
@@ -203,14 +206,16 @@ impl PostsService {
         let payload_cbor = signable.signable_bytes()?;
         PostsRepository::record_post_event(
             &self.db,
-            &event_id,
-            "updated",
-            post_id,
-            &identity.peer_id,
-            lamport_clock as i64,
-            updated_at,
-            &payload_cbor,
-            &signature,
+            &RecordPostEventParams {
+                event_id: &event_id,
+                event_type: "updated",
+                post_id,
+                author_peer_id: &identity.peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp: updated_at,
+                payload_cbor: &payload_cbor,
+                signature: &signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -229,7 +234,7 @@ impl PostsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we own the post
         let post = PostsRepository::get_by_post_id(&self.db, post_id)
@@ -267,14 +272,16 @@ impl PostsService {
         let payload_cbor = signable.signable_bytes()?;
         PostsRepository::record_post_event(
             &self.db,
-            &event_id,
-            "deleted",
-            post_id,
-            &identity.peer_id,
-            lamport_clock as i64,
-            deleted_at,
-            &payload_cbor,
-            &signature,
+            &RecordPostEventParams {
+                event_id: &event_id,
+                event_type: "deleted",
+                post_id,
+                author_peer_id: &identity.peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp: deleted_at,
+                payload_cbor: &payload_cbor,
+                signature: &signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -305,7 +312,7 @@ impl PostsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we own the post
         let post = PostsRepository::get_by_post_id(&self.db, post_id)
@@ -353,7 +360,7 @@ impl PostsService {
         let _identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         PostsRepository::get_local_posts(&self.db, limit, before_timestamp)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
@@ -370,7 +377,7 @@ impl PostsService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         if author_peer_id != identity.peer_id {
             // Check if they've granted us WallRead permission
@@ -495,14 +502,16 @@ impl PostsService {
         let payload_cbor = signable.signable_bytes()?;
         PostsRepository::record_post_event(
             &self.db,
-            &event_id,
-            "received",
-            post_id,
-            author_peer_id,
-            lamport_clock as i64,
-            created_at,
-            &payload_cbor,
-            signature,
+            &RecordPostEventParams {
+                event_id: &event_id,
+                event_type: "received",
+                post_id,
+                author_peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp: created_at,
+                payload_cbor: &payload_cbor,
+                signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -577,14 +586,16 @@ impl PostsService {
         let payload_cbor = signable.signable_bytes()?;
         PostsRepository::record_post_event(
             &self.db,
-            &event_id,
-            "updated",
-            post_id,
-            author_peer_id,
-            lamport_clock as i64,
-            updated_at,
-            &payload_cbor,
-            signature,
+            &RecordPostEventParams {
+                event_id: &event_id,
+                event_type: "updated",
+                post_id,
+                author_peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp: updated_at,
+                payload_cbor: &payload_cbor,
+                signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -652,14 +663,16 @@ impl PostsService {
         let payload_cbor = signable.signable_bytes()?;
         PostsRepository::record_post_event(
             &self.db,
-            &event_id,
-            "deleted",
-            post_id,
-            author_peer_id,
-            lamport_clock as i64,
-            deleted_at,
-            &payload_cbor,
-            signature,
+            &RecordPostEventParams {
+                event_id: &event_id,
+                event_type: "deleted",
+                post_id,
+                author_peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp: deleted_at,
+                payload_cbor: &payload_cbor,
+                signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 

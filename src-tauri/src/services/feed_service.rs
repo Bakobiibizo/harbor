@@ -49,7 +49,7 @@ impl FeedService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Get all peer IDs who granted us WallRead
         let permissions = self.permissions_service.get_received_permissions()?;
@@ -140,7 +140,7 @@ impl FeedService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Check permission if not our own wall
         if author_peer_id != identity.peer_id
