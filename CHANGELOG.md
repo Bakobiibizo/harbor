@@ -109,3 +109,36 @@
 - feat: split relay into dummy and community modes with --community flag
 - feat: add community boards system with relay-side SQLite storage
 
+## 2026-02-08 - v0.1.2
+
+- updated relay network
+- fixing p2p networking
+- fixed p2p direct communication
+- missed bump
+- chore: release 0.2.0
+- Merge pull request #63 from Bakobiibizo/feat/relay-split-community-mode
+- Revert "chore: bump version to 0.1.2"
+- chore: bump version to 0.1.2
+- chore: update relay binary and SHA256 hashes
+- feat: add relay build scripts and dev commands
+- style: cargo fmt
+- style: format with prettier and eslint
+- feat: add cross-platform dev setup scripts
+- fix: align tauri crate versions with npm packages (2.10.x)
+- feat: add community relay CloudFormation template and split deploy UI
+- feat: split relay into dummy and community modes with --community flag
+- feat: add community boards system with relay-side SQLite storage
+- issue in ci
+- dev ci
+- dev ci
+- Merge branch 'main' into release-candidate
+- fixing merge
+- chore: release v0.1.1
+- Merge pull request #61 from Bakobiibizo/fix/p2p-communciations
+- Merge branch 'release-candidate' into fix/p2p-communciations
+- dev ci
+- devci
+- added updater
+- fixed p2p communications
+- fix: updating p2p communications to work with the relay and simplify the network menu options
+

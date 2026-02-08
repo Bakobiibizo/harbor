@@ -1,6 +1,6 @@
 [package]
 name = "harbor"
-version = "0.2.0"
+version = "0.1.2"
 description = "A decentralized P2P chat application with local-first data and permission-based sharing"
 authors = ["Harbor Contributors"]
 edition = "2021"
