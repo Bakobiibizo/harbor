@@ -238,15 +238,16 @@ Resources:
           echo "RelayPort: \${RelayPort}"
 
           EXPECTED_SHA256="c5dcb143d69558107ced27a0dfd30542a88a69906aa53404d9b31ef97a1c66a3"
+          SERVICE_NAME="\${AWS::StackName}"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
 
           # Download pre-compiled binary
           echo "Downloading pre-compiled relay binary..."
-          curl -L -o /usr/local/bin/harbor-relay "$BINARY_URL"
+          curl -L -o /usr/local/bin/$SERVICE_NAME "$BINARY_URL"
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | cut -d ' ' -f 1)
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/$SERVICE_NAME | cut -d ' ' -f 1)
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
@@ -255,12 +256,11 @@ Resources:
           fi
           echo "SHA256 verified OK"
 
-          chmod +x /usr/local/bin/harbor-relay
+          chmod +x /usr/local/bin/$SERVICE_NAME
 
-          # The relay binary auto-generates an identity key on first run
-          # at ~/.config/harbor-relay/id.key if none exists.
+          # The relay binary auto-generates an identity key on first run.
           # This identity persists across service restarts.
-          mkdir -p /root/.config/harbor-relay
+          mkdir -p /root/.config/$SERVICE_NAME
 
           # Get public IP using IMDSv2
           echo "Getting public IP..."
@@ -275,9 +275,9 @@ Resources:
 
           # Create systemd service
           echo "Creating systemd service..."
-          cat > /etc/systemd/system/libp2p-relay.service << SERVICEEOF
+          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
           [Unit]
-          Description=Harbor libp2p Relay Server
+          Description=Harbor Relay Server ($SERVICE_NAME)
           After=network.target
 
           [Service]
@@ -285,7 +285,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/harbor-relay --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
           StandardOutput=journal
           StandardError=journal
 
@@ -296,21 +296,21 @@ Resources:
           # Start the relay service
           echo "Starting relay service..."
           systemctl daemon-reload
-          systemctl enable libp2p-relay
-          systemctl start libp2p-relay
+          systemctl enable $SERVICE_NAME
+          systemctl start $SERVICE_NAME
 
           # Wait for startup
           echo "Waiting for relay to start (10 seconds)..."
           sleep 10
 
-          systemctl status libp2p-relay --no-pager || true
+          systemctl status $SERVICE_NAME --no-pager || true
 
           # Extract peer ID from service logs (auto-generated on first run)
           echo "Getting peer ID from logs..."
           PEER_ID=""
           for i in {1..30}; do
             echo "Attempt $i to get peer ID..."
-            PEER_ID=$(journalctl -u libp2p-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
+            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
             if [ -n "$PEER_ID" ]; then
               echo "Found Peer ID: $PEER_ID"
               break
@@ -635,15 +635,16 @@ Resources:
           echo "CommunityName: \${CommunityName}"
 
           EXPECTED_SHA256="9425ab1d055fa3ceb4f2cc6eba6b29571e12fe2da868f305374d000d3892a05d"
+          SERVICE_NAME="\${AWS::StackName}"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
 
           # Download pre-compiled binary
           echo "Downloading pre-compiled relay binary..."
-          curl -L -o /usr/local/bin/harbor-relay "$BINARY_URL"
+          curl -L -o /usr/local/bin/$SERVICE_NAME "$BINARY_URL"
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | cut -d ' ' -f 1)
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/$SERVICE_NAME | cut -d ' ' -f 1)
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
@@ -652,10 +653,10 @@ Resources:
           fi
           echo "SHA256 verified OK"
 
-          chmod +x /usr/local/bin/harbor-relay
+          chmod +x /usr/local/bin/$SERVICE_NAME
 
-          mkdir -p /root/.config/harbor-relay
-          mkdir -p /var/lib/harbor-relay/data
+          mkdir -p /root/.config/$SERVICE_NAME
+          mkdir -p /var/lib/$SERVICE_NAME/data
 
           # Get public IP using IMDSv2
           echo "Getting public IP..."
@@ -670,9 +671,9 @@ Resources:
 
           # Create systemd service (full community mode)
           echo "Creating systemd service..."
-          cat > /etc/systemd/system/harbor-relay.service << SERVICEEOF
+          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
           [Unit]
-          Description=Harbor Community Relay Server
+          Description=Harbor Community Relay Server ($SERVICE_NAME)
           After=network.target
 
           [Service]
@@ -680,7 +681,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/harbor-relay --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir /var/lib/harbor-relay/data --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir /var/lib/$SERVICE_NAME/data --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
           StandardOutput=journal
           StandardError=journal
 
@@ -689,15 +690,15 @@ Resources:
           SERVICEEOF
 
           systemctl daemon-reload
-          systemctl enable harbor-relay
-          systemctl start harbor-relay
+          systemctl enable $SERVICE_NAME
+          systemctl start $SERVICE_NAME
 
           sleep 10
-          systemctl status harbor-relay --no-pager || true
+          systemctl status $SERVICE_NAME --no-pager || true
 
           PEER_ID=""
           for i in {1..30}; do
-            PEER_ID=$(journalctl -u harbor-relay --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
+            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
             if [ -n "$PEER_ID" ]; then
               echo "Found Peer ID: $PEER_ID"
               break
