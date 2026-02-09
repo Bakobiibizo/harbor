@@ -7,9 +7,8 @@ use uuid::Uuid;
 use crate::db::Capability;
 use crate::error::{AppError, Result};
 use crate::services::{
-    verify, ContactsService, IdentityService, PermissionsService,
-    SignableSignalingAnswer, SignableSignalingHangup, SignableSignalingIce,
-    SignableSignalingOffer,
+    verify, ContactsService, IdentityService, PermissionsService, SignableSignalingAnswer,
+    SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
 };
 
 /// Call state

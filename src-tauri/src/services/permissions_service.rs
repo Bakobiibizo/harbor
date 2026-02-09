@@ -5,8 +5,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::db::{
-    Capability, Database, GrantData, Permission, PermissionsRepository,
-    RecordPermissionEventParams,
+    Capability, Database, GrantData, Permission, PermissionsRepository, RecordPermissionEventParams,
 };
 use crate::error::{AppError, Result};
 use crate::services::{

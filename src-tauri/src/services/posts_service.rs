@@ -5,8 +5,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::db::{
-    Capability, Database, Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
-    RecordPostEventParams,
+    Capability, Database, Post, PostData, PostMedia, PostMediaData, PostVisibility,
+    PostsRepository, RecordPostEventParams,
 };
 use crate::error::{AppError, Result};
 use crate::services::{
