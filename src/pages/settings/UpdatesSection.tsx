@@ -1,13 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import toast from 'react-hot-toast';
 import { checkForUpdate, downloadAndInstallUpdate } from '../../services/updater';
 import type { UpdateInfo } from '../../services/updater';
 
 export function UpdatesSection() {
+  const [appVersion, setAppVersion] = useState('0.0.0');
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateError, setUpdateError] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
 
   const handleCheckForUpdate = async () => {
     setIsCheckingUpdate(true);
@@ -73,7 +79,7 @@ export function UpdatesSection() {
           className="text-2xl font-mono font-semibold"
           style={{ color: 'hsl(var(--harbor-primary))' }}
         >
-          v0.1.0
+          v{appVersion}
         </p>
         <p className="text-sm mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           Installed on this device
