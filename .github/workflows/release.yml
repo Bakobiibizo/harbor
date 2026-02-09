@@ -73,7 +73,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Rust stable
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -89,12 +89,19 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Load signing secrets from 1Password
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_BAKO }}
+          TAURI_SIGNING_PRIVATE_KEY: op://bako/TAURI_SIGNING_PRIVATE_KEY/password
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}

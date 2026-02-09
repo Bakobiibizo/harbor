@@ -22,7 +22,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -35,12 +35,10 @@
   "identifier": "io.harbor.desktop",
   "plugins": {
     "updater": {
-      "active": false,
       "endpoints": [
         "https://github.com/Bakobiibizo/harbor/releases/latest/download/latest.json"
       ],
-      "pubkey": "UPDATER_PUBKEY_PLACEHOLDER",
-      "_note": "Updater is disabled until a real signing keypair is generated. Run `tauri signer generate -w ~/.tauri/harbor.key` and replace the pubkey above."
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE0QkFDOTAwMkUzQzIyODkKUldTSklqd3VBTW02RkdtNFhYeTd5USs1SWR0VWxHRzA4K3ZwaGdRQ2lXWXk5YTZUaUhvQzZxeU0K"
     }
   },
   "productName": "Harbor",
