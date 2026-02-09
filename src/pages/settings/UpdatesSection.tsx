@@ -12,7 +12,9 @@ export function UpdatesSection() {
   const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => {});
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => {});
   }, []);
 
   const handleCheckForUpdate = async () => {

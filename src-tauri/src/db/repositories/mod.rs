@@ -13,8 +13,7 @@ pub use contacts_repo::{Contact, ContactData, ContactsRepository};
 pub use identity_repo::IdentityRepository;
 pub use likes_repo::{LikeData, LikeSummary, LikesRepository, PostLike};
 pub use messages_repo::{
-    Conversation, Message, MessageData, MessageStatus, MessagesRepository,
-    RecordMessageEventParams,
+    Conversation, Message, MessageData, MessageStatus, MessagesRepository, RecordMessageEventParams,
 };
 pub use permissions_repo::{
     Capability, GrantData, Permission, PermissionEvent, PermissionsRepository,

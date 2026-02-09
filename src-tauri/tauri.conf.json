@@ -22,7 +22,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": "v2",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -35,7 +35,6 @@
   "identifier": "io.harbor.desktop",
   "plugins": {
     "updater": {
-      "active": true,
       "endpoints": [
         "https://github.com/Bakobiibizo/harbor/releases/latest/download/latest.json"
       ],
@@ -43,6 +42,5 @@
     }
   },
   "productName": "Harbor",
-  "version": "0.1.2"
-
+  "version": "0.1.3"
 }

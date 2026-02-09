@@ -142,3 +142,8 @@
 - fixed p2p communications
 - fix: updating p2p communications to work with the relay and simplify the network menu options
 
+## 2026-02-09 - v0.1.3
+
+- style: fix pre-existing Rust formatting issues
+- feat: enable Tauri v2 updater with 1Password signing secrets
+
