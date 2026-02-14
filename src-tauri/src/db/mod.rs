@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod repositories;
+pub mod sql_utils;
 
 pub use connection::Database;
 pub use repositories::{
@@ -7,5 +8,5 @@ pub use repositories::{
     Conversation, GrantData, Message, MessageData, MessageStatus, MessagesRepository, Permission,
     PermissionEvent, PermissionsRepository, Post, PostData, PostMedia, PostMediaData,
     PostVisibility, PostsRepository, RecordMessageEventParams, RecordPermissionEventParams,
-    RecordPostEventParams, RelayCommunity,
+    RecordPostEventParams, RelayCommunity, UpsertBoardPostParams,
 };

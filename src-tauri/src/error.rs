@@ -122,6 +122,12 @@ pub enum AppError {
     #[error("Cryptography error: {0}")]
     Crypto(String),
 
+    #[error("Encryption error: {0}")]
+    CryptoEncryption(String),
+
+    #[error("Decryption error: {0}")]
+    CryptoDecryption(String),
+
     #[error("Identity error: {0}")]
     IdentityLocked(String),
 
@@ -186,6 +192,8 @@ impl AppError {
             AppError::Database(_) => ErrorCode::DatabaseError,
             AppError::DatabaseString(_) => ErrorCode::DatabaseError,
             AppError::Crypto(_) => ErrorCode::CryptoError,
+            AppError::CryptoEncryption(_) => ErrorCode::CryptoEncryption,
+            AppError::CryptoDecryption(_) => ErrorCode::CryptoDecryption,
             AppError::IdentityLocked(_) => ErrorCode::IdentityLocked,
             AppError::IdentityNotFound(_) => ErrorCode::IdentityNotFound,
             AppError::IdentityInvalidPassphrase(_) => ErrorCode::IdentityInvalidPassphrase,

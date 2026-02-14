@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { boardsService } from '../services/boards';
+import { createLogger } from '../utils/logger';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
+
+const log = createLogger('BoardsStore');
 
 interface BoardsState {
   // State
@@ -43,7 +46,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
       const communities = await boardsService.getCommunities();
       set({ communities, isLoading: false });
     } catch (error) {
-      console.error('Failed to load communities:', error);
+      log.error('Failed to load communities', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -56,7 +59,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
       const communities = await boardsService.getCommunities();
       set({ communities, isLoading: false });
     } catch (error) {
-      console.error('Failed to join community:', error);
+      log.error('Failed to join community', error);
       set({ error: String(error), isLoading: false });
       throw error;
     }
@@ -75,7 +78,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
           : {}),
       });
     } catch (error) {
-      console.error('Failed to leave community:', error);
+      log.error('Failed to leave community', error);
       set({ error: String(error) });
       throw error;
     }
@@ -99,10 +102,10 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
       if (defaultBoard) {
         get()
           .loadBoardPosts()
-          .catch((err) => console.error('Failed to auto-load board posts:', err));
+          .catch((err) => log.error('Failed to auto-load board posts', err));
       }
     } catch (error) {
-      console.error('Failed to load boards:', error);
+      log.error('Failed to load boards', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -111,7 +114,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
     set({ activeBoard: board, boardPosts: [], hasMore: true });
     get()
       .loadBoardPosts()
-      .catch((err) => console.error('Failed to load posts for selected board:', err));
+      .catch((err) => log.error('Failed to load posts for selected board', err));
   },
 
   loadBoardPosts: async (limit: number = 50) => {
@@ -131,7 +134,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
         hasMore: posts.length === limit,
       });
     } catch (error) {
-      console.error('Failed to load board posts:', error);
+      log.error('Failed to load board posts', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -155,7 +158,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
         hasMore: posts.length === limit,
       });
     } catch (error) {
-      console.error('Failed to load more posts:', error);
+      log.error('Failed to load more posts', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -174,9 +177,9 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
       await boardsService.syncBoard(activeCommunity.relayPeerId, activeBoard.boardId);
       get()
         .loadBoardPosts()
-        .catch((err) => console.error('Failed to reload posts after submit:', err));
+        .catch((err) => log.error('Failed to reload posts after submit', err));
     } catch (error) {
-      console.error('Failed to submit post:', error);
+      log.error('Failed to submit post', error);
       set({ error: String(error) });
       throw error;
     }
@@ -193,7 +196,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
         boardPosts: state.boardPosts.filter((p) => p.postId !== postId),
       }));
     } catch (error) {
-      console.error('Failed to delete post:', error);
+      log.error('Failed to delete post', error);
       set({ error: String(error) });
       throw error;
     }
@@ -217,7 +220,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
         hasMore: posts.length === 50,
       });
     } catch (error) {
-      console.error('Failed to refresh board:', error);
+      log.error('Failed to refresh board', error);
       set({ error: String(error), isLoading: false });
     }
   },

@@ -1,18 +1,40 @@
 import { useState } from 'react';
-import { UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '../components/icons';
+import { UserIcon, LockIcon, ShieldIcon, NetworkIcon, ChevronRightIcon } from '../components/icons';
 import { PaletteIcon, DownloadIcon } from './settings/shared';
 import {
   ProfileSection,
   AppearanceSection,
+  NotificationsSection,
   SecuritySection,
+  NetworkSection,
   PrivacySection,
   UpdatesSection,
 } from './settings/index';
 
+// Bell icon for notifications section
+function BellIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"
+      />
+    </svg>
+  );
+}
+
 const sections = [
   { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
   { id: 'appearance', label: 'Appearance', icon: PaletteIcon, description: 'Theme and display' },
+  {
+    id: 'notifications',
+    label: 'Notifications',
+    icon: BellIcon,
+    description: 'Sound alerts',
+  },
   { id: 'security', label: 'Security', icon: LockIcon, description: 'Passphrase and keys' },
+  { id: 'network', label: 'Network', icon: NetworkIcon, description: 'Connectivity and relays' },
   { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
   { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
 ] as const;
@@ -20,7 +42,9 @@ const sections = [
 const sectionComponents: Record<string, React.FC> = {
   profile: ProfileSection,
   appearance: AppearanceSection,
+  notifications: NotificationsSection,
   security: SecuritySection,
+  network: NetworkSection,
   privacy: PrivacySection,
   updates: UpdatesSection,
 };

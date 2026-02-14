@@ -64,6 +64,18 @@ pub struct OutgoingFetchResponse {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for storing a remote post received from a peer
+pub struct RemotePostParams<'a> {
+    pub post_id: &'a str,
+    pub author_peer_id: &'a str,
+    pub content_type: &'a str,
+    pub content_text: Option<&'a str>,
+    pub visibility: &'a str,
+    pub lamport_clock: u64,
+    pub created_at: i64,
+    pub signature: &'a [u8],
+}
+
 impl ContentSyncService {
     /// Create a new content sync service
     pub fn new(
@@ -398,18 +410,15 @@ impl ContentSyncService {
     }
 
     /// Store a post received from a peer
-    #[allow(clippy::too_many_arguments)]
-    pub fn store_remote_post(
-        &self,
-        post_id: &str,
-        author_peer_id: &str,
-        content_type: &str,
-        content_text: Option<&str>,
-        visibility: &str,
-        lamport_clock: u64,
-        created_at: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn store_remote_post(&self, params: &RemotePostParams<'_>) -> Result<()> {
+        let post_id = params.post_id;
+        let author_peer_id = params.author_peer_id;
+        let content_type = params.content_type;
+        let content_text = params.content_text;
+        let visibility = params.visibility;
+        let lamport_clock = params.lamport_clock;
+        let created_at = params.created_at;
+        let signature = params.signature;
         // Verify the signature
         let author_public_key = self
             .contacts_service

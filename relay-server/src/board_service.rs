@@ -78,6 +78,47 @@ struct SignableBoardPostsRequest {
 
 impl Signable for SignableBoardPostsRequest {}
 
+/// Signable version of a wall post submission request (excludes request_signature).
+/// Must match `SignableWallPostSubmit` on the client side.
+#[derive(Debug, Clone, Serialize)]
+struct SignableWallPostSubmit {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallPostSubmit {}
+
+/// Signable version of a wall posts retrieval request (excludes signature).
+/// Must match `SignableGetWallPosts` on the client side.
+#[derive(Debug, Clone, Serialize)]
+struct SignableGetWallPosts {
+    pub requester_peer_id: String,
+    pub author_peer_id: String,
+    pub since_lamport_clock: i64,
+    pub limit: u32,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableGetWallPosts {}
+
+/// Signable version of a wall post delete (excludes signature).
+/// Must match `SignableWallPostDelete` on the client side.
+#[derive(Debug, Clone, Serialize)]
+struct SignableWallPostDelete {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallPostDelete {}
+
 // ============================================================
 // Signature verification helpers
 // ============================================================
@@ -215,24 +256,9 @@ impl BoardService {
             return Err(format!("Board {} does not exist", board_id));
         }
 
-        // Validate lamport clock is strictly greater than the last seen value for this author.
-        // This prevents replay attacks and ensures causal ordering of posts.
-        let last_seen_clock = self
-            .db
-            .get_last_lamport_clock(author_peer_id)
-            .map_err(|db_error| format!("Failed to query lamport clock: {}", db_error))?;
-        if lamport_clock <= last_seen_clock {
-            warn!(
-                "Rejected post {} from {}: lamport_clock {} <= last seen {}",
-                post_id, author_peer_id, lamport_clock, last_seen_clock
-            );
-            return Err(format!(
-                "Stale lamport clock: received {} but last seen was {}. Clock must be strictly increasing.",
-                lamport_clock, last_seen_clock
-            ));
-        }
-
-        // Verify signature against the author's stored public key
+        // Verify signature against the author's stored public key.
+        // This must happen before the database transaction so that we never
+        // write a post whose signature is invalid.
         let signable_post = SignableBoardPost {
             post_id: post_id.to_string(),
             board_id: board_id.to_string(),
@@ -252,8 +278,12 @@ impl BoardService {
                 format!("Signature verification failed: {}", verification_error)
             })?;
 
+        // Atomically validate the lamport clock, insert the post, and advance
+        // the clock high-water mark inside a single database transaction.
+        // This eliminates TOCTOU races where two concurrent submissions from
+        // the same author could both pass a non-atomic clock check.
         self.db
-            .insert_post(
+            .insert_post_with_clock_validation(
                 post_id,
                 board_id,
                 author_peer_id,
@@ -263,14 +293,13 @@ impl BoardService {
                 created_at,
                 signature,
             )
-            .map_err(|db_error| format!("Failed to insert post: {}", db_error))?;
-
-        // Persist the new high-water mark for this author's lamport clock.
-        // This must happen after the post is inserted so that the clock only
-        // advances when the post is actually accepted.
-        self.db
-            .update_lamport_clock(author_peer_id, lamport_clock)
-            .map_err(|db_error| format!("Failed to update lamport clock: {}", db_error))?;
+            .map_err(|validation_or_db_error| {
+                warn!(
+                    "Rejected post {} from {}: {}",
+                    post_id, author_peer_id, validation_or_db_error
+                );
+                validation_or_db_error
+            })?;
 
         info!(
             "Post {} accepted from {} on board {} (lamport_clock={})",
@@ -404,6 +433,190 @@ impl BoardService {
         }
 
         info!("Post {} deleted by {}", post_id, author_peer_id);
+        Ok(())
+    }
+
+    // ============================================================
+    // Wall post operations
+    // ============================================================
+
+    /// Submit a wall post for relay storage.
+    ///
+    /// Only the author can submit their own wall posts.  We verify the
+    /// `request_signature` (which covers the entire request payload including
+    /// the inner post `signature`) against the author's stored public key.
+    pub fn process_submit_wall_post(
+        &self,
+        author_peer_id: &str,
+        post_id: &str,
+        content_type: &str,
+        content_text: Option<&str>,
+        visibility: &str,
+        lamport_clock: i64,
+        created_at: i64,
+        signature: &[u8],
+        timestamp: i64,
+        request_signature: &[u8],
+    ) -> Result<(), String> {
+        // Check peer is known
+        if !self.db.is_peer_known(author_peer_id).unwrap_or(false) {
+            return Err("Peer not registered. Call RegisterPeer first.".to_string());
+        }
+
+        // Check not banned
+        if self.db.is_peer_banned(author_peer_id).unwrap_or(false) {
+            return Err("Peer is banned".to_string());
+        }
+
+        // Validate visibility
+        if visibility != "public" && visibility != "contacts" {
+            return Err(format!(
+                "Invalid visibility '{}': must be 'public' or 'contacts'",
+                visibility
+            ));
+        }
+
+        // Verify request_signature against the author's stored public key.
+        let signable_submit = SignableWallPostSubmit {
+            author_peer_id: author_peer_id.to_string(),
+            post_id: post_id.to_string(),
+            content_type: content_type.to_string(),
+            content_text: content_text.map(|t| t.to_string()),
+            visibility: visibility.to_string(),
+            lamport_clock,
+            created_at,
+            signature: signature.to_vec(),
+            timestamp,
+        };
+
+        verify_registered_peer_signature(
+            &self.db,
+            author_peer_id,
+            &signable_submit,
+            request_signature,
+        )
+        .map_err(|verification_error| {
+            warn!(
+                "SubmitWallPost signature verification failed for post {} by {}: {}",
+                post_id, author_peer_id, verification_error
+            );
+            format!("Signature verification failed: {}", verification_error)
+        })?;
+
+        // Store the wall post
+        self.db
+            .insert_wall_post(
+                post_id,
+                author_peer_id,
+                content_type,
+                content_text,
+                visibility,
+                lamport_clock,
+                created_at,
+                signature,
+            )
+            .map_err(|db_error| format!("Failed to store wall post: {}", db_error))?;
+
+        info!(
+            "Wall post {} stored for {} (visibility={}, lamport_clock={})",
+            post_id, author_peer_id, visibility, lamport_clock
+        );
+        Ok(())
+    }
+
+    /// Get wall posts for a specific author.
+    ///
+    /// Verifies the requester's signature before returning data.
+    /// The requester must be a registered peer.
+    pub fn process_get_wall_posts(
+        &self,
+        requester_peer_id: &str,
+        author_peer_id: &str,
+        since_lamport_clock: i64,
+        limit: u32,
+        timestamp: i64,
+        signature: &[u8],
+    ) -> Result<(Vec<crate::db::WallPostRow>, bool), String> {
+        // Verify the requester's signature
+        let signable_request = SignableGetWallPosts {
+            requester_peer_id: requester_peer_id.to_string(),
+            author_peer_id: author_peer_id.to_string(),
+            since_lamport_clock,
+            limit,
+            timestamp,
+        };
+
+        verify_registered_peer_signature(
+            &self.db,
+            requester_peer_id,
+            &signable_request,
+            signature,
+        )
+        .map_err(|verification_error| {
+            warn!(
+                "GetWallPosts signature verification failed for {}: {}",
+                requester_peer_id, verification_error
+            );
+            format!("Signature verification failed: {}", verification_error)
+        })?;
+
+        let clamped_limit = limit.min(100);
+        let posts = self
+            .db
+            .get_wall_posts(author_peer_id, since_lamport_clock, clamped_limit + 1)
+            .map_err(|db_error| format!("Failed to get wall posts: {}", db_error))?;
+
+        let has_more = posts.len() > clamped_limit as usize;
+        let posts = if has_more {
+            posts[..clamped_limit as usize].to_vec()
+        } else {
+            posts
+        };
+
+        Ok((posts, has_more))
+    }
+
+    /// Delete a wall post (author-only).
+    ///
+    /// Verifies the signature against the author's stored public key
+    /// before deleting.
+    pub fn process_delete_wall_post(
+        &self,
+        author_peer_id: &str,
+        post_id: &str,
+        timestamp: i64,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        // Verify signature against the author's stored public key
+        let signable_delete = SignableWallPostDelete {
+            author_peer_id: author_peer_id.to_string(),
+            post_id: post_id.to_string(),
+            timestamp,
+        };
+
+        verify_registered_peer_signature(&self.db, author_peer_id, &signable_delete, signature)
+            .map_err(|verification_error| {
+                warn!(
+                    "DeleteWallPost signature verification failed for post {} by {}: {}",
+                    post_id, author_peer_id, verification_error
+                );
+                format!("Signature verification failed: {}", verification_error)
+            })?;
+
+        let deleted = self
+            .db
+            .delete_wall_post(post_id, author_peer_id)
+            .map_err(|db_error| format!("Failed to delete wall post: {}", db_error))?;
+
+        if !deleted {
+            warn!(
+                "Wall post {} not found or not owned by {}",
+                post_id, author_peer_id
+            );
+            return Err("Wall post not found or not owned by you".to_string());
+        }
+
+        info!("Wall post {} deleted by {}", post_id, author_peer_id);
         Ok(())
     }
 }

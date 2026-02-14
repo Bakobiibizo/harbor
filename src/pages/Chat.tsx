@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { createLogger } from '../utils/logger';
 import {
   ChatIcon,
   SearchIcon,
@@ -14,6 +15,8 @@ import {
 } from '../components/icons';
 import { useContactsStore, useMessagingStore } from '../stores';
 import { getInitials, getContactColor, formatRelativeTime } from '../utils/formatting';
+
+const log = createLogger('Chat');
 
 // Conversation menu component
 function ConversationMenu({
@@ -180,8 +183,8 @@ export function ChatPage() {
 
   // Load real contacts and conversations on mount
   useEffect(() => {
-    loadContacts();
-    loadConversations();
+    loadContacts().catch((err) => log.error('Failed to load contacts', err));
+    loadConversations().catch((err) => log.error('Failed to load conversations', err));
   }, [loadContacts, loadConversations]);
 
   // Focus search input when search is shown
@@ -223,10 +226,16 @@ export function ChatPage() {
   };
 
   // Get selected conversation from unified list
-  const selectedConv = unifiedConversations.find((c) => c.id === selectedConversation);
+  const selectedConv = useMemo(
+    () => unifiedConversations.find((c) => c.id === selectedConversation),
+    [unifiedConversations, selectedConversation],
+  );
 
   // Get messages for current conversation
-  const currentMessages = selectedConv ? realMessages[selectedConv.peerId] || [] : [];
+  const currentMessages = useMemo(
+    () => (selectedConv ? realMessages[selectedConv.peerId] || [] : []),
+    [selectedConv, realMessages],
+  );
 
   // Calculate search results
   const searchResults = useMemo(
@@ -257,7 +266,7 @@ export function ChatPage() {
   // Load messages when selecting a conversation
   useEffect(() => {
     if (selectedConv) {
-      loadMessages(selectedConv.peerId);
+      loadMessages(selectedConv.peerId).catch((err) => log.error('Failed to load messages', err));
     }
   }, [selectedConv?.peerId, loadMessages]);
 
@@ -281,9 +290,9 @@ export function ChatPage() {
 
     try {
       await sendRealMessage(selectedConv.peerId, content);
-      loadMessages(selectedConv.peerId);
+      loadMessages(selectedConv.peerId).catch((err) => log.error('Failed to reload messages after send', err));
     } catch (error) {
-      console.error('Failed to send message:', error);
+      log.error('Failed to send message', error);
       toast.error('Failed to send message');
     }
   };

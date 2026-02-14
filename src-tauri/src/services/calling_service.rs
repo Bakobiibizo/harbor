@@ -98,6 +98,17 @@ pub struct OutgoingHangup {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for processing an incoming ICE candidate
+pub struct IncomingIceParams<'a> {
+    pub call_id: &'a str,
+    pub sender_peer_id: &'a str,
+    pub candidate: &'a str,
+    pub sdp_mid: Option<&'a str>,
+    pub sdp_mline_index: Option<u32>,
+    pub timestamp: i64,
+    pub signature: &'a [u8],
+}
+
 impl CallingService {
     /// Create a new calling service
     pub fn new(
@@ -332,17 +343,14 @@ impl CallingService {
     }
 
     /// Process an incoming ICE candidate
-    #[allow(clippy::too_many_arguments)]
-    pub fn process_incoming_ice(
-        &self,
-        call_id: &str,
-        sender_peer_id: &str,
-        candidate: &str,
-        sdp_mid: Option<&str>,
-        sdp_mline_index: Option<u32>,
-        timestamp: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn process_incoming_ice(&self, params: &IncomingIceParams<'_>) -> Result<()> {
+        let call_id = params.call_id;
+        let sender_peer_id = params.sender_peer_id;
+        let candidate = params.candidate;
+        let sdp_mid = params.sdp_mid;
+        let sdp_mline_index = params.sdp_mline_index;
+        let timestamp = params.timestamp;
+        let signature = params.signature;
         // Verify signature
         let sender_public_key = self
             .contacts_service

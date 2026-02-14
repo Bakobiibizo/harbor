@@ -120,6 +120,36 @@ pub enum NetworkEvent {
         relay_peer_id: String,
         error: String,
     },
+    /// A community relay was auto-detected and joined
+    CommunityAutoJoined {
+        relay_peer_id: String,
+        relay_address: String,
+        community_name: Option<String>,
+        board_count: usize,
+    },
+    /// A message acknowledgment was received (delivery or read receipt)
+    MessageAckReceived {
+        message_id: String,
+        conversation_id: String,
+        status: String,
+        timestamp: i64,
+    },
+    /// A wall post was successfully stored on a relay
+    WallPostSynced {
+        relay_peer_id: String,
+        post_id: String,
+    },
+    /// Wall posts were received from a relay for a specific author
+    WallPostsReceived {
+        relay_peer_id: String,
+        author_peer_id: String,
+        post_count: usize,
+    },
+    /// A wall post was deleted on the relay
+    WallPostDeletedOnRelay {
+        relay_peer_id: String,
+        post_id: String,
+    },
 }
 
 /// Commands that can be sent to the network service
@@ -197,6 +227,29 @@ pub enum NetworkCommand {
     SyncBoard {
         relay_peer_id: PeerId,
         board_id: String,
+    },
+    /// Submit a wall post to a relay for offline availability
+    SubmitWallPostToRelay {
+        relay_peer_id: PeerId,
+        post_id: String,
+        content_type: String,
+        content_text: Option<String>,
+        visibility: String,
+        lamport_clock: i64,
+        created_at: i64,
+        signature: Vec<u8>,
+    },
+    /// Get wall posts for a specific author from a relay
+    GetWallPostsFromRelay {
+        relay_peer_id: PeerId,
+        author_peer_id: String,
+        since_lamport_clock: i64,
+        limit: u32,
+    },
+    /// Delete a wall post on a relay
+    DeleteWallPostOnRelay {
+        relay_peer_id: PeerId,
+        post_id: String,
     },
     /// Shutdown the network
     Shutdown,

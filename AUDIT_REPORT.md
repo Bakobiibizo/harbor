@@ -36,9 +36,10 @@
 - **Issue**: Updater pubkey is `"UPDATER_PUBKEY_PLACEHOLDER"` and endpoint references wrong GitHub user (`nicholasoxford/harbor` instead of `bakobiibizo/harbor`).
 - **Impact**: Auto-updates completely broken. No build process replaces the placeholder.
 
-### C4. Hardcoded Identity Key in CloudFormation Template
-- **File**: `infrastructure/community-relay-cloudformation.yaml:247-250`
-- **Issue**: Contains plaintext base64-encoded identity key: `IDENTITY_KEY_B64="CAESQKx8WZyv..."`. Anyone with repo access can extract and impersonate this relay.
+### C4. Hardcoded Identity Key in CloudFormation Template -- RESOLVED
+- **File**: `infrastructure/community-relay-cloudformation.yaml`
+- **Issue**: Originally contained plaintext base64-encoded identity key: `IDENTITY_KEY_B64="CAESQKx8WZyv..."`. Anyone with repo access could extract and impersonate that relay.
+- **Fix**: Removed hardcoded key. All CloudFormation templates now rely on the relay binary's `load_or_generate_identity()` to generate a unique Ed25519 keypair at deploy time. The identity key is stored in a restricted directory (`/var/lib/<service>/identity/id.key` with `chmod 700`). Each deployment gets its own unique identity. The compromised key from git history should be considered revoked.
 
 ---
 
@@ -133,9 +134,9 @@
 
 ## LOW SEVERITY / CODE QUALITY
 
-### L1. Dead Code
-- `src-tauri/src/services/calling_service.rs:52-53` — unused `db` field with `#[allow(dead_code)]`
-- `src-tauri/src/p2p/network.rs:24-28` — empty `FALLBACK_RELAYS` constant
+### L1. Dead Code — RESOLVED
+- ~~`src-tauri/src/services/calling_service.rs:52-53` — unused `db` field with `#[allow(dead_code)]`~~ — removed; `CallingService` no longer holds a `db` field
+- ~~`src-tauri/src/p2p/network.rs:24-28` — empty `FALLBACK_RELAYS` constant~~ — replaced with populated `PUBLIC_RELAYS` constant containing the Harbor community relay address
 
 ### L2. Clippy Suppressions
 - 15+ `#[allow(clippy::too_many_arguments)]` across commands and repos — consider builder pattern / param structs.
@@ -251,7 +252,7 @@
 
 ### Immediate (Security / Correctness)
 1. **Implement signature verification** in relay server (`board_service.rs`) and identity exchange (`network.rs:1614`)
-2. **Remove hardcoded identity key** from `community-relay-cloudformation.yaml` — generate at deploy time
+2. ~~**Remove hardcoded identity key** from `community-relay-cloudformation.yaml` — generate at deploy time~~ **DONE** — key removed, dynamic generation via `load_or_generate_identity()` with explicit `--identity-key-path`
 3. **Fix updater config** — correct GitHub URL and replace placeholder pubkey or disable updater
 4. **Add CSP** to `tauri.conf.json`
 

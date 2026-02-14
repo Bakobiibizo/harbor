@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::error::AppError;
+use crate::services::calling_service::IncomingIceParams;
 use crate::services::CallingService;
 
 /// Offer result for the frontend
@@ -182,28 +183,34 @@ pub async fn process_answer(
     )
 }
 
+/// Parameters for processing an incoming ICE candidate
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessIceCandidateParams {
+    pub call_id: String,
+    pub sender_peer_id: String,
+    pub candidate: String,
+    pub sdp_mid: Option<String>,
+    pub sdp_mline_index: Option<u32>,
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
+}
+
 /// Process an incoming ICE candidate (validate it)
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn process_ice_candidate(
     calling_service: State<'_, Arc<CallingService>>,
-    call_id: String,
-    sender_peer_id: String,
-    candidate: String,
-    sdp_mid: Option<String>,
-    sdp_mline_index: Option<u32>,
-    timestamp: i64,
-    signature: Vec<u8>,
+    params: ProcessIceCandidateParams,
 ) -> Result<(), AppError> {
-    calling_service.process_incoming_ice(
-        &call_id,
-        &sender_peer_id,
-        &candidate,
-        sdp_mid.as_deref(),
-        sdp_mline_index,
-        timestamp,
-        &signature,
-    )
+    calling_service.process_incoming_ice(&IncomingIceParams {
+        call_id: &params.call_id,
+        sender_peer_id: &params.sender_peer_id,
+        candidate: &params.candidate,
+        sdp_mid: params.sdp_mid.as_deref(),
+        sdp_mline_index: params.sdp_mline_index,
+        timestamp: params.timestamp,
+        signature: &params.signature,
+    })
 }
 
 /// Process an incoming hangup (validate it)

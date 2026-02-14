@@ -41,6 +41,21 @@ pub struct BoardPost {
     pub cached_at: i64,
 }
 
+/// Parameters for upserting a board post
+pub struct UpsertBoardPostParams<'a> {
+    pub post_id: &'a str,
+    pub board_id: &'a str,
+    pub relay_peer_id: &'a str,
+    pub author_peer_id: &'a str,
+    pub author_display_name: Option<&'a str>,
+    pub content_type: &'a str,
+    pub content_text: Option<&'a str>,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub deleted_at: Option<i64>,
+    pub signature: &'a [u8],
+}
+
 /// Repository for board operations
 pub struct BoardsRepository;
 
@@ -149,21 +164,18 @@ impl BoardsRepository {
     }
 
     /// Insert or update a board post
-    #[allow(clippy::too_many_arguments)]
-    pub fn upsert_board_post(
-        db: &Database,
-        post_id: &str,
-        board_id: &str,
-        relay_peer_id: &str,
-        author_peer_id: &str,
-        author_display_name: Option<&str>,
-        content_type: &str,
-        content_text: Option<&str>,
-        lamport_clock: i64,
-        created_at: i64,
-        deleted_at: Option<i64>,
-        signature: &[u8],
-    ) -> SqliteResult<()> {
+    pub fn upsert_board_post(db: &Database, params: &UpsertBoardPostParams<'_>) -> SqliteResult<()> {
+        let post_id = params.post_id;
+        let board_id = params.board_id;
+        let relay_peer_id = params.relay_peer_id;
+        let author_peer_id = params.author_peer_id;
+        let author_display_name = params.author_display_name;
+        let content_type = params.content_type;
+        let content_text = params.content_text;
+        let lamport_clock = params.lamport_clock;
+        let created_at = params.created_at;
+        let deleted_at = params.deleted_at;
+        let signature = params.signature;
         let now = chrono::Utc::now().timestamp();
         db.with_connection(|conn| {
             conn.execute(

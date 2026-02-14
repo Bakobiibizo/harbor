@@ -6,6 +6,7 @@ use tauri::State;
 
 use crate::db::repositories::{Post, PostMedia, PostVisibility};
 use crate::error::AppError;
+use crate::services::posts_service::AddMediaParams;
 use crate::services::PostsService;
 
 /// Post info for the frontend
@@ -88,6 +89,7 @@ pub struct CreatePostResult {
 #[tauri::command]
 pub async fn create_post(
     posts_service: State<'_, Arc<PostsService>>,
+    network_state: State<'_, crate::commands::NetworkState>,
     content_type: String,
     content_text: Option<String>,
     visibility: Option<String>,
@@ -98,6 +100,47 @@ pub async fn create_post(
     };
 
     let outgoing = posts_service.create_post(&content_type, content_text.as_deref(), vis)?;
+
+    // Auto-sync: submit the new post to the relay in the background.
+    // We don't fail the command if relay submission fails -- the user can
+    // always manually sync later via sync_wall_to_relay.
+    if let Ok(handle) = network_state.get_handle().await {
+        if let Ok(stats) = handle.get_stats().await {
+            if let Ok(relay_peer_id) =
+                crate::commands::wall_sync::find_relay_peer_id(&stats.relay_addresses)
+            {
+                let post_id = outgoing.post_id.clone();
+                let ct = outgoing.content_type.clone();
+                let ct_text = outgoing.content_text.clone();
+                let vis_str = outgoing.visibility.clone();
+                let lc = outgoing.lamport_clock as i64;
+                let ca = outgoing.created_at;
+                let sig = outgoing.signature.clone();
+                // Fire and forget -- don't block post creation on relay submission
+                tokio::spawn(async move {
+                    if let Err(e) = handle
+                        .submit_wall_post_to_relay(
+                            relay_peer_id,
+                            post_id.clone(),
+                            ct,
+                            ct_text,
+                            vis_str,
+                            lc,
+                            ca,
+                            sig,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to auto-sync wall post {} to relay: {}",
+                            post_id,
+                            e
+                        );
+                    }
+                });
+            }
+        }
+    }
 
     Ok(CreatePostResult {
         post_id: outgoing.post_id,
@@ -120,9 +163,32 @@ pub async fn update_post(
 #[tauri::command]
 pub async fn delete_post(
     posts_service: State<'_, Arc<PostsService>>,
+    network_state: State<'_, crate::commands::NetworkState>,
     post_id: String,
 ) -> Result<(), AppError> {
     posts_service.delete_post(&post_id)?;
+
+    // Auto-sync: delete the post on the relay in the background
+    if let Ok(handle) = network_state.get_handle().await {
+        if let Ok(stats) = handle.get_stats().await {
+            if let Ok(relay_peer_id) =
+                crate::commands::wall_sync::find_relay_peer_id(&stats.relay_addresses)
+            {
+                let pid = post_id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle.delete_wall_post_on_relay(relay_peer_id, pid.clone()).await
+                    {
+                        tracing::warn!(
+                            "Failed to auto-delete wall post {} on relay: {}",
+                            pid,
+                            e
+                        );
+                    }
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -161,34 +227,40 @@ pub async fn get_posts_by_author(
     Ok(posts.into_iter().map(PostInfo::from).collect())
 }
 
+/// Parameters for adding media to a post
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddPostMediaParams {
+    pub post_id: String,
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: Option<i32>,
+}
+
 /// Add media to a post
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn add_post_media(
     posts_service: State<'_, Arc<PostsService>>,
-    post_id: String,
-    media_hash: String,
-    media_type: String,
-    mime_type: String,
-    file_name: String,
-    file_size: i64,
-    width: Option<i32>,
-    height: Option<i32>,
-    duration_seconds: Option<i32>,
-    sort_order: Option<i32>,
+    params: AddPostMediaParams,
 ) -> Result<(), AppError> {
-    posts_service.add_media_to_post(
-        &post_id,
-        &media_hash,
-        &media_type,
-        &mime_type,
-        &file_name,
-        file_size,
-        width,
-        height,
-        duration_seconds,
-        sort_order.unwrap_or(0),
-    )
+    posts_service.add_media_to_post(&AddMediaParams {
+        post_id: &params.post_id,
+        media_hash: &params.media_hash,
+        media_type: &params.media_type,
+        mime_type: &params.mime_type,
+        file_name: &params.file_name,
+        file_size: params.file_size,
+        width: params.width,
+        height: params.height,
+        duration_seconds: params.duration_seconds,
+        sort_order: params.sort_order.unwrap_or(0),
+    })
 }
 
 /// Get media for a post

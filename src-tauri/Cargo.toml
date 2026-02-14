@@ -52,6 +52,7 @@ tracing-appender = "0.2"
 regex = "1"
 base64 = "0.22"
 hex = "0.4"
+urlencoding = "2"
 
 # P2P Networking
 libp2p = { version = "0.56", features = [
@@ -74,4 +75,7 @@ libp2p = { version = "0.56", features = [
 ] }
 multiaddr = "0.18"
 void = "1"
+
+[dev-dependencies]
+tempfile = "3"
 

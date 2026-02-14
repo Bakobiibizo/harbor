@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import type { PeerInfo, NetworkStats, ConnectionStatus, NatStatus } from '../types';
 import * as networkService from '../services/network';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('NetworkStore');
 
 export type RelayStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -15,6 +18,8 @@ interface NetworkState {
   relayStatus: RelayStatus;
   error: string | null;
   isLoading: boolean;
+  /** Peer IDs of relays that have been confirmed as community relays */
+  communityRelayPeerIds: string[];
 
   // Actions
   startNetwork: () => Promise<void>;
@@ -32,6 +37,8 @@ interface NetworkState {
   // NAT status update (called by event handler)
   setNatStatus: (status: NatStatus) => void;
   addRelayAddress: (address: string) => void;
+  /** Mark a relay as community-enabled (called by event handler) */
+  addCommunityRelay: (relayPeerId: string) => void;
 }
 
 const initialStats: NetworkStats = {
@@ -55,6 +62,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
   relayStatus: 'disconnected',
   error: null,
   isLoading: false,
+  communityRelayPeerIds: [],
 
   // Start the network
   startNetwork: async () => {
@@ -90,6 +98,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         shareableAddresses: [],
         relayStatus: 'disconnected',
         isLoading: false,
+        communityRelayPeerIds: [],
       });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error), isLoading: false });
@@ -116,7 +125,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({ connectedPeers: peers });
     } catch (error) {
       // Don't show error for refresh failures - just log it
-      console.error('Failed to refresh peers:', error);
+      log.error('Failed to refresh peers', error);
     }
   },
 
@@ -127,7 +136,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       set({ stats });
     } catch (error) {
       // Don't show error for refresh failures - just log it
-      console.error('Failed to refresh stats:', error);
+      log.error('Failed to refresh stats', error);
     }
   },
 
@@ -137,7 +146,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const addresses = await networkService.getListeningAddresses();
       set({ listeningAddresses: addresses });
     } catch (error) {
-      console.error('Failed to refresh addresses:', error);
+      log.error('Failed to refresh addresses', error);
     }
   },
 
@@ -209,7 +218,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const addresses = await networkService.getShareableAddresses();
       set({ shareableAddresses: addresses });
     } catch (error) {
-      console.error('Failed to refresh shareable addresses:', error);
+      log.error('Failed to refresh shareable addresses', error);
     }
   },
 
@@ -240,6 +249,18 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
         listeningAddresses: state.listeningAddresses.includes(address)
           ? state.listeningAddresses
           : [address, ...state.listeningAddresses],
+      };
+    });
+  },
+
+  // Mark a relay as community-enabled (called by event handler)
+  addCommunityRelay: (relayPeerId: string) => {
+    set((state) => {
+      if (state.communityRelayPeerIds.includes(relayPeerId)) {
+        return state;
+      }
+      return {
+        communityRelayPeerIds: [...state.communityRelayPeerIds, relayPeerId],
       };
     });
   },

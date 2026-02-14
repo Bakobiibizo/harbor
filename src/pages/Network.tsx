@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
@@ -21,6 +21,9 @@ import {
   COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
 } from '../constants/cloudformation-template';
 import { getInitials, getContactColor, shortPeerId } from '../utils/formatting';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Network');
 
 // Adjectives and animals for generating human-friendly peer names
 const ADJECTIVES = [
@@ -167,14 +170,11 @@ export function NetworkPage() {
     isLoading,
     startNetwork,
     stopNetwork,
-    refreshPeers,
-    refreshStats,
-    refreshAddresses,
-    refreshShareableAddresses,
     checkStatus,
     connectToPeer,
     connectToRelay,
     connectToPublicRelays,
+    communityRelayPeerIds,
   } = useNetworkStore();
 
   const { contacts, refreshContacts } = useContactsStore();
@@ -193,42 +193,25 @@ export function NetworkPage() {
   const [shareableContactString, setShareableContactString] = useState<string | null>(null);
   const relayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check network status on mount and set up refresh interval
+  // Check network status on mount
   useEffect(() => {
-    checkStatus();
+    checkStatus().catch((err) => log.error('Failed to check status', err));
+  }, [checkStatus]);
+
+  // Refresh network data on an interval while running
+  useEffect(() => {
+    if (!isRunning) return;
 
     const interval = setInterval(() => {
-      if (isRunning) {
-        refreshPeers();
-        refreshStats();
-        refreshAddresses();
-        refreshShareableAddresses();
-      }
+      const store = useNetworkStore.getState();
+      store.refreshPeers().catch((err) => log.error('Failed to refresh peers', err));
+      store.refreshStats().catch((err) => log.error('Failed to refresh stats', err));
+      store.refreshAddresses().catch((err) => log.error('Failed to refresh addresses', err));
+      store.refreshShareableAddresses().catch((err) => log.error('Failed to refresh shareable addresses', err));
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [
-    isRunning,
-    checkStatus,
-    refreshPeers,
-    refreshStats,
-    refreshAddresses,
-    refreshShareableAddresses,
-  ]);
-
-  // NAT status "Detecting..." timeout (30s)
-  useEffect(() => {
-    if (stats.natStatus !== 'unknown' || !isRunning) {
-      setNatDetectionTimedOut(false);
-      return;
-    }
-
-    const timeout = setTimeout(() => {
-      setNatDetectionTimedOut(true);
-    }, 30_000);
-
-    return () => clearTimeout(timeout);
-  }, [isRunning, stats.natStatus]);
+  }, [isRunning]);
 
   // Fetch shareable contact string when relay is connected
   useEffect(() => {
@@ -237,7 +220,7 @@ export function NetworkPage() {
         .getShareableContactString()
         .then(setShareableContactString)
         .catch((err) => {
-          console.warn('Could not get shareable contact string:', err);
+          log.warn('Could not get shareable contact string', err);
           setShareableContactString(null);
         });
     } else {
@@ -245,7 +228,7 @@ export function NetworkPage() {
     }
   }, [relayStatus, isRunning]);
 
-  // Fix 3: Relay "Connecting..." spinner timeout (30s)
+  // Relay "Connecting..." spinner timeout (30s)
   useEffect(() => {
     if (relayTimeoutRef.current) {
       clearTimeout(relayTimeoutRef.current);
@@ -270,7 +253,7 @@ export function NetworkPage() {
     };
   }, [relayStatus]);
 
-  // Fix 4: NAT status "Detecting..." timeout (30s)
+  // NAT status "Detecting..." timeout (30s)
   useEffect(() => {
     if (stats.natStatus !== 'unknown' || !isRunning) {
       setNatDetectionTimedOut(false);
@@ -331,7 +314,7 @@ export function NetworkPage() {
       if (input.startsWith('harbor://')) {
         await networkService.addContactFromString(input);
         toast.success('Contact added successfully!');
-        refreshContacts();
+        refreshContacts().catch((err) => log.error('Failed to refresh contacts', err));
         setPeerAddress('');
       } else if (input.includes('/p2p/')) {
         // Legacy multiaddr format - just connect (requires identity exchange)
@@ -407,12 +390,15 @@ export function NetworkPage() {
   );
 
   // Get the circuit address (the one shareable address for remote peers)
-  const circuitAddress =
-    shareableAddresses.length > 0
-      ? shareableAddresses[0]
-      : stats.relayAddresses.length > 0
-        ? stats.relayAddresses[0]
-        : null;
+  const circuitAddress = useMemo(
+    () =>
+      shareableAddresses.length > 0
+        ? shareableAddresses[0]
+        : stats.relayAddresses.length > 0
+          ? stats.relayAddresses[0]
+          : null,
+    [shareableAddresses, stats.relayAddresses],
+  );
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
@@ -623,38 +609,66 @@ export function NetworkPage() {
 
             {relayStatus === 'connected' && stats.relayAddresses.length > 0 ? (
               // Connected state: show green relay status
-              <div>
-                <div
-                  className="flex items-center gap-3 p-3 rounded-lg mb-3"
-                  style={{
-                    background: 'hsl(var(--harbor-success) / 0.1)',
-                    border: '1px solid hsl(var(--harbor-success) / 0.2)',
-                  }}
-                >
-                  <span
-                    className="w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0"
-                    style={{ background: 'hsl(var(--harbor-success))' }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className="text-sm font-medium"
-                      style={{ color: 'hsl(var(--harbor-success))' }}
+              (() => {
+                // Check if any connected relay is a community relay by extracting
+                // the relay peer ID from the relay address (format: .../p2p/RELAY_ID/p2p-circuit/...)
+                const relayAddr = stats.relayAddresses[0];
+                const p2pSegments = relayAddr.split('/p2p/');
+                // The relay peer ID is typically the first /p2p/ segment (not the local peer ID)
+                const relayPeerId = p2pSegments.length >= 2 ? p2pSegments[1].split('/')[0] : null;
+                const isCommunityRelay =
+                  relayPeerId != null && communityRelayPeerIds.includes(relayPeerId);
+
+                return (
+                  <div>
+                    <div
+                      className="flex items-center gap-3 p-3 rounded-lg mb-3"
+                      style={{
+                        background: 'hsl(var(--harbor-success) / 0.1)',
+                        border: '1px solid hsl(var(--harbor-success) / 0.2)',
+                      }}
                     >
-                      Connected to Harbor Relay
+                      <span
+                        className="w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0"
+                        style={{ background: 'hsl(var(--harbor-success))' }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p
+                            className="text-sm font-medium"
+                            style={{ color: 'hsl(var(--harbor-success))' }}
+                          >
+                            Connected to Harbor Relay
+                          </p>
+                          {isCommunityRelay && (
+                            <span
+                              className="px-2 py-0.5 rounded-full text-xs font-medium"
+                              style={{
+                                background: 'hsl(var(--harbor-primary) / 0.15)',
+                                color: 'hsl(var(--harbor-primary))',
+                              }}
+                            >
+                              Community
+                            </span>
+                          )}
+                        </div>
+                        <code
+                          className="text-xs break-all font-mono block mt-1"
+                          style={{ color: 'hsl(var(--harbor-success) / 0.8)' }}
+                        >
+                          {relayAddr}
+                        </code>
+                      </div>
+                      <CopyButton text={relayAddr} label="Relay address copied!" />
+                    </div>
+                    <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                      {isCommunityRelay
+                        ? 'Connected to a community relay with boards. Check Community Boards to see posts.'
+                        : 'Peers anywhere on the internet can reach you through this relay.'}
                     </p>
-                    <code
-                      className="text-xs break-all font-mono block mt-1"
-                      style={{ color: 'hsl(var(--harbor-success) / 0.8)' }}
-                    >
-                      {stats.relayAddresses[0]}
-                    </code>
                   </div>
-                  <CopyButton text={stats.relayAddresses[0]} label="Relay address copied!" />
-                </div>
-                <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                  Peers anywhere on the internet can reach you through this relay.
-                </p>
-              </div>
+                );
+              })()
             ) : (
               // Disconnected/connecting state: show connect options
               <div className="space-y-3">
@@ -1312,7 +1326,7 @@ export function NetworkPage() {
 
 // --- Sub-components ---
 
-function PeerRow({
+const PeerRow = memo(function PeerRow({
   peerId,
   displayName,
   isConnected,
@@ -1327,9 +1341,12 @@ function PeerRow({
   actionStyle: 'primary' | 'success';
   onAction: () => Promise<void>;
 }) {
-  const friendlyName = displayName ?? getPeerFriendlyName(peerId);
-  const avatarColor = getContactColor(peerId);
-  const initials = getInitials(friendlyName);
+  const friendlyName = useMemo(
+    () => displayName ?? getPeerFriendlyName(peerId),
+    [displayName, peerId],
+  );
+  const avatarColor = useMemo(() => getContactColor(peerId), [peerId]);
+  const initials = useMemo(() => getInitials(friendlyName), [friendlyName]);
 
   return (
     <div
@@ -1398,7 +1415,7 @@ function PeerRow({
       </button>
     </div>
   );
-}
+});
 
 function DeployRelayContent() {
   const handleDownloadTemplate = async (filename: string, content: string, label: string) => {
@@ -1409,7 +1426,7 @@ function DeployRelayContent() {
       });
       toast.success(`${label} saved to ${savedPath}`);
     } catch (error) {
-      console.error('Failed to save template via Tauri:', error);
+      log.error('Failed to save template via Tauri', error);
       try {
         await navigator.clipboard.writeText(content);
         toast.success(`${label} copied to clipboard! Paste it into a .yaml file.`);

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
 import { HarborIcon, LockIcon, UnlockIcon, UsersIcon } from '../icons';
+import { getInitials } from '../../utils/formatting';
 
 interface UnlockIdentityProps {
   onSwitchAccount?: () => void;
@@ -32,16 +33,6 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Generate avatar initials
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
   };
 
   return (

@@ -57,6 +57,21 @@ pub struct OutgoingMessage {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for processing an incoming message from the network
+pub struct IncomingMessageParams<'a> {
+    pub message_id: &'a str,
+    pub conversation_id: &'a str,
+    pub sender_peer_id: &'a str,
+    pub recipient_peer_id: &'a str,
+    pub content_encrypted: &'a [u8],
+    pub content_type: &'a str,
+    pub reply_to: Option<&'a str>,
+    pub nonce_counter: u64,
+    pub lamport_clock: u64,
+    pub timestamp: i64,
+    pub signature: &'a [u8],
+}
+
 impl MessagingService {
     /// Create a new messaging service
     pub fn new(
@@ -219,21 +234,18 @@ impl MessagingService {
     }
 
     /// Process an incoming message from the network
-    #[allow(clippy::too_many_arguments)]
-    pub fn process_incoming_message(
-        &self,
-        message_id: &str,
-        conversation_id: &str,
-        sender_peer_id: &str,
-        recipient_peer_id: &str,
-        content_encrypted: &[u8],
-        content_type: &str,
-        reply_to: Option<&str>,
-        nonce_counter: u64,
-        lamport_clock: u64,
-        timestamp: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn process_incoming_message(&self, params: &IncomingMessageParams<'_>) -> Result<()> {
+        let message_id = params.message_id;
+        let conversation_id = params.conversation_id;
+        let sender_peer_id = params.sender_peer_id;
+        let recipient_peer_id = params.recipient_peer_id;
+        let content_encrypted = params.content_encrypted;
+        let content_type = params.content_type;
+        let reply_to = params.reply_to;
+        let nonce_counter = params.nonce_counter;
+        let lamport_clock = params.lamport_clock;
+        let timestamp = params.timestamp;
+        let signature = params.signature;
         // Verify we are the recipient
         let identity = self
             .identity_service

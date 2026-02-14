@@ -44,4 +44,24 @@ export type NetworkEvent =
   | { type: 'hole_punch_succeeded'; peerId: string }
   | { type: 'content_manifest_received'; peerId: string; postCount: number; hasMore: boolean }
   | { type: 'content_fetched'; peerId: string; postId: string }
-  | { type: 'content_sync_error'; peerId: string; error: string };
+  | { type: 'content_sync_error'; peerId: string; error: string }
+  | { type: 'board_list_received'; relayPeerId: string; boardCount: number }
+  | { type: 'board_posts_received'; relayPeerId: string; boardId: string; postCount: number }
+  | { type: 'board_post_submitted'; relayPeerId: string; postId: string }
+  | { type: 'board_sync_error'; relayPeerId: string; error: string }
+  | {
+      type: 'community_auto_joined';
+      relayPeerId: string;
+      relayAddress: string;
+      communityName: string | null;
+      boardCount: number;
+    }
+  | {
+      type: 'message_ack_received';
+      messageId: string;
+      conversationId: string;
+      status: 'delivered' | 'read';
+      timestamp: number;
+    }
+  | { type: 'wall_post_synced'; postId: string }
+  | { type: 'wall_posts_received'; authorPeerId: string; postCount: number };

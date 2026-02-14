@@ -157,6 +157,32 @@ pub enum BoardSyncRequest {
         timestamp: i64,
         signature: Vec<u8>,
     },
+    SubmitWallPost {
+        author_peer_id: String,
+        post_id: String,
+        content_type: String,
+        content_text: Option<String>,
+        visibility: String,
+        lamport_clock: i64,
+        created_at: i64,
+        signature: Vec<u8>,
+        timestamp: i64,
+        request_signature: Vec<u8>,
+    },
+    GetWallPosts {
+        requester_peer_id: String,
+        author_peer_id: String,
+        since_lamport_clock: i64,
+        limit: u32,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
+    DeleteWallPost {
+        author_peer_id: String,
+        post_id: String,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
 }
 
 /// Board info in responses
@@ -183,6 +209,20 @@ pub struct BoardPostInfoProto {
     pub signature: Vec<u8>,
 }
 
+/// Wall post data in responses
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WallPostData {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+    pub stored_at: i64,
+}
+
 /// Board sync response (wire protocol)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -199,6 +239,12 @@ pub enum BoardSyncResponse {
     PostAccepted { post_id: String },
     PeerRegistered { peer_id: String },
     PostDeleted { post_id: String },
+    WallPosts {
+        posts: Vec<WallPostData>,
+        has_more: bool,
+    },
+    WallPostStored { post_id: String },
+    WallPostDeleted { post_id: String },
     Error { error: String },
 }
 
@@ -657,6 +703,91 @@ fn handle_board_request(
             }
             match service.process_delete_post(&post_id, &author_peer_id, timestamp, &signature) {
                 Ok(()) => BoardSyncResponse::PostDeleted { post_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
+        BoardSyncRequest::SubmitWallPost {
+            author_peer_id,
+            post_id,
+            content_type,
+            content_text,
+            visibility,
+            lamport_clock,
+            created_at,
+            signature,
+            timestamp,
+            request_signature,
+        } => {
+            if author_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "author_peer_id mismatch".to_string(),
+                };
+            }
+            match service.process_submit_wall_post(
+                &author_peer_id,
+                &post_id,
+                &content_type,
+                content_text.as_deref(),
+                &visibility,
+                lamport_clock,
+                created_at,
+                &signature,
+                timestamp,
+                &request_signature,
+            ) {
+                Ok(()) => BoardSyncResponse::WallPostStored { post_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
+        BoardSyncRequest::GetWallPosts {
+            requester_peer_id,
+            author_peer_id,
+            since_lamport_clock,
+            limit,
+            timestamp,
+            signature,
+        } => {
+            match service.process_get_wall_posts(
+                &requester_peer_id,
+                &author_peer_id,
+                since_lamport_clock,
+                limit,
+                timestamp,
+                &signature,
+            ) {
+                Ok((posts, has_more)) => BoardSyncResponse::WallPosts {
+                    posts: posts
+                        .into_iter()
+                        .map(|p| WallPostData {
+                            post_id: p.post_id,
+                            author_peer_id: p.author_peer_id,
+                            content_type: p.content_type,
+                            content_text: p.content_text,
+                            visibility: p.visibility,
+                            lamport_clock: p.lamport_clock,
+                            created_at: p.created_at,
+                            signature: p.signature,
+                            stored_at: p.stored_at,
+                        })
+                        .collect(),
+                    has_more,
+                },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
+        BoardSyncRequest::DeleteWallPost {
+            author_peer_id,
+            post_id,
+            timestamp,
+            signature,
+        } => {
+            if author_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "author_peer_id mismatch".to_string(),
+                };
+            }
+            match service.process_delete_wall_post(&author_peer_id, &post_id, timestamp, &signature) {
+                Ok(()) => BoardSyncResponse::WallPostDeleted { post_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
         }

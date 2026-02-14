@@ -286,6 +286,49 @@ pub struct SignableBoardPostsRequest {
 impl Signable for SignableBoardPostsRequest {}
 
 // ============================================================
+// WALL POST MESSAGES (relay-synced personal posts)
+// ============================================================
+
+/// Signable version of a wall post submission request (excludes request_signature).
+/// The inner post `signature` field is included as data being signed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallPostSubmit {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallPostSubmit {}
+
+/// Signable version of a wall posts retrieval request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableGetWallPosts {
+    pub requester_peer_id: String,
+    pub author_peer_id: String,
+    pub since_lamport_clock: i64,
+    pub limit: u32,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableGetWallPosts {}
+
+/// Signable version of a wall post delete request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallPostDelete {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallPostDelete {}
+
+// ============================================================
 // SIGNALING (Voice Calls)
 // ============================================================
 

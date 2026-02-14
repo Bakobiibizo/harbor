@@ -282,8 +282,13 @@ Resources:
           chmod +x /usr/local/bin/$SERVICE_NAME
 
           # Create identity and data directories
-          mkdir -p /root/.config/$SERVICE_NAME
-          mkdir -p /var/lib/$SERVICE_NAME/data
+          # Security: identity key is generated at deploy time by the relay binary
+          # (load_or_generate_identity). No secrets are baked into this template.
+          IDENTITY_DIR="/var/lib/$SERVICE_NAME/identity"
+          DATA_DIR="/var/lib/$SERVICE_NAME/data"
+          mkdir -p "$IDENTITY_DIR"
+          mkdir -p "$DATA_DIR"
+          chmod 700 "$IDENTITY_DIR"
 
           # Start relay immediately without announce-ip so it generates its identity
           echo "Creating initial systemd service..."
@@ -300,11 +305,12 @@ Resources:
           Environment=RUST_LOG=info
           ExecStart=/usr/local/bin/$SERVICE_NAME \
             --port ${RelayPort} \
+            --identity-key-path $IDENTITY_DIR/id.key \
             --max-reservations ${MaxReservations} \
             --max-circuits-per-peer ${MaxCircuits} \
             --community \
             --community-name "${CommunityName}" \
-            --data-dir /var/lib/$SERVICE_NAME/data \
+            --data-dir $DATA_DIR \
             --rate-limit-max-requests ${RateLimitMaxRequests} \
             --rate-limit-window-secs ${RateLimitWindowSecs}
           StandardOutput=journal
@@ -370,12 +376,13 @@ Resources:
           Environment=RUST_LOG=info
           ExecStart=/usr/local/bin/$SERVICE_NAME \
             --port ${RelayPort} \
+            --identity-key-path $IDENTITY_DIR/id.key \
             --announce-ip $PUBLIC_IP \
             --max-reservations ${MaxReservations} \
             --max-circuits-per-peer ${MaxCircuits} \
             --community \
             --community-name "${CommunityName}" \
-            --data-dir /var/lib/$SERVICE_NAME/data \
+            --data-dir $DATA_DIR \
             --rate-limit-max-requests ${RateLimitMaxRequests} \
             --rate-limit-window-secs ${RateLimitWindowSecs}
           StandardOutput=journal

@@ -1,8 +1,18 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { FeedIcon, EllipsisIcon } from '../components/icons';
+import { PostMedia } from '../components/common/PostMedia';
+import type { PostMediaItem } from '../components/common/PostMedia';
 import { useFeedStore, useContactsStore } from '../stores';
+import { postsService } from '../services/posts';
+import { createLogger } from '../utils/logger';
 import type { FeedItem } from '../types';
+
+const log = createLogger('Feed');
+import { getInitials, getContactColor, formatDate } from '../utils/formatting';
+
+/** Relay sync polling interval in milliseconds (30 seconds) */
+const RELAY_SYNC_INTERVAL_MS = 30_000;
 
 // Dropdown menu component
 function PostMenu({
@@ -127,6 +137,7 @@ function PostMenu({
 // Unified post type for both real and mock posts
 interface UnifiedPost {
   id: string;
+  postId: string;
   content: string;
   timestamp: Date;
   likes: number;
@@ -138,39 +149,69 @@ interface UnifiedPost {
     avatarGradient: string;
   };
   isReal: boolean;
-}
-
-// Generate consistent avatar color from peer ID
-function getContactColor(peerId: string): string {
-  const colors = [
-    'linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))',
-    'linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))',
-    'linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))',
-    'linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))',
-    'linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))',
-    'linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))',
-  ];
-  let hash = 0;
-  for (let i = 0; i < peerId.length; i++) {
-    hash = peerId.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return colors[Math.abs(hash) % colors.length];
+  media?: { type: 'image' | 'video'; url: string; name?: string }[];
 }
 
 type FeedTab = 'all' | 'saved';
 
 export function FeedPage() {
-  const { feedItems, loadFeed, refreshFeed } = useFeedStore();
+  const { feedItems, loadFeed, refreshFeed, syncFromRelay, isSyncingRelay } = useFeedStore();
   const { contacts, loadContacts } = useContactsStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FeedTab>('all');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  // Load real feed and contacts on mount
+  // Load real feed and contacts on mount, plus trigger relay sync
   useEffect(() => {
-    loadFeed();
-    loadContacts();
-  }, [loadFeed, loadContacts]);
+    loadFeed().catch((err) => log.error('Failed to load feed', err));
+    loadContacts().catch((err) => log.error('Failed to load contacts', err));
+    // Best-effort relay sync on mount
+    syncFromRelay().catch((err) => log.warn('Relay sync on mount failed', err));
+  }, [loadFeed, loadContacts, syncFromRelay]);
+
+  // Poll relay for new posts every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      syncFromRelay().catch((err) => log.warn('Periodic relay sync failed', err));
+    }, RELAY_SYNC_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [syncFromRelay]);
+
+  // Track media for feed posts (fetched asynchronously)
+  const [postMediaMap, setPostMediaMap] = useState<Record<string, PostMediaItem[]>>({});
+
+  // Fetch media for all feed items when they change
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMedia = async () => {
+      const mediaMap: Record<string, PostMediaItem[]> = {};
+      await Promise.allSettled(
+        feedItems.map(async (item) => {
+          try {
+            const mediaList = await postsService.getPostMedia(item.postId);
+            if (mediaList.length > 0 && !cancelled) {
+              mediaMap[item.postId] = mediaList.map((m) => ({
+                type: (m.mediaType === 'video' ? 'video' : 'image') as 'image' | 'video',
+                url: m.mediaHash,
+                name: m.fileName,
+              }));
+            }
+          } catch {
+            // Media fetch is best-effort
+          }
+        }),
+      );
+      if (!cancelled) {
+        setPostMediaMap(mediaMap);
+      }
+    };
+    if (feedItems.length > 0) {
+      fetchMedia();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [feedItems]);
 
   // Convert real feed items to unified format
   const allPosts: UnifiedPost[] = useMemo(() => {
@@ -179,6 +220,7 @@ export function FeedPage() {
         const contact = contacts.find((c) => c.peerId === item.authorPeerId);
         return {
           id: `real-${item.postId}`,
+          postId: item.postId,
           content: item.contentText || '',
           timestamp: new Date(item.createdAt * 1000),
           likes: 0,
@@ -190,52 +232,27 @@ export function FeedPage() {
             avatarGradient: getContactColor(item.authorPeerId),
           },
           isReal: true,
+          media: postMediaMap[item.postId],
         };
       })
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [feedItems, contacts]);
+  }, [feedItems, contacts, postMediaMap]);
 
   // Select posts based on active tab (saved tab placeholder for future)
   const posts: UnifiedPost[] = activeTab === 'saved' ? [] : allPosts;
 
-  const formatDate = (date: Date) => {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const mins = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    });
-  };
-
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
-
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await refreshFeed();
+      // Run both P2P sync and relay sync in parallel
+      await Promise.allSettled([refreshFeed(), syncFromRelay()]);
       toast.success('Feed refreshed!');
     } catch {
       toast.error('Failed to refresh feed');
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [refreshFeed, syncFromRelay]);
 
   const handleLike = (_post: UnifiedPost) => {
     toast('Likes coming soon!');
@@ -278,19 +295,38 @@ export function FeedPage() {
               </p>
             </div>
 
-            <button
-              onClick={handleRefresh}
-              disabled={isRefreshing || activeTab === 'saved'}
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-              style={{
-                background: 'hsl(var(--harbor-surface-1))',
-                color: 'hsl(var(--harbor-text-secondary))',
-                border: '1px solid hsl(var(--harbor-border-subtle))',
-                opacity: isRefreshing || activeTab === 'saved' ? 0.6 : 1,
-              }}
-            >
-              {isRefreshing ? 'Refreshing...' : 'Refresh'}
-            </button>
+            <div className="flex items-center gap-3">
+              {isSyncingRelay && (
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin"
+                    style={{
+                      borderColor: 'hsl(var(--harbor-primary))',
+                      borderTopColor: 'transparent',
+                    }}
+                  />
+                  <span
+                    className="text-xs"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  >
+                    Syncing...
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={handleRefresh}
+                disabled={isRefreshing || activeTab === 'saved'}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+                style={{
+                  background: 'hsl(var(--harbor-surface-1))',
+                  color: 'hsl(var(--harbor-text-secondary))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                  opacity: isRefreshing || activeTab === 'saved' ? 0.6 : 1,
+                }}
+              >
+                {isRefreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
           </div>
 
           {/* Tabs */}
@@ -507,6 +543,11 @@ export function FeedPage() {
                     >
                       {post.content}
                     </p>
+
+                    {/* Post media */}
+                    {post.media && post.media.length > 0 && (
+                      <PostMedia media={post.media} />
+                    )}
                   </div>
 
                   {/* Post actions */}

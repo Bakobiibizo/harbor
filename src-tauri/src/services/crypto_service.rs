@@ -31,15 +31,34 @@ impl CryptoService {
 
     /// Derive a peer ID from an Ed25519 signing key
     /// Uses libp2p's actual PeerId derivation for compatibility with the network layer
-    pub fn derive_peer_id_from_signing_key(signing_key: &SigningKey) -> String {
+    pub fn derive_peer_id_from_signing_key(signing_key: &SigningKey) -> Result<String> {
         // Convert our ed25519_dalek SigningKey to libp2p's format
         let secret =
             libp2p::identity::ed25519::SecretKey::try_from_bytes(signing_key.to_bytes().to_vec())
-                .expect("Valid Ed25519 key");
+                .map_err(|e| {
+                    AppError::Crypto(format!("Failed to convert Ed25519 signing key: {}", e))
+                })?;
         let libp2p_keypair = libp2p::identity::ed25519::Keypair::from(secret);
         let libp2p_keypair = libp2p::identity::Keypair::from(libp2p_keypair);
         let peer_id = libp2p::PeerId::from(libp2p_keypair.public());
-        peer_id.to_string()
+        Ok(peer_id.to_string())
+    }
+
+    /// Derive a peer ID from an Ed25519 verifying (public) key
+    ///
+    /// This is used during identity verification to confirm that the public key
+    /// included in an identity response actually derives the claimed peer ID.
+    /// Uses libp2p's actual PeerId derivation for network compatibility.
+    pub fn derive_peer_id_from_verifying_key(verifying_key: &VerifyingKey) -> Result<String> {
+        let libp2p_public_key = libp2p::identity::ed25519::PublicKey::try_from_bytes(
+            verifying_key.to_bytes().as_ref(),
+        )
+        .map_err(|e| {
+            AppError::Crypto(format!("Failed to convert Ed25519 public key: {}", e))
+        })?;
+        let libp2p_public = libp2p::identity::PublicKey::from(libp2p_public_key);
+        let peer_id = libp2p::PeerId::from(libp2p_public);
+        Ok(peer_id.to_string())
     }
 
     /// Derive a peer ID from an Ed25519 public key (DEPRECATED - use derive_peer_id_from_signing_key)
@@ -79,7 +98,7 @@ impl CryptoService {
             .map_err(|_| AppError::Crypto("Invalid key length".to_string()))?;
 
         let cipher = Aes256Gcm::new_from_slice(&key_bytes)
-            .map_err(|e| AppError::Crypto(format!("Failed to create cipher: {}", e)))?;
+            .map_err(|e| AppError::CryptoEncryption(format!("Failed to create cipher: {}", e)))?;
 
         // Generate random nonce
         let mut nonce_bytes = [0u8; 12];
@@ -97,7 +116,7 @@ impl CryptoService {
         // Encrypt
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_ref())
-            .map_err(|e| AppError::Crypto(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| AppError::CryptoEncryption(format!("Encryption failed: {}", e)))?;
 
         // Combine: salt (22 bytes as string) + nonce (12 bytes) + ciphertext
         let salt_bytes = salt.as_str().as_bytes();
@@ -113,27 +132,29 @@ impl CryptoService {
     /// Decrypt private keys using a passphrase
     pub fn decrypt_keys(encrypted: &[u8], passphrase: &str) -> Result<EncryptedKeys> {
         if encrypted.is_empty() {
-            return Err(AppError::Crypto("Empty encrypted data".to_string()));
+            return Err(AppError::CryptoDecryption(
+                "Empty encrypted data".to_string(),
+            ));
         }
 
         // Parse: salt_len (1 byte) + salt + nonce (12 bytes) + ciphertext
         let salt_len = encrypted[0] as usize;
         if encrypted.len() < 1 + salt_len + 12 {
-            return Err(AppError::Crypto(
+            return Err(AppError::CryptoDecryption(
                 "Invalid encrypted data format".to_string(),
             ));
         }
 
         let salt_str = std::str::from_utf8(&encrypted[1..1 + salt_len])
-            .map_err(|e| AppError::Crypto(format!("Invalid salt: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Invalid salt: {}", e)))?;
 
         let salt = SaltString::from_b64(salt_str)
-            .map_err(|e| AppError::Crypto(format!("Invalid salt format: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Invalid salt format: {}", e)))?;
 
         let nonce_start = 1 + salt_len;
         let nonce_bytes: [u8; 12] = encrypted[nonce_start..nonce_start + 12]
             .try_into()
-            .map_err(|_| AppError::Crypto("Invalid nonce length".to_string()))?;
+            .map_err(|_| AppError::CryptoDecryption("Invalid nonce length".to_string()))?;
 
         let ciphertext = &encrypted[nonce_start + 12..];
 
@@ -141,25 +162,27 @@ impl CryptoService {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
-            .map_err(|e| AppError::Crypto(format!("Failed to hash passphrase: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Failed to hash passphrase: {}", e)))?;
 
         let hash_bytes = password_hash
             .hash
-            .ok_or_else(|| AppError::Crypto("Failed to get hash bytes".to_string()))?;
+            .ok_or_else(|| AppError::CryptoDecryption("Failed to get hash bytes".to_string()))?;
 
         let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
             .try_into()
-            .map_err(|_| AppError::Crypto("Invalid key length".to_string()))?;
+            .map_err(|_| AppError::CryptoDecryption("Invalid key length".to_string()))?;
 
         // Decrypt
         let cipher = Aes256Gcm::new_from_slice(&key_bytes)
-            .map_err(|e| AppError::Crypto(format!("Failed to create cipher: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Failed to create cipher: {}", e)))?;
 
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| AppError::Crypto("Decryption failed - wrong passphrase?".to_string()))?;
+        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            AppError::IdentityInvalidPassphrase(
+                "Decryption failed - invalid passphrase".to_string(),
+            )
+        })?;
 
         let keys: EncryptedKeys = serde_json::from_slice(&plaintext)
             .map_err(|e| AppError::Serialization(format!("Failed to deserialize keys: {}", e)))?;
@@ -232,7 +255,7 @@ impl CryptoService {
     /// Encrypt a message using AES-256-GCM
     pub fn encrypt_message(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| AppError::Crypto(format!("Failed to create cipher: {}", e)))?;
+            .map_err(|e| AppError::CryptoEncryption(format!("Failed to create cipher: {}", e)))?;
 
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
@@ -240,7 +263,7 @@ impl CryptoService {
 
         let ciphertext = cipher
             .encrypt(nonce, plaintext)
-            .map_err(|e| AppError::Crypto(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| AppError::CryptoEncryption(format!("Encryption failed: {}", e)))?;
 
         // Combine nonce + ciphertext
         let mut result = Vec::with_capacity(12 + ciphertext.len());
@@ -253,18 +276,20 @@ impl CryptoService {
     /// Decrypt a message using AES-256-GCM
     pub fn decrypt_message(key: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>> {
         if encrypted.len() < 12 {
-            return Err(AppError::Crypto("Invalid encrypted message".to_string()));
+            return Err(AppError::CryptoDecryption(
+                "Invalid encrypted message".to_string(),
+            ));
         }
 
         let nonce = Nonce::from_slice(&encrypted[..12]);
         let ciphertext = &encrypted[12..];
 
         let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| AppError::Crypto(format!("Failed to create cipher: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Failed to create cipher: {}", e)))?;
 
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| AppError::Crypto("Decryption failed".to_string()))?;
+            .map_err(|_| AppError::CryptoDecryption("Decryption failed".to_string()))?;
 
         Ok(plaintext)
     }
@@ -307,14 +332,14 @@ impl CryptoService {
         counter: u64,
     ) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| AppError::Crypto(format!("Failed to create cipher: {}", e)))?;
+            .map_err(|e| AppError::CryptoEncryption(format!("Failed to create cipher: {}", e)))?;
 
         let nonce_bytes = Self::nonce_from_counter(counter);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
             .encrypt(nonce, plaintext)
-            .map_err(|e| AppError::Crypto(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| AppError::CryptoEncryption(format!("Encryption failed: {}", e)))?;
 
         // Return only ciphertext - counter is sent separately in message header
         Ok(ciphertext)
@@ -330,14 +355,14 @@ impl CryptoService {
         counter: u64,
     ) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| AppError::Crypto(format!("Failed to create cipher: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Failed to create cipher: {}", e)))?;
 
         let nonce_bytes = Self::nonce_from_counter(counter);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| AppError::Crypto("Decryption failed".to_string()))?;
+            .map_err(|_| AppError::CryptoDecryption("Decryption failed".to_string()))?;
 
         Ok(plaintext)
     }
@@ -417,7 +442,7 @@ mod tests {
     #[test]
     fn test_peer_id_derivation_libp2p() {
         let (signing_key, _) = CryptoService::generate_ed25519_keypair();
-        let peer_id = CryptoService::derive_peer_id_from_signing_key(&signing_key);
+        let peer_id = CryptoService::derive_peer_id_from_signing_key(&signing_key).unwrap();
 
         // libp2p peer IDs start with "12D3KooW" and are longer (base58 encoded)
         assert!(peer_id.starts_with("12D3KooW"));
@@ -436,7 +461,7 @@ mod tests {
         let (signing_key, _) = CryptoService::generate_ed25519_keypair();
 
         // Method 1: Our derive_peer_id_from_signing_key function
-        let derived_peer_id = CryptoService::derive_peer_id_from_signing_key(&signing_key);
+        let derived_peer_id = CryptoService::derive_peer_id_from_signing_key(&signing_key).unwrap();
 
         // Method 2: The same way the network layer derives it
         let bytes = signing_key.to_bytes();
@@ -450,6 +475,33 @@ mod tests {
             derived_peer_id, network_peer_id,
             "Peer ID mismatch! Identity service: {} vs Network: {}",
             derived_peer_id, network_peer_id
+        );
+    }
+
+    #[test]
+    fn test_peer_id_from_verifying_key_matches_signing_key() {
+        // Verify that derive_peer_id_from_verifying_key produces the same peer ID
+        // as derive_peer_id_from_signing_key for the corresponding keypair.
+        // This is critical for the identity exchange signature verification.
+        let (signing_key, verifying_key) = CryptoService::generate_ed25519_keypair();
+
+        let from_signing =
+            CryptoService::derive_peer_id_from_signing_key(&signing_key).unwrap();
+        let from_verifying =
+            CryptoService::derive_peer_id_from_verifying_key(&verifying_key).unwrap();
+
+        assert_eq!(
+            from_signing, from_verifying,
+            "Peer ID from signing key ({}) must match peer ID from verifying key ({})",
+            from_signing, from_verifying
+        );
+
+        // Also verify it starts with the expected libp2p prefix
+        assert!(from_verifying.starts_with("12D3KooW"));
+        assert!(
+            from_verifying.len() >= 50,
+            "Peer ID should be a full libp2p PeerId: {}",
+            from_verifying
         );
     }
 

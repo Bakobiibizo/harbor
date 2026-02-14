@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { createLogger } from '../utils/logger';
 import type { Message, Conversation, SendMessageResult } from '../types';
+
+const log = createLogger('MessagingStore');
 
 interface MessagingState {
   // State
@@ -23,6 +26,12 @@ interface MessagingState {
   setSelectedConversation: (id: string | null) => void;
   clearConversationSelection: () => void;
   handleIncomingMessage: (message: Message) => void;
+  updateMessageStatus: (
+    messageId: string,
+    status: Message['status'],
+    deliveredAt?: number | null,
+    readAt?: number | null,
+  ) => void;
   markConversationRead: (peerId: string) => Promise<void>;
 }
 
@@ -42,7 +51,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       const conversations = await invoke<Conversation[]>('get_conversations');
       set({ conversations, isLoading: false });
     } catch (error) {
-      console.error('Failed to load conversations:', error);
+      log.error('Failed to load conversations', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -60,7 +69,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
         isLoading: false,
       }));
     } catch (error) {
-      console.error('Failed to load messages:', error);
+      log.error('Failed to load messages', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -100,11 +109,11 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       // Refresh conversations to update last message
       get()
         .loadConversations()
-        .catch((err) => console.error('Failed to refresh conversations after send:', err));
+        .catch((err) => log.error('Failed to refresh conversations after send', err));
 
       return result;
     } catch (error) {
-      console.error('Failed to send message:', error);
+      log.error('Failed to send message', error);
       throw error;
     }
   },
@@ -115,7 +124,7 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
     if (peerId) {
       get()
         .loadMessages(peerId)
-        .catch((err) => console.error('Failed to load messages for active conversation:', err));
+        .catch((err) => log.error('Failed to load messages for active conversation', err));
     }
   },
 
@@ -144,8 +153,43 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
     get()
       .loadConversations()
       .catch((err) =>
-        console.error('Failed to refresh conversations after incoming message:', err),
+        log.error('Failed to refresh conversations after incoming message', err),
       );
+  },
+
+  // Update a message's status (e.g., when an ACK is received)
+  updateMessageStatus: (
+    messageId: string,
+    status: Message['status'],
+    deliveredAt?: number | null,
+    readAt?: number | null,
+  ) => {
+    set((state) => {
+      const updatedMessages: Record<string, Message[]> = {};
+      let found = false;
+
+      for (const [peerId, msgs] of Object.entries(state.messages)) {
+        const updated = msgs.map((msg) => {
+          if (msg.messageId === messageId) {
+            found = true;
+            return {
+              ...msg,
+              status,
+              deliveredAt: deliveredAt !== undefined ? deliveredAt : msg.deliveredAt,
+              readAt: readAt !== undefined ? readAt : msg.readAt,
+            };
+          }
+          return msg;
+        });
+        updatedMessages[peerId] = updated;
+      }
+
+      if (!found) {
+        return state;
+      }
+
+      return { messages: updatedMessages };
+    });
   },
 
   // Mark conversation as read
@@ -155,9 +199,9 @@ export const useMessagingStore = create<MessagingState>((set, get) => ({
       // Refresh conversations to update unread count
       get()
         .loadConversations()
-        .catch((err) => console.error('Failed to refresh conversations after marking read:', err));
+        .catch((err) => log.error('Failed to refresh conversations after marking read', err));
     } catch (error) {
-      console.error('Failed to mark conversation read:', error);
+      log.error('Failed to mark conversation read', error);
     }
   },
 }));

@@ -1,10 +1,10 @@
-# Harbor Infrastructure - libp2p Relay Server
+# Harbor Infrastructure - Community Relay Server
 
 This directory contains AWS CloudFormation templates for deploying infrastructure to support Harbor's P2P networking.
 
-## libp2p Relay Server
+## Community Relay Server
 
-The relay server enables NAT traversal for Harbor users. When users are behind NAT (most home networks), they can connect through this relay to communicate with peers anywhere on the internet.
+The relay server enables NAT traversal for Harbor users and hosts community boards. When users are behind NAT (most home networks), they can connect through this relay to communicate with peers anywhere on the internet.
 
 ### Prerequisites
 
@@ -13,20 +13,21 @@ The relay server enables NAT traversal for Harbor users. When users are behind N
    - That's enough to run one relay server 24/7 for free!
 
 2. **(Optional) EC2 Key Pair** - For SSH access to the server
-   - Create at: AWS Console → EC2 → Key Pairs → Create key pair
+   - Create at: AWS Console -> EC2 -> Key Pairs -> Create key pair
 
 ### How It Works
 
 The CloudFormation template provisions an EC2 instance with a UserData script that:
 
-1. Installs Rust and build dependencies on Amazon Linux 2023
-2. Clones the Harbor repository from GitHub
-3. Compiles the relay server binary from source using `cargo build --release`
-4. Installs the binary to `/usr/local/bin/harbor-relay`
-5. Creates and starts a systemd service (`libp2p-relay`)
-6. Extracts the relay's peer ID and writes the full relay address to SSM Parameter Store
+1. Downloads a pre-compiled relay binary from the Harbor GitHub repository
+2. Verifies the binary's SHA256 checksum for integrity
+3. Installs the binary to `/usr/local/bin/harbor-relay`
+4. Creates and starts a systemd service (named after the CloudFormation stack, default `harbor-relay`)
+5. Waits for the Elastic IP association to stabilize
+6. Restarts the service with the correct `--announce-ip` flag
+7. Extracts the relay's peer ID and writes the full relay address to SSM Parameter Store
 
-The initial build takes approximately 5 minutes. After that, the relay runs as a native systemd service with automatic restarts.
+The setup takes approximately 2 minutes. After that, the relay runs as a native systemd service with automatic restarts.
 
 ### One-Click Deploy
 
@@ -34,10 +35,10 @@ Click the button for your preferred region:
 
 | Region | Deploy |
 |--------|--------|
-| US East (N. Virginia) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/libp2p-relay-cloudformation.yaml) |
-| US West (Oregon) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/libp2p-relay-cloudformation.yaml) |
-| EU (Ireland) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/libp2p-relay-cloudformation.yaml) |
-| Asia Pacific (Tokyo) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/libp2p-relay-cloudformation.yaml) |
+| US East (N. Virginia) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
+| US West (Oregon) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
+| EU (Ireland) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
+| Asia Pacific (Tokyo) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
 
 ### Manual Deployment via AWS CLI
 
@@ -45,18 +46,21 @@ Click the button for your preferred region:
 # Deploy with default settings (t2.micro, port 4001)
 aws cloudformation create-stack \
   --stack-name harbor-relay \
-  --template-body file://libp2p-relay-cloudformation.yaml \
+  --template-body file://community-relay-cloudformation.yaml \
   --capabilities CAPABILITY_NAMED_IAM
 
 # Deploy with custom settings
 aws cloudformation create-stack \
   --stack-name harbor-relay \
-  --template-body file://libp2p-relay-cloudformation.yaml \
+  --template-body file://community-relay-cloudformation.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameters \
     ParameterKey=InstanceType,ParameterValue=t2.micro \
     ParameterKey=RelayPort,ParameterValue=4001 \
-    ParameterKey=MaxReservations,ParameterValue=128
+    ParameterKey=MaxReservations,ParameterValue=128 \
+    ParameterKey=CommunityName,ParameterValue="My Community" \
+    ParameterKey=RateLimitMaxRequests,ParameterValue=60 \
+    ParameterKey=RateLimitWindowSecs,ParameterValue=60
 
 # Check deployment status
 aws cloudformation describe-stacks --stack-name harbor-relay
@@ -74,8 +78,10 @@ After deployment, you need to get the relay's peer ID to use it in Harbor:
 
 The CloudFormation stack automatically writes the full relay address (including peer ID) to SSM Parameter Store. Check the stack outputs for a direct link, or run:
 ```bash
-aws ssm get-parameter --name "/harbor/relay-address" --query 'Parameter.Value' --output text
+aws ssm get-parameter --name "/harbor/harbor-relay/relay-address" --query 'Parameter.Value' --output text
 ```
+
+Note: If you used a custom stack name, replace `harbor-relay` with your stack name in the parameter path.
 
 **Option 2: AWS Systems Manager Session (no SSH needed)**
 ```bash
@@ -83,13 +89,13 @@ aws ssm get-parameter --name "/harbor/relay-address" --query 'Parameter.Value' -
 aws ssm start-session --target <instance-id>
 
 # Then run:
-journalctl -u libp2p-relay --no-pager | grep "Peer ID"
+journalctl -u harbor-relay --no-pager | grep "Peer ID"
 ```
 
 **Option 3: SSH (if you provided a key pair)**
 ```bash
 ssh -i your-key.pem ec2-user@<public-ip>
-journalctl -u libp2p-relay --no-pager | grep "Peer ID"
+journalctl -u harbor-relay --no-pager | grep "Peer ID"
 ```
 
 The output will look like:
@@ -121,45 +127,47 @@ const PUBLIC_RELAYS: &[&str] = &[
 | Resource | Free Tier | After Free Tier |
 |----------|-----------|-----------------|
 | EC2 t2.micro | 750 hours/month (1 year) | ~$8.50/month |
-| EBS Storage (8GB gp3) | 30GB free | ~$0.64/month |
+| EBS Storage (20GB gp3) | 30GB free | ~$1.60/month |
 | Data Transfer | 100GB out free | $0.09/GB |
 | Elastic IP | Free when attached | $3.60/month if unused |
 
 **Total estimated cost:**
 - First 12 months: **$0** (free tier)
-- After free tier: **~$9-12/month**
+- After free tier: **~$10-14/month**
 
 ### Monitoring
 
 **View logs:**
 ```bash
 # Via SSM or SSH into the server, then:
-journalctl -u libp2p-relay -f
+journalctl -u harbor-relay -f
 ```
 
 **Check relay status:**
 ```bash
-systemctl status libp2p-relay
+systemctl status harbor-relay
 ```
+
+Note: The systemd service name matches the CloudFormation stack name. If you used a custom stack name (e.g., `my-relay`), replace `harbor-relay` with that name in the commands above.
 
 ### Troubleshooting
 
 **Relay not starting:**
 ```bash
 # Check relay service status
-systemctl status libp2p-relay
+systemctl status harbor-relay
 
 # View detailed logs
-journalctl -u libp2p-relay -n 100
+journalctl -u harbor-relay -n 100
 
-# Check the setup log for build or startup errors
+# Check the setup log for download or startup errors
 cat /var/log/user-data.log
 ```
 
 **Can't connect from Harbor:**
 1. Verify security group allows inbound on port 4001 (TCP and UDP)
 2. Check that the peer ID in your multiaddress is correct
-3. Ensure the relay service is running: `systemctl status libp2p-relay`
+3. Ensure the relay service is running: `systemctl status harbor-relay`
 
 **High memory usage:**
 Reduce `MaxReservations` and `MaxCircuits` parameters in the CloudFormation stack.

@@ -3,11 +3,12 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::{BoardsRepository, Database};
+use crate::db::{BoardsRepository, Database, UpsertBoardPostParams};
 use crate::error::{AppError, Result};
 use crate::services::{
     IdentityService, SignableBoardListRequest, SignableBoardPost, SignableBoardPostDelete,
-    SignableBoardPostsRequest, SignablePeerRegistration,
+    SignableBoardPostsRequest, SignableGetWallPosts, SignablePeerRegistration,
+    SignableWallPostDelete, SignableWallPostSubmit,
 };
 
 /// Service for managing community board operations
@@ -61,6 +62,41 @@ pub struct OutgoingBoardPostsRequest {
 /// A board post delete request
 #[derive(Debug, Clone)]
 pub struct OutgoingBoardPostDelete {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
+}
+
+/// A wall post submission request ready to be sent to the relay
+#[derive(Debug, Clone)]
+pub struct OutgoingWallPostSubmit {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+    pub timestamp: i64,
+    pub request_signature: Vec<u8>,
+}
+
+/// A wall posts retrieval request ready to be sent
+#[derive(Debug, Clone)]
+pub struct OutgoingGetWallPosts {
+    pub requester_peer_id: String,
+    pub author_peer_id: String,
+    pub since_lamport_clock: i64,
+    pub limit: u32,
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
+}
+
+/// A wall post delete request ready to be sent
+#[derive(Debug, Clone)]
+pub struct OutgoingWallPostDelete {
     pub post_id: String,
     pub author_peer_id: String,
     pub timestamp: i64,
@@ -219,6 +255,112 @@ impl BoardService {
         })
     }
 
+    // ===== Wall post relay operations =====
+
+    /// Create a signed wall post submission for a relay
+    pub fn create_wall_post_submit(
+        &self,
+        post_id: &str,
+        content_type: &str,
+        content_text: Option<&str>,
+        visibility: &str,
+        lamport_clock: i64,
+        created_at: i64,
+        post_signature: &[u8],
+    ) -> Result<OutgoingWallPostSubmit> {
+        let info = self
+            .identity_service
+            .get_identity_info()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        let now = chrono::Utc::now().timestamp();
+
+        let signable = SignableWallPostSubmit {
+            author_peer_id: info.peer_id.clone(),
+            post_id: post_id.to_string(),
+            content_type: content_type.to_string(),
+            content_text: content_text.map(|t| t.to_string()),
+            visibility: visibility.to_string(),
+            lamport_clock,
+            created_at,
+            signature: post_signature.to_vec(),
+            timestamp: now,
+        };
+
+        let request_signature = self.identity_service.sign(&signable)?;
+
+        Ok(OutgoingWallPostSubmit {
+            author_peer_id: info.peer_id,
+            post_id: post_id.to_string(),
+            content_type: content_type.to_string(),
+            content_text: content_text.map(|t| t.to_string()),
+            visibility: visibility.to_string(),
+            lamport_clock,
+            created_at,
+            signature: post_signature.to_vec(),
+            timestamp: now,
+            request_signature,
+        })
+    }
+
+    /// Create a signed request to get wall posts from a relay
+    pub fn create_get_wall_posts_request(
+        &self,
+        author_peer_id: &str,
+        since_lamport_clock: i64,
+        limit: u32,
+    ) -> Result<OutgoingGetWallPosts> {
+        let info = self
+            .identity_service
+            .get_identity_info()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        let now = chrono::Utc::now().timestamp();
+        let signable = SignableGetWallPosts {
+            requester_peer_id: info.peer_id.clone(),
+            author_peer_id: author_peer_id.to_string(),
+            since_lamport_clock,
+            limit,
+            timestamp: now,
+        };
+        let signature = self.identity_service.sign(&signable)?;
+
+        Ok(OutgoingGetWallPosts {
+            requester_peer_id: info.peer_id,
+            author_peer_id: author_peer_id.to_string(),
+            since_lamport_clock,
+            limit,
+            timestamp: now,
+            signature,
+        })
+    }
+
+    /// Create a signed wall post delete request for a relay
+    pub fn create_delete_wall_post_request(
+        &self,
+        post_id: &str,
+    ) -> Result<OutgoingWallPostDelete> {
+        let info = self
+            .identity_service
+            .get_identity_info()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        let now = chrono::Utc::now().timestamp();
+        let signable = SignableWallPostDelete {
+            author_peer_id: info.peer_id.clone(),
+            post_id: post_id.to_string(),
+            timestamp: now,
+        };
+        let signature = self.identity_service.sign(&signable)?;
+
+        Ok(OutgoingWallPostDelete {
+            post_id: post_id.to_string(),
+            author_peer_id: info.peer_id,
+            timestamp: now,
+            signature,
+        })
+    }
+
     // ===== Local data operations =====
 
     /// Join a community by storing it locally
@@ -303,17 +445,19 @@ impl BoardService {
         for post in posts {
             BoardsRepository::upsert_board_post(
                 &self.db,
-                &post.post_id,
-                &post.board_id,
-                relay_peer_id,
-                &post.author_peer_id,
-                post.author_display_name.as_deref(),
-                &post.content_type,
-                post.content_text.as_deref(),
-                post.lamport_clock,
-                post.created_at,
-                post.deleted_at,
-                &post.signature,
+                &UpsertBoardPostParams {
+                    post_id: &post.post_id,
+                    board_id: &post.board_id,
+                    relay_peer_id,
+                    author_peer_id: &post.author_peer_id,
+                    author_display_name: post.author_display_name.as_deref(),
+                    content_type: &post.content_type,
+                    content_text: post.content_text.as_deref(),
+                    lamport_clock: post.lamport_clock,
+                    created_at: post.created_at,
+                    deleted_at: post.deleted_at,
+                    signature: &post.signature,
+                },
             )
             .map_err(AppError::Database)?;
 

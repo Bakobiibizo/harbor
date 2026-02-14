@@ -135,12 +135,6 @@ Resources:
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay UDP/QUIC
-        # SSH access (only if key pair provided)
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
-          Description: SSH access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -148,6 +142,18 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "\${AWS::StackName}-sg"
+
+  # SSH access - only created when a key pair is configured
+  SSHIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasKeyPair
+    Properties:
+      GroupId: !Ref RelaySecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 0.0.0.0/0
+      Description: SSH access (only when key pair is provided)
 
   # SSM Parameter to store the relay address
   RelayAddressParameter:
@@ -258,9 +264,11 @@ Resources:
 
           chmod +x /usr/local/bin/$SERVICE_NAME
 
-          # The relay binary auto-generates an identity key on first run.
-          # This identity persists across service restarts.
-          mkdir -p /root/.config/$SERVICE_NAME
+          # Security: identity key is generated at deploy time by the relay binary
+          # (load_or_generate_identity). No secrets are baked into this template.
+          IDENTITY_DIR="/var/lib/$SERVICE_NAME/identity"
+          mkdir -p "$IDENTITY_DIR"
+          chmod 700 "$IDENTITY_DIR"
 
           # Get public IP using IMDSv2
           echo "Getting public IP..."
@@ -286,7 +294,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
           StandardOutput=journal
           StandardError=journal
 
@@ -343,7 +351,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
           StandardOutput=journal
           StandardError=journal
 
@@ -691,8 +699,13 @@ Resources:
 
           chmod +x /usr/local/bin/$SERVICE_NAME
 
-          mkdir -p /root/.config/$SERVICE_NAME
-          mkdir -p /var/lib/$SERVICE_NAME/data
+          # Security: identity key is generated at deploy time by the relay binary
+          # (load_or_generate_identity). No secrets are baked into this template.
+          IDENTITY_DIR="/var/lib/$SERVICE_NAME/identity"
+          DATA_DIR="/var/lib/$SERVICE_NAME/data"
+          mkdir -p "$IDENTITY_DIR"
+          mkdir -p "$DATA_DIR"
+          chmod 700 "$IDENTITY_DIR"
 
           # Start relay without announce-ip so it generates its identity
           echo "Creating initial systemd service..."
@@ -707,7 +720,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir /var/lib/$SERVICE_NAME/data --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir $DATA_DIR --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
           StandardOutput=journal
           StandardError=journal
 
@@ -764,7 +777,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir /var/lib/$SERVICE_NAME/data --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
+          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir $DATA_DIR --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
           StandardOutput=journal
           StandardError=journal
 

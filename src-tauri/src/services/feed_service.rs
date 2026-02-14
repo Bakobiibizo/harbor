@@ -66,40 +66,34 @@ impl FeedService {
         allowed_authors.sort();
         allowed_authors.dedup();
 
-        // Get posts from all allowed authors
-        let mut all_posts = Vec::new();
-        for author in &allowed_authors {
-            let posts = PostsRepository::get_by_author(&self.db, author, limit, before_timestamp)
+        // Get posts from all allowed authors in a single efficient query
+        // sorted by created_at DESC with proper limit applied globally
+        let all_posts =
+            PostsRepository::get_feed_posts(&self.db, &allowed_authors, limit, before_timestamp)
                 .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-            // Filter: if it's not our own post and visibility is "contacts",
-            // make sure we have permission (we already checked above)
-            for post in posts {
-                if post.author_peer_id == identity.peer_id {
-                    // Our own posts are always visible
-                    all_posts.push(post);
-                } else if post.visibility == PostVisibility::Public {
-                    // Public posts are always visible
-                    all_posts.push(post);
-                } else if post.visibility == PostVisibility::Contacts {
-                    // Contacts-only posts require WallRead permission (already verified above)
-                    all_posts.push(post);
-                }
-            }
-        }
-
-        // Sort by created_at descending
-        all_posts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-        // Apply limit
-        all_posts.truncate(limit as usize);
 
         // Build a cache of display names for authors
         let mut display_name_cache: HashMap<String, Option<String>> = HashMap::new();
 
-        // Convert to FeedItems
+        // Convert to FeedItems with visibility filtering
         let feed_items: Vec<FeedItem> = all_posts
             .into_iter()
+            .filter(|post| {
+                // Our own posts are always visible
+                if post.author_peer_id == identity.peer_id {
+                    return true;
+                }
+                // Public posts are always visible
+                if post.visibility == PostVisibility::Public {
+                    return true;
+                }
+                // Contacts-only posts require WallRead permission
+                // (already verified via allowed_authors list)
+                if post.visibility == PostVisibility::Contacts {
+                    return true;
+                }
+                false
+            })
             .map(|post| {
                 // Look up display name from cache or contacts
                 let author_display_name = display_name_cache

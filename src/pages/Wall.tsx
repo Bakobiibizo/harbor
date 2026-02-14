@@ -2,6 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useWallStore } from '../stores';
 import { WallIcon, EllipsisIcon } from '../components/icons';
+import { PostMedia } from '../components/common/PostMedia';
+import { getInitials, formatDate } from '../utils/formatting';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Wall');
 
 export function WallPage() {
   const { state } = useIdentityStore();
@@ -19,7 +24,7 @@ export function WallPage() {
   const [newPost, setNewPost] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<
-    { type: 'image' | 'video'; url: string; name: string }[]
+    { type: 'image' | 'video'; url: string; name: string; file: File }[]
   >([]);
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
@@ -31,34 +36,9 @@ export function WallPage() {
   // Load posts from SQLite on mount
   useEffect(() => {
     if (identity) {
-      loadPosts();
+      loadPosts().catch((err) => log.error('Failed to load posts', err));
     }
   }, [identity, loadPosts]);
-
-  const formatDate = (date: Date) => {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (hours < 1) return 'Just now';
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    });
-  };
-
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
 
   const handlePost = async () => {
     if (!newPost.trim() && pendingMedia.length === 0) return;
@@ -70,7 +50,7 @@ export function WallPage() {
       setIsComposing(false);
       toast.success('Post published!');
     } catch (err) {
-      console.error('Failed to create post:', err);
+      log.error('Failed to create post', err);
       toast.error('Failed to publish post');
     }
   };
@@ -97,7 +77,7 @@ export function WallPage() {
       return;
     }
 
-    // Create object URL for preview
+    // Create object URL for preview, and keep the File reference for storage
     const url = URL.createObjectURL(file);
     setPendingMedia([
       ...pendingMedia,
@@ -105,6 +85,7 @@ export function WallPage() {
         type: mediaTypeRef.current,
         url,
         name: file.name,
+        file,
       },
     ]);
     toast.success(`${mediaTypeRef.current === 'image' ? 'Image' : 'Video'} added!`);
@@ -135,7 +116,7 @@ export function WallPage() {
       setShowPostMenu(null);
       toast.success('Post deleted');
     } catch (err) {
-      console.error('Failed to delete post:', err);
+      log.error('Failed to delete post', err);
       toast.error('Failed to delete post');
     }
   };
@@ -545,25 +526,7 @@ export function WallPage() {
 
                   {/* Post media */}
                   {post.media && post.media.length > 0 && (
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      {post.media.map((media, index) => (
-                        <div
-                          key={index}
-                          className="rounded-lg overflow-hidden"
-                          style={{ background: 'hsl(var(--harbor-surface-1))' }}
-                        >
-                          {media.type === 'image' ? (
-                            <img
-                              src={media.url}
-                              alt={media.name || 'Image'}
-                              className="max-w-full max-h-96 object-contain"
-                            />
-                          ) : (
-                            <video src={media.url} controls className="max-w-full max-h-96" />
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                    <PostMedia media={post.media} />
                   )}
                 </div>
 
