@@ -2347,6 +2347,36 @@ impl NetworkService {
                     )
                 }
             }
+            Ok(MessagingMessage::EditMessage {
+                message_id,
+                new_content,
+                edited_at,
+            }) => {
+                info!(
+                    "Received edit for message {} from {} at {}",
+                    message_id, peer, edited_at
+                );
+
+                if let Some(ref messaging_service) = self.messaging_service {
+                    match messaging_service.apply_incoming_edit(&message_id, &new_content) {
+                        Ok(()) => {
+                            info!("Successfully applied edit for message {}", message_id);
+                            (true, Some(message_id), None)
+                        }
+                        Err(e) => {
+                            warn!("Failed to apply edit for message {}: {}", message_id, e);
+                            (false, Some(message_id), Some(e.to_string()))
+                        }
+                    }
+                } else {
+                    warn!("No messaging service configured, cannot process edit");
+                    (
+                        false,
+                        Some(message_id),
+                        Some("Messaging service not available".to_string()),
+                    )
+                }
+            }
             Err(e) => {
                 warn!("Failed to decode messaging payload: {}", e);
                 (false, None, Some(format!("Failed to decode: {}", e)))

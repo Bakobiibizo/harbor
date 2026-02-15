@@ -398,13 +398,37 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                     placeholder="Enter passphrase again"
                   />
 
-                  <Input
-                    label="Passphrase Hint (optional)"
-                    type="text"
-                    value={passphraseHint}
-                    onChange={(e) => setPassphraseHint(e.target.value)}
-                    placeholder="A hint to help remember your passphrase"
-                  />
+                  <div>
+                    <Input
+                      label="Passphrase Hint (optional)"
+                      type="text"
+                      value={passphraseHint}
+                      onChange={(e) => {
+                        if (e.target.value.length <= 100) {
+                          setPassphraseHint(e.target.value);
+                        }
+                      }}
+                      placeholder="A hint to help remember your passphrase"
+                    />
+                    <div className="flex items-center justify-between mt-1.5">
+                      <p
+                        className="text-xs"
+                        style={{ color: 'hsl(var(--harbor-warning))' }}
+                      >
+                        Do not include your actual passphrase in the hint.
+                      </p>
+                      <p
+                        className="text-xs flex-shrink-0 ml-2"
+                        style={{
+                          color: passphraseHint.length >= 90
+                            ? 'hsl(var(--harbor-warning))'
+                            : 'hsl(var(--harbor-text-tertiary))',
+                        }}
+                      >
+                        {passphraseHint.length}/100
+                      </p>
+                    </div>
+                  </div>
 
                   {displayError && (
                     <div

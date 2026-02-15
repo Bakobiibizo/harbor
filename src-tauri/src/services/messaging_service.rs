@@ -39,6 +39,7 @@ pub struct DecryptedMessage {
     pub read_at: Option<i64>,
     pub status: String,
     pub is_outgoing: bool,
+    pub edited_at: Option<i64>,
 }
 
 /// A message ready to be sent over the network
@@ -555,6 +556,7 @@ impl MessagingService {
                 read_at: msg.read_at,
                 status: msg.status,
                 is_outgoing: msg.sender_peer_id == identity.peer_id,
+                edited_at: msg.edited_at,
             });
         }
 
@@ -607,6 +609,159 @@ impl MessagingService {
     /// Update message status (for network events)
     pub fn update_message_status(&self, message_id: &str, status: MessageStatus) -> Result<bool> {
         MessagesRepository::update_status(&self.db, message_id, status)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+
+    /// Clear all messages in a conversation (keeps the conversation visible if new messages arrive)
+    pub fn clear_conversation_history(&self, peer_id: &str) -> Result<i64> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
+
+        MessagesRepository::clear_conversation_messages(&self.db, &conversation_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+
+    /// Edit a sent message's content (re-encrypts and updates the DB)
+    pub fn edit_message(&self, message_id: &str, new_content: &str) -> Result<()> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        // Get the original message
+        let original = MessagesRepository::get_by_message_id(&self.db, message_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+            .ok_or_else(|| AppError::NotFound("Message not found".to_string()))?;
+
+        // Verify we are the sender
+        if original.sender_peer_id != identity.peer_id {
+            return Err(AppError::PermissionDenied(
+                "Can only edit your own messages".to_string(),
+            ));
+        }
+
+        // Determine the peer (the other party)
+        let peer_id = &original.recipient_peer_id;
+
+        // Get peer's X25519 key for encryption
+        let x25519_public = self
+            .contacts_service
+            .get_x25519_public(peer_id)?
+            .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;
+
+        let our_keys = self.identity_service.get_unlocked_keys()?;
+
+        // Derive conversation key
+        let their_public = X25519Public::from(
+            <[u8; 32]>::try_from(x25519_public.as_slice())
+                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?,
+        );
+        let shared_secret = CryptoService::x25519_dh(&our_keys.x25519_secret, &their_public);
+        let conv_key = CryptoService::derive_conversation_key(
+            &shared_secret,
+            &original.conversation_id,
+            &identity.peer_id,
+            peer_id,
+        );
+
+        // Re-encrypt with the same nonce counter (content replacement)
+        let new_content_encrypted = CryptoService::encrypt_message_with_counter(
+            &conv_key,
+            new_content.as_bytes(),
+            original.nonce_counter,
+        )?;
+
+        let edited_at = chrono::Utc::now().timestamp();
+
+        // Update in database
+        MessagesRepository::update_message_content(
+            &self.db,
+            message_id,
+            &new_content_encrypted,
+            edited_at,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Apply an incoming edit from a peer (re-encrypts and stores)
+    pub fn apply_incoming_edit(&self, message_id: &str, new_content: &str) -> Result<()> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        // Get the original message
+        let original = MessagesRepository::get_by_message_id(&self.db, message_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+            .ok_or_else(|| AppError::NotFound("Message not found".to_string()))?;
+
+        // Verify the message was sent by the peer (not by us)
+        if original.sender_peer_id == identity.peer_id {
+            return Err(AppError::Validation(
+                "Cannot apply incoming edit to our own message".to_string(),
+            ));
+        }
+
+        let peer_id = &original.sender_peer_id;
+
+        // Get peer's X25519 key for encryption
+        let x25519_public = self
+            .contacts_service
+            .get_x25519_public(peer_id)?
+            .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;
+
+        let our_keys = self.identity_service.get_unlocked_keys()?;
+
+        // Derive conversation key
+        let their_public = X25519Public::from(
+            <[u8; 32]>::try_from(x25519_public.as_slice())
+                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?,
+        );
+        let shared_secret = CryptoService::x25519_dh(&our_keys.x25519_secret, &their_public);
+        let conv_key = CryptoService::derive_conversation_key(
+            &shared_secret,
+            &original.conversation_id,
+            &identity.peer_id,
+            peer_id,
+        );
+
+        // Re-encrypt with the same nonce counter
+        let new_content_encrypted = CryptoService::encrypt_message_with_counter(
+            &conv_key,
+            new_content.as_bytes(),
+            original.nonce_counter,
+        )?;
+
+        let edited_at = chrono::Utc::now().timestamp();
+
+        // Update in database
+        MessagesRepository::update_message_content(
+            &self.db,
+            message_id,
+            &new_content_encrypted,
+            edited_at,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Delete a conversation and all its messages entirely
+    pub fn delete_conversation(&self, peer_id: &str) -> Result<i64> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
+
+        MessagesRepository::delete_conversation(&self.db, &conversation_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 }

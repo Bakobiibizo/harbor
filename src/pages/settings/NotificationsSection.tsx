@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { useSettingsStore } from '../../stores';
-import { Toggle } from './shared';
+import { SectionHeader, SettingsCard, Toggle } from './shared';
 import { playMessageSound } from '../../services/audioNotifications';
 
 export function NotificationsSection() {
@@ -11,9 +11,6 @@ export function NotificationsSection() {
     (value: boolean) => {
       setSoundEnabled(value);
       if (value) {
-        // Play a preview sound so the user hears what it sounds like
-        // Temporarily ensure the setting is enabled before playing
-        // (setState is synchronous in Zustand so this works)
         playMessageSound();
         toast.success('Sound notifications enabled');
       } else {
@@ -25,25 +22,12 @@ export function NotificationsSection() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3
-          className="text-xl font-semibold mb-1"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
-          Notifications
-        </h3>
-        <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Control sound alerts for incoming events
-        </p>
-      </div>
+      <SectionHeader
+        title="Notifications"
+        description="Control sound alerts for incoming events"
+      />
 
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
             <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
@@ -55,15 +39,9 @@ export function NotificationsSection() {
           </div>
           <Toggle enabled={soundEnabled} onChange={handleToggleSound} />
         </div>
-      </div>
+      </SettingsCard>
 
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <h4 className="font-medium mb-4" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Smart muting
         </h4>
@@ -79,7 +57,7 @@ export function NotificationsSection() {
               style={{ background: 'hsl(var(--harbor-primary))' }}
             />
             <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Messages</span> -- muted
+              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Messages</span> — muted
               when viewing the sender's conversation
             </p>
           </div>
@@ -89,7 +67,7 @@ export function NotificationsSection() {
               style={{ background: 'hsl(var(--harbor-accent))' }}
             />
             <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Wall posts</span> -- muted
+              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Wall posts</span> — muted
               when viewing the feed
             </p>
           </div>
@@ -99,12 +77,12 @@ export function NotificationsSection() {
               style={{ background: 'hsl(var(--harbor-success))' }}
             />
             <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Board posts</span> --
+              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Board posts</span> —
               muted when viewing that board
             </p>
           </div>
         </div>
-      </div>
+      </SettingsCard>
     </div>
   );
 }

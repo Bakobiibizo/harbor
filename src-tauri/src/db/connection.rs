@@ -11,7 +11,9 @@ const MIGRATION_005: &str = include_str!("migrations/005_post_likes.sql");
 const MIGRATION_006: &str = include_str!("migrations/006_bootstrap_nodes.sql");
 const MIGRATION_007: &str = include_str!("migrations/007_passphrase_hint.sql");
 const MIGRATION_008: &str = include_str!("migrations/008_boards.sql");
-const MIGRATION_009: &str = include_str!("migrations/009_posts_lamport_index.sql");
+const MIGRATION_009: &str = include_str!("migrations/009_comments.sql");
+const MIGRATION_010: &str = include_str!("migrations/010_message_edit.sql");
+const MIGRATION_011: &str = include_str!("migrations/011_posts_lamport_index.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -140,6 +142,18 @@ impl Database {
             info!("Running migration 009...");
             conn.execute_batch(MIGRATION_009)?;
             info!("Migration 009 complete");
+        }
+
+        if version < 10 {
+            info!("Running migration 010...");
+            conn.execute_batch(MIGRATION_010)?;
+            info!("Migration 010 complete");
+        }
+
+        if version < 11 {
+            info!("Running migration 011...");
+            conn.execute_batch(MIGRATION_011)?;
+            info!("Migration 011 complete");
         }
 
         Ok(())

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { useSettingsStore } from '../../stores';
-import { Toggle } from './shared';
+import { SectionHeader, SettingsCard, Toggle } from './shared';
 
 export function NetworkSection() {
   const {
@@ -14,56 +14,52 @@ export function NetworkSection() {
     removeBootstrapNode,
   } = useSettingsStore();
 
-  const [newNodeAddress, setNewNodeAddress] = useState('');
+  const [newRelayAddress, setNewRelayAddress] = useState('');
 
-  const handleAddNode = () => {
-    const address = newNodeAddress.trim();
-    if (!address) {
+  const handleAddRelay = () => {
+    const addr = newRelayAddress.trim();
+    if (!addr) {
       toast.error('Please enter a relay address');
       return;
     }
-    if (bootstrapNodes.includes(address)) {
+    if (!addr.startsWith('/')) {
+      toast.error('Invalid multiaddr format (should start with /)');
+      return;
+    }
+    if (bootstrapNodes.includes(addr)) {
       toast.error('This address is already added');
       return;
     }
-    addBootstrapNode(address);
-    setNewNodeAddress('');
-    toast.success('Relay node added');
+    addBootstrapNode(addr);
+    setNewRelayAddress('');
+    toast.success('Relay address added');
   };
 
-  const handleRemoveNode = (address: string) => {
+  const handleRemoveRelay = (address: string) => {
     removeBootstrapNode(address);
-    toast.success('Relay node removed');
+    toast.success('Relay address removed');
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3
-          className="text-xl font-semibold mb-1"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
-          Network
-        </h3>
-        <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Configure peer-to-peer networking and discovery
-        </p>
-      </div>
+      <SectionHeader
+        title="Network"
+        description="Configure peer-to-peer networking and discovery"
+      />
 
-      {/* Auto-start network */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
-            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+            <h4
+              className="font-medium"
+              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+            >
               Auto-start network
             </h4>
-            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+            <p
+              className="text-sm mt-0.5"
+              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+            >
               Automatically connect to the peer-to-peer network on launch
             </p>
           </div>
@@ -77,22 +73,21 @@ export function NetworkSection() {
             }}
           />
         </div>
-      </div>
+      </SettingsCard>
 
-      {/* Local discovery */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
-            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+            <h4
+              className="font-medium"
+              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+            >
               Local discovery (mDNS)
             </h4>
-            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+            <p
+              className="text-sm mt-0.5"
+              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+            >
               Discover peers on your local network automatically
             </p>
           </div>
@@ -104,32 +99,28 @@ export function NetworkSection() {
             }}
           />
         </div>
-      </div>
+      </SettingsCard>
 
-      {/* Bootstrap / Relay nodes */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
-        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+      {/* Relay / Bootstrap nodes */}
+      <SettingsCard>
+        <h4
+          className="font-medium mb-2"
+          style={{ color: 'hsl(var(--harbor-text-primary))' }}
+        >
           Relay Nodes
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Add custom relay addresses to help connect with peers behind NAT
+          Add custom relay addresses to help connect with peers behind NAT. Use multiaddr format.
         </p>
 
-        {/* Add new node */}
         <div className="flex gap-2 mb-4">
           <input
             type="text"
-            value={newNodeAddress}
-            onChange={(e) => setNewNodeAddress(e.target.value)}
+            value={newRelayAddress}
+            onChange={(e) => setNewRelayAddress(e.target.value)}
             placeholder="/ip4/1.2.3.4/tcp/4001/p2p/12D3..."
             onKeyDown={(e) => {
-              if (e.key === 'Enter') handleAddNode();
+              if (e.key === 'Enter') handleAddRelay();
             }}
             className="flex-1 px-4 py-3 rounded-lg text-sm font-mono"
             style={{
@@ -139,8 +130,8 @@ export function NetworkSection() {
             }}
           />
           <button
-            onClick={handleAddNode}
-            className="px-4 py-3 rounded-lg text-sm font-medium"
+            onClick={handleAddRelay}
+            className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
             style={{
               background:
                 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
@@ -151,7 +142,6 @@ export function NetworkSection() {
           </button>
         </div>
 
-        {/* Node list */}
         {bootstrapNodes.length > 0 ? (
           <div className="space-y-2">
             {bootstrapNodes.map((address) => (
@@ -170,8 +160,8 @@ export function NetworkSection() {
                   {address}
                 </span>
                 <button
-                  onClick={() => handleRemoveNode(address)}
-                  className="p-1 rounded"
+                  onClick={() => handleRemoveRelay(address)}
+                  className="p-1 rounded transition-colors duration-200"
                   style={{ color: 'hsl(var(--harbor-error))' }}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -191,7 +181,7 @@ export function NetworkSection() {
             No custom relay nodes configured. The default community relay will be used.
           </p>
         )}
-      </div>
+      </SettingsCard>
     </div>
   );
 }

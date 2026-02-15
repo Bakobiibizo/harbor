@@ -7,7 +7,7 @@ import {
   useMessagingStore,
 } from '../../stores';
 import { useKeyboardNavigation } from '../../hooks';
-import { KeyboardShortcutsModal } from '../common';
+import { KeyboardShortcutsModal, CustomizationPanel } from '../common';
 import {
   BoardsIcon,
   ChatIcon,
@@ -73,6 +73,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isLocking, setIsLocking] = useState(false);
+  const [isCustomizationOpen, setIsCustomizationOpen] = useState(false);
 
   // Enable keyboard navigation
   useKeyboardNavigation();
@@ -122,11 +123,15 @@ export function MainLayout({ children }: MainLayoutProps) {
           borderColor: 'hsl(var(--harbor-border-subtle))',
         }}
       >
-        {/* App Branding */}
-        <div className="p-5 border-b" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
-          <div className="flex items-center gap-3">
+        {/* App Branding - clickable for customization */}
+        <div className="p-5 border-b relative" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
+          <button
+            onClick={() => setIsCustomizationOpen((prev) => !prev)}
+            className="flex items-center gap-3 w-full text-left group transition-opacity duration-200 hover:opacity-80"
+            title="Customize Harbor"
+          >
             <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center"
+              className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-200 group-hover:scale-105"
               style={{
                 background:
                   'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
@@ -135,7 +140,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             >
               <HarborIcon className="w-6 h-6 text-white" />
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <h1
                 className="text-lg font-bold"
                 style={{ color: 'hsl(var(--harbor-text-primary))' }}
@@ -146,7 +151,24 @@ export function MainLayout({ children }: MainLayoutProps) {
                 Decentralized Chat
               </p>
             </div>
-          </div>
+            <svg
+              className="w-4 h-4 transition-transform duration-200"
+              style={{
+                color: 'hsl(var(--harbor-text-tertiary))',
+                transform: isCustomizationOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+              }}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+          <CustomizationPanel
+            isOpen={isCustomizationOpen}
+            onClose={() => setIsCustomizationOpen(false)}
+          />
         </div>
 
         {/* User Profile Card - clickable to go to profile settings */}

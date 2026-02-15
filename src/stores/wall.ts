@@ -8,15 +8,30 @@ import type { Post, PostMedia } from '../types';
 
 const log = createLogger('WallStore');
 
+/** Content types for wall posts */
+export type WallContentType = 'post' | 'thought' | 'image' | 'video' | 'audio';
+
+/** Repost attribution data */
+export interface SharedFrom {
+  authorName: string;
+  authorPeerId: string;
+  avatarGradient: string;
+  originalContent: string;
+  originalPostId: string;
+}
+
 /** Extended post with UI-specific data */
 export interface WallPost {
   postId: string;
   content: string;
+  contentType: WallContentType;
   timestamp: Date;
   likes: number;
   comments: number;
   liked: boolean;
   media?: { type: 'image' | 'video'; url: string; name?: string }[];
+  // Repost data
+  sharedFrom?: SharedFrom;
   // Backend data
   authorPeerId: string;
   visibility: string;
@@ -33,8 +48,10 @@ interface WallState {
   loadPosts: () => Promise<void>;
   createPost: (
     content: string,
+    contentType?: WallContentType,
     media?: { type: 'image' | 'video'; url: string; file?: File; name?: string }[],
   ) => Promise<void>;
+  shareToWall: (comment: string, sharedFrom: SharedFrom) => Promise<void>;
   updatePost: (postId: string, content: string) => Promise<void>;
   deletePost: (postId: string) => Promise<void>;
   likePost: (postId: string) => void; // Local-only for now (likes not in backend schema)
@@ -53,6 +70,24 @@ async function resolveMediaUrl(mediaHash: string): Promise<string> {
     // If the media file is not found locally, return a placeholder
     log.warn('Could not resolve media URL for hash:', mediaHash);
     return '';
+  }
+}
+
+/** Map backend content_type string to WallContentType */
+function parseContentType(backendType: string): WallContentType {
+  switch (backendType) {
+    case 'thought':
+      return 'thought';
+    case 'image':
+      return 'image';
+    case 'video':
+      return 'video';
+    case 'audio':
+      return 'audio';
+    case 'post':
+    case 'text':
+    default:
+      return 'post';
   }
 }
 
@@ -78,6 +113,7 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
   return {
     postId: post.postId,
     content: post.contentText || '',
+    contentType: parseContentType(post.contentType),
     timestamp: new Date(post.createdAt * 1000),
     likes: 0, // Backend doesn't track likes yet
     comments: 0, // Backend doesn't track comments yet
@@ -127,10 +163,13 @@ export const useWallStore = create<WallState>((set) => ({
 
   createPost: async (
     content: string,
+    contentType: WallContentType = 'post',
     media?: { type: 'image' | 'video'; url: string; file?: File; name?: string }[],
   ) => {
     try {
-      const result = await postsService.createPost('text', content, 'contacts');
+      // Map WallContentType to backend content_type string
+      const backendContentType = contentType === 'post' ? 'text' : contentType;
+      const result = await postsService.createPost(backendContentType, content, 'contacts');
 
       // Store media files and record metadata
       const storedMedia: { type: 'image' | 'video'; url: string; name?: string }[] = [];
@@ -190,6 +229,7 @@ export const useWallStore = create<WallState>((set) => ({
       const newPost: WallPost = {
         postId: result.postId,
         content,
+        contentType,
         timestamp: new Date(result.createdAt * 1000),
         likes: 0,
         comments: 0,
@@ -215,6 +255,39 @@ export const useWallStore = create<WallState>((set) => ({
         });
     } catch (err) {
       log.error('Failed to create post', err);
+      throw err;
+    }
+  },
+
+  shareToWall: async (comment: string, sharedFrom: SharedFrom) => {
+    try {
+      // Build the content text: user comment + marker for shared content
+      // The shared metadata is stored in the sharedFrom field on WallPost
+      const contentForBackend = comment.trim()
+        ? `${comment.trim()}\n\n[Shared from ${sharedFrom.authorName}]`
+        : `[Shared from ${sharedFrom.authorName}]`;
+
+      const result = await postsService.createPost('shared', contentForBackend, 'contacts');
+
+      const newPost: WallPost = {
+        postId: result.postId,
+        content: comment.trim(),
+        contentType: 'post',
+        timestamp: new Date(result.createdAt * 1000),
+        likes: 0,
+        comments: 0,
+        liked: false,
+        sharedFrom,
+        authorPeerId: '',
+        visibility: 'contacts',
+        lamportClock: 0,
+      };
+
+      set((state) => ({
+        posts: [newPost, ...state.posts],
+      }));
+    } catch (err) {
+      console.error('Failed to share post:', err);
       throw err;
     }
   },
@@ -258,10 +331,10 @@ export const useWallStore = create<WallState>((set) => ({
       posts: state.posts.map((post) =>
         post.postId === postId
           ? {
-              ...post,
-              liked: !post.liked,
-              likes: post.liked ? post.likes - 1 : post.likes + 1,
-            }
+            ...post,
+            liked: !post.liked,
+            likes: post.liked ? post.likes - 1 : post.likes + 1,
+          }
           : post,
       ),
     }));

@@ -266,6 +266,9 @@ pub fn run() {
             commands::mark_conversation_read,
             commands::get_unread_count,
             commands::get_total_unread_count,
+            commands::clear_conversation_history,
+            commands::delete_conversation,
+            commands::edit_message,
             // Post commands
             commands::create_post,
             commands::update_post,
@@ -290,6 +293,11 @@ pub fn run() {
             commands::get_post_likes,
             commands::get_posts_likes_batch,
             commands::get_my_liked_posts,
+            // Comment commands
+            commands::add_comment,
+            commands::get_comments,
+            commands::delete_comment,
+            commands::get_comment_counts,
             // Calling commands
             commands::start_call,
             commands::answer_call,
@@ -330,6 +338,8 @@ pub fn run() {
             commands::delete_wall_post_on_relay,
             // File commands
             commands::save_to_downloads,
+            // Link preview commands
+            commands::fetch_link_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

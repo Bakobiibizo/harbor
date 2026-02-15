@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-// Sun icon for light mode
+/** Sun icon for light mode */
 export function SunIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
@@ -13,7 +13,7 @@ export function SunIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-// Moon icon for dark mode
+/** Moon icon for dark mode */
 export function MoonIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
@@ -26,7 +26,7 @@ export function MoonIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-// Monitor icon for system theme
+/** Monitor icon for system theme */
 export function MonitorIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
@@ -39,7 +39,7 @@ export function MonitorIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-// Palette icon for appearance section
+/** Palette icon for appearance section */
 export function PaletteIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
@@ -52,7 +52,7 @@ export function PaletteIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-// Download icon for updates section
+/** Download icon for updates section */
 export function DownloadIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
@@ -65,14 +65,8 @@ export function DownloadIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-// Toggle component
-export function Toggle({
-  enabled,
-  onChange,
-}: {
-  enabled: boolean;
-  onChange: (v: boolean) => void;
-}) {
+/** Reusable toggle switch component */
+export function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       onClick={() => onChange(!enabled)}
@@ -92,7 +86,7 @@ export function Toggle({
   );
 }
 
-// Password input with reveal
+/** Password input with reveal toggle */
 export function PasswordInput({
   placeholder,
   value,
@@ -150,6 +144,50 @@ export function PasswordInput({
           </svg>
         )}
       </button>
+    </div>
+  );
+}
+
+/** Reusable settings card wrapper */
+export function SettingsCard({
+  children,
+  variant = 'default',
+}: {
+  children: React.ReactNode;
+  variant?: 'default' | 'danger';
+}) {
+  return (
+    <div
+      className="rounded-lg p-6"
+      style={{
+        background:
+          variant === 'danger'
+            ? 'hsl(var(--harbor-error) / 0.05)'
+            : 'hsl(var(--harbor-bg-elevated))',
+        border:
+          variant === 'danger'
+            ? '1px solid hsl(var(--harbor-error) / 0.2)'
+            : '1px solid hsl(var(--harbor-border-subtle))',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Section header with title and description */
+export function SectionHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <div>
+      <h3
+        className="text-xl font-semibold mb-1"
+        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+      >
+        {title}
+      </h3>
+      <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+        {description}
+      </p>
     </div>
   );
 }
