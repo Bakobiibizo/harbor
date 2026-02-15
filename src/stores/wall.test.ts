@@ -55,7 +55,7 @@ describe('useWallStore', () => {
     });
 
     it('should set isLoading during load', async () => {
-      let resolvePromise: (value: unknown[]) => void;
+      let resolvePromise: (value: never[]) => void;
       vi.mocked(postsService.getMyPosts).mockReturnValue(
         new Promise((resolve) => {
           resolvePromise = resolve;

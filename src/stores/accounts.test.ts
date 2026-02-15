@@ -11,26 +11,28 @@ vi.mock('../services', () => ({
   },
 }));
 
-const mockAccounts = [
+import type { AccountInfo } from '../types/accounts';
+
+const mockAccounts: AccountInfo[] = [
   {
-    accountId: 'acct-1',
+    id: 'acct-1',
     peerId: 'peer-1',
     displayName: 'User One',
     bio: 'First account',
     avatarHash: null,
     createdAt: 1700000000,
-    lastActiveAt: 1700000100,
-    isActive: true,
+    lastAccessedAt: 1700000100,
+    dataPath: '/data/acct-1',
   },
   {
-    accountId: 'acct-2',
+    id: 'acct-2',
     peerId: 'peer-2',
     displayName: 'User Two',
     bio: null,
     avatarHash: null,
     createdAt: 1700000200,
-    lastActiveAt: 1700000200,
-    isActive: false,
+    lastAccessedAt: 1700000200,
+    dataPath: '/data/acct-2',
   },
 ];
 

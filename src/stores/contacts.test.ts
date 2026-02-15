@@ -8,7 +8,9 @@ vi.mock('../services/contacts', () => ({
   },
 }));
 
-const mockContacts = [
+import type { Contact } from '../types/contacts';
+
+const mockContacts: Contact[] = [
   {
     id: 1,
     peerId: 'peer-alice',
@@ -17,7 +19,9 @@ const mockContacts = [
     displayName: 'Alice',
     avatarHash: null,
     bio: 'Developer',
-    status: 'active',
+    isBlocked: false,
+    trustLevel: 1,
+    lastSeenAt: null,
     addedAt: 1700000000,
     updatedAt: 1700000000,
   },
@@ -29,7 +33,9 @@ const mockContacts = [
     displayName: 'Bob',
     avatarHash: null,
     bio: 'Designer',
-    status: 'active',
+    isBlocked: false,
+    trustLevel: 1,
+    lastSeenAt: null,
     addedAt: 1700000100,
     updatedAt: 1700000100,
   },
@@ -58,7 +64,7 @@ describe('useContactsStore', () => {
     });
 
     it('should set isLoading during load', async () => {
-      let resolvePromise: (value: unknown[]) => void;
+      let resolvePromise: (value: Contact[]) => void;
       vi.mocked(contactsService.getActiveContacts).mockReturnValue(
         new Promise((resolve) => {
           resolvePromise = resolve;
