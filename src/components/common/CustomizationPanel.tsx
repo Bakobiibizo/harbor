@@ -54,7 +54,11 @@ function CheckIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-const THEME_OPTIONS: { value: ThemeMode; label: string; Icon: React.FC<React.SVGProps<SVGSVGElement>> }[] = [
+const THEME_OPTIONS: {
+  value: ThemeMode;
+  label: string;
+  Icon: React.FC<React.SVGProps<SVGSVGElement>>;
+}[] = [
   { value: 'dark', label: 'Dark', Icon: MoonIcon },
   { value: 'light', label: 'Light', Icon: SunIcon },
   { value: 'system', label: 'System', Icon: MonitorIcon },
@@ -66,11 +70,21 @@ const FONT_SIZE_OPTIONS: { value: FontSize; label: string; previewSize: string }
   { value: 'large', label: 'Large', previewSize: '17px' },
 ];
 
-const ACCENT_COLOR_KEYS: AccentColor[] = ['blue', 'purple', 'green', 'orange', 'pink', 'red', 'teal', 'amber'];
+const ACCENT_COLOR_KEYS: AccentColor[] = [
+  'blue',
+  'purple',
+  'green',
+  'orange',
+  'pink',
+  'red',
+  'teal',
+  'amber',
+];
 
 export function CustomizationPanel({ isOpen, onClose }: CustomizationPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const { theme, setTheme, accentColor, setAccentColor, fontSize, setFontSize } = useSettingsStore();
+  const { theme, setTheme, accentColor, setAccentColor, fontSize, setFontSize } =
+    useSettingsStore();
 
   // Close on click outside
   useEffect(() => {
@@ -119,16 +133,10 @@ export function CustomizationPanel({ isOpen, onClose }: CustomizationPanelProps)
         className="px-4 py-3 border-b"
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
-        <h3
-          className="text-sm font-semibold"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h3 className="text-sm font-semibold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Customize Harbor
         </h3>
-        <p
-          className="text-xs mt-0.5"
-          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-        >
+        <p className="text-xs mt-0.5" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           Personalize your experience
         </p>
       </div>
@@ -204,9 +212,7 @@ export function CustomizationPanel({ isOpen, onClose }: CustomizationPanelProps)
                   onClick={() => setAccentColor(colorKey)}
                   className="group flex flex-col items-center gap-1.5 py-2 rounded-lg transition-all duration-200"
                   style={{
-                    background: isActive
-                      ? `${colorDef.swatch}15`
-                      : 'transparent',
+                    background: isActive ? `${colorDef.swatch}15` : 'transparent',
                   }}
                   title={`Use ${colorDef.label} accent`}
                 >

@@ -716,8 +716,10 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
         let posts_service = PostsService::new(
             db.clone(),
             identity_service.clone(),
@@ -804,14 +806,12 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
-        let posts_service = PostsService::new(
-            db,
-            identity_service,
-            contacts_service,
-            permissions_service,
-        );
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+        let posts_service =
+            PostsService::new(db, identity_service, contacts_service, permissions_service);
 
         let result = posts_service.create_post("text", Some("Hello"), PostVisibility::Public);
         assert!(result.is_err());

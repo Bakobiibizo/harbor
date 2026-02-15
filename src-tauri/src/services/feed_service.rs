@@ -193,8 +193,10 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
         let info = identity_service
             .create_identity(CreateIdentityRequest {
@@ -222,7 +224,14 @@ mod tests {
     }
 
     /// Helper to insert a post directly into the database
-    fn insert_test_post(db: &Database, post_id: &str, author: &str, content: &str, created_at: i64, visibility: PostVisibility) {
+    fn insert_test_post(
+        db: &Database,
+        post_id: &str,
+        author: &str,
+        content: &str,
+        created_at: i64,
+        visibility: PostVisibility,
+    ) {
         let post_data = PostData {
             post_id: post_id.to_string(),
             author_peer_id: author.to_string(),
@@ -241,8 +250,22 @@ mod tests {
         let (service, db, _identity, _perms, peer_id) = create_test_env();
 
         // Insert our own posts
-        insert_test_post(&db, "post-1", &peer_id, "My post 1", 1000, PostVisibility::Public);
-        insert_test_post(&db, "post-2", &peer_id, "My post 2", 2000, PostVisibility::Contacts);
+        insert_test_post(
+            &db,
+            "post-1",
+            &peer_id,
+            "My post 1",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-2",
+            &peer_id,
+            "My post 2",
+            2000,
+            PostVisibility::Contacts,
+        );
 
         let feed = service.get_feed(10, None).unwrap();
         assert_eq!(feed.len(), 2);
@@ -284,15 +307,13 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
-        let feed_service = FeedService::new(
-            db,
-            identity_service,
-            permissions_service,
-            contacts_service,
-        );
+        let feed_service =
+            FeedService::new(db, identity_service, permissions_service, contacts_service);
 
         let result = feed_service.get_feed(10, None);
         assert!(result.is_err());
@@ -302,7 +323,14 @@ mod tests {
     fn test_get_feed_includes_display_name() {
         let (service, db, _identity, _perms, peer_id) = create_test_env();
 
-        insert_test_post(&db, "post-1", &peer_id, "My post", 1000, PostVisibility::Public);
+        insert_test_post(
+            &db,
+            "post-1",
+            &peer_id,
+            "My post",
+            1000,
+            PostVisibility::Public,
+        );
 
         let feed = service.get_feed(10, None).unwrap();
         assert_eq!(feed.len(), 1);
@@ -313,8 +341,22 @@ mod tests {
     fn test_get_wall_own_posts() {
         let (service, db, _identity, _perms, peer_id) = create_test_env();
 
-        insert_test_post(&db, "post-1", &peer_id, "Wall post 1", 1000, PostVisibility::Public);
-        insert_test_post(&db, "post-2", &peer_id, "Wall post 2", 2000, PostVisibility::Contacts);
+        insert_test_post(
+            &db,
+            "post-1",
+            &peer_id,
+            "Wall post 1",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-2",
+            &peer_id,
+            "Wall post 2",
+            2000,
+            PostVisibility::Contacts,
+        );
 
         let wall = service.get_wall(&peer_id, 10, None).unwrap();
         assert_eq!(wall.len(), 2);
@@ -347,7 +389,14 @@ mod tests {
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
 
         // Insert a post from the other peer
-        insert_test_post(&db, "other-post-1", &other_peer, "Other post", 1000, PostVisibility::Public);
+        insert_test_post(
+            &db,
+            "other-post-1",
+            &other_peer,
+            "Other post",
+            1000,
+            PostVisibility::Public,
+        );
 
         // Grant WallRead permission from the other peer to us
         // We need to simulate that the other peer granted us WallRead.
@@ -376,9 +425,30 @@ mod tests {
     fn test_feed_sorted_chronologically() {
         let (service, db, _identity, _perms, peer_id) = create_test_env();
 
-        insert_test_post(&db, "post-old", &peer_id, "Old post", 1000, PostVisibility::Public);
-        insert_test_post(&db, "post-mid", &peer_id, "Middle post", 2000, PostVisibility::Public);
-        insert_test_post(&db, "post-new", &peer_id, "New post", 3000, PostVisibility::Public);
+        insert_test_post(
+            &db,
+            "post-old",
+            &peer_id,
+            "Old post",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-mid",
+            &peer_id,
+            "Middle post",
+            2000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-new",
+            &peer_id,
+            "New post",
+            3000,
+            PostVisibility::Public,
+        );
 
         let feed = service.get_feed(10, None).unwrap();
         assert_eq!(feed.len(), 3);

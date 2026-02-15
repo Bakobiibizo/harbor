@@ -63,15 +63,15 @@ describe('loggingService', () => {
         download: '',
         click: vi.fn(),
       };
-      const createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(
-        mockLink as unknown as HTMLAnchorElement,
-      );
-      const appendChildSpy = vi.spyOn(document.body, 'appendChild').mockReturnValue(
-        mockLink as unknown as HTMLAnchorElement,
-      );
-      const removeChildSpy = vi.spyOn(document.body, 'removeChild').mockReturnValue(
-        mockLink as unknown as HTMLAnchorElement,
-      );
+      const createElementSpy = vi
+        .spyOn(document, 'createElement')
+        .mockReturnValue(mockLink as unknown as HTMLAnchorElement);
+      const appendChildSpy = vi
+        .spyOn(document.body, 'appendChild')
+        .mockReturnValue(mockLink as unknown as HTMLAnchorElement);
+      const removeChildSpy = vi
+        .spyOn(document.body, 'removeChild')
+        .mockReturnValue(mockLink as unknown as HTMLAnchorElement);
 
       await loggingService.downloadLogs();
 

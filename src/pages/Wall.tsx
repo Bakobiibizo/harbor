@@ -377,9 +377,7 @@ export function WallPage() {
                         ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
                         : 'hsl(var(--harbor-surface-1))',
                       color: isSelected ? 'white' : 'hsl(var(--harbor-text-secondary))',
-                      boxShadow: isSelected
-                        ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)'
-                        : 'none',
+                      boxShadow: isSelected ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
                     }}
                   >
                     {ct.icon}
@@ -827,10 +825,11 @@ export function WallPage() {
                       )}
 
                       {/* Link preview card for first URL in post */}
-                      {post.content && (() => {
-                        const firstUrl = extractFirstUrl(post.content);
-                        return firstUrl ? <LinkPreviewCard url={firstUrl} /> : null;
-                      })()}
+                      {post.content &&
+                        (() => {
+                          const firstUrl = extractFirstUrl(post.content);
+                          return firstUrl ? <LinkPreviewCard url={firstUrl} /> : null;
+                        })()}
 
                       {/* Shared post embed */}
                       {post.sharedFrom && (

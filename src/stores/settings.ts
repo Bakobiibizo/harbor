@@ -3,10 +3,21 @@ import { persist } from 'zustand/middleware';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSize = 'small' | 'medium' | 'large';
-export type AccentColor = 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'teal' | 'amber';
+export type AccentColor =
+  | 'blue'
+  | 'purple'
+  | 'green'
+  | 'orange'
+  | 'pink'
+  | 'red'
+  | 'teal'
+  | 'amber';
 
 // Accent color definitions using HSL values
-export const ACCENT_COLORS: Record<AccentColor, { primary: string; accent: string; label: string; swatch: string }> = {
+export const ACCENT_COLORS: Record<
+  AccentColor,
+  { primary: string; accent: string; label: string; swatch: string }
+> = {
   blue: {
     primary: '220 91% 54%',
     accent: '262 83% 58%',

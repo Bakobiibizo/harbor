@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { safeInvoke, showErrorToast, showSuccessToast, handleError, HarborError } from './errorHandler';
+import {
+  safeInvoke,
+  showErrorToast,
+  showSuccessToast,
+  handleError,
+  HarborError,
+} from './errorHandler';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 
@@ -36,17 +42,13 @@ describe('safeInvoke', () => {
   it('should not show toast when showToast is false', async () => {
     vi.mocked(invoke).mockRejectedValue(new Error('Command failed'));
 
-    await expect(
-      safeInvoke('failing_command', undefined, { showToast: false }),
-    ).rejects.toThrow();
+    await expect(safeInvoke('failing_command', undefined, { showToast: false })).rejects.toThrow();
     expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('should retry on recoverable errors when retryCount > 0', async () => {
     vi.mocked(invoke)
-      .mockRejectedValueOnce(
-        new HarborError({ code: 'NETWORK_TIMEOUT', message: 'Timeout' }),
-      )
+      .mockRejectedValueOnce(new HarborError({ code: 'NETWORK_TIMEOUT', message: 'Timeout' }))
       .mockResolvedValueOnce('success');
 
     const result = await safeInvoke<string>('retry_command', undefined, {

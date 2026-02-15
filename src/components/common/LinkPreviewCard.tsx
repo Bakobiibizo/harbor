@@ -168,10 +168,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
             >
               {domain}
             </p>
-            <p
-              className="text-xs truncate"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
+            <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               {url}
             </p>
           </div>
@@ -234,10 +231,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
             >
               {preview.site_name || domain}
             </p>
-            <p
-              className="text-xs truncate"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
+            <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               {url}
             </p>
           </div>

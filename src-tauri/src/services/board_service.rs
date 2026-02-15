@@ -535,13 +535,20 @@ mod tests {
         let (service, _db, _identity, _peer_id) = create_test_env();
 
         service
-            .join_community("relay-peer-1", "/ip4/1.2.3.4/tcp/9000", Some("Test Community"))
+            .join_community(
+                "relay-peer-1",
+                "/ip4/1.2.3.4/tcp/9000",
+                Some("Test Community"),
+            )
             .unwrap();
 
         let communities = service.get_communities().unwrap();
         assert_eq!(communities.len(), 1);
         assert_eq!(communities[0].relay_peer_id, "relay-peer-1");
-        assert_eq!(communities[0].community_name, Some("Test Community".to_string()));
+        assert_eq!(
+            communities[0].community_name,
+            Some("Test Community".to_string())
+        );
     }
 
     #[test]
@@ -590,7 +597,12 @@ mod tests {
             .unwrap();
 
         let boards = vec![
-            ("board-1".to_string(), "General".to_string(), Some("General discussion".to_string()), true),
+            (
+                "board-1".to_string(),
+                "General".to_string(),
+                Some("General discussion".to_string()),
+                true,
+            ),
             ("board-2".to_string(), "Random".to_string(), None, false),
         ];
 
@@ -644,7 +656,9 @@ mod tests {
 
         service.store_board_posts("relay-1", &posts).unwrap();
 
-        let stored_posts = service.get_board_posts("relay-1", "board-1", 10, None).unwrap();
+        let stored_posts = service
+            .get_board_posts("relay-1", "board-1", 10, None)
+            .unwrap();
         assert_eq!(stored_posts.len(), 2);
     }
 
@@ -652,7 +666,9 @@ mod tests {
     fn test_get_board_posts_empty() {
         let (service, _db, _identity, _peer_id) = create_test_env();
 
-        let posts = service.get_board_posts("relay-1", "board-1", 10, None).unwrap();
+        let posts = service
+            .get_board_posts("relay-1", "board-1", 10, None)
+            .unwrap();
         assert!(posts.is_empty());
     }
 
@@ -694,7 +710,9 @@ mod tests {
     fn test_create_board_post_success() {
         let (service, _db, _identity, peer_id) = create_test_env();
 
-        let post = service.create_board_post("board-1", "Hello board!").unwrap();
+        let post = service
+            .create_board_post("board-1", "Hello board!")
+            .unwrap();
 
         assert!(!post.post_id.is_empty());
         assert_eq!(post.board_id, "board-1");

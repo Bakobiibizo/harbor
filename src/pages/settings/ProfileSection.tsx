@@ -105,16 +105,10 @@ export function ProfileSection() {
             </div>
           )}
           <div className="flex-1">
-            <h4
-              className="font-medium mb-2"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               Profile Photo
             </h4>
-            <p
-              className="text-sm mb-3"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               Upload a photo to personalize your profile
             </p>
             <div className="flex gap-2">
@@ -247,9 +241,7 @@ export function ProfileSection() {
               ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
               : 'hsl(var(--harbor-surface-2))',
             color: hasUnsavedChanges ? 'white' : 'hsl(var(--harbor-text-tertiary))',
-            boxShadow: hasUnsavedChanges
-              ? '0 4px 12px hsl(var(--harbor-primary) / 0.3)'
-              : 'none',
+            boxShadow: hasUnsavedChanges ? '0 4px 12px hsl(var(--harbor-primary) / 0.3)' : 'none',
           }}
         >
           Save Changes

@@ -50,17 +50,11 @@ export function AboutSection() {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        title="About"
-        description="App version, updates, and links"
-      />
+      <SectionHeader title="About" description="App version, updates, and links" />
 
       {/* Current version */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Current Version
         </h4>
         <p
@@ -76,10 +70,7 @@ export function AboutSection() {
 
       {/* Check for updates */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Check for Updates
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
@@ -128,25 +119,15 @@ export function AboutSection() {
                       d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
                     />
                   </svg>
-                  <span
-                    className="font-medium"
-                    style={{ color: 'hsl(var(--harbor-success))' }}
-                  >
+                  <span className="font-medium" style={{ color: 'hsl(var(--harbor-success))' }}>
                     Update Available!
                   </span>
                 </div>
-                <p
-                  className="text-sm mb-1"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  Version{' '}
-                  <span className="font-mono font-semibold">v{updateInfo.version}</span>
+                <p className="text-sm mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                  Version <span className="font-mono font-semibold">v{updateInfo.version}</span>
                 </p>
                 {updateInfo.date && (
-                  <p
-                    className="text-xs mb-2"
-                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                  >
+                  <p className="text-xs mb-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     Released: {new Date(updateInfo.date).toLocaleDateString()}
                   </p>
                 )}
@@ -224,12 +205,7 @@ export function AboutSection() {
               </>
             ) : (
               <>
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -275,12 +251,7 @@ export function AboutSection() {
                 </>
               ) : (
                 <>
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -298,10 +269,7 @@ export function AboutSection() {
 
       {/* About Harbor */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           About Harbor
         </h4>
         <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>

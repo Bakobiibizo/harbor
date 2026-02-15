@@ -451,7 +451,9 @@ impl CallingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{ContactData, ContactsRepository, Capability, GrantData, PermissionsRepository};
+    use crate::db::{
+        Capability, ContactData, ContactsRepository, GrantData, PermissionsRepository,
+    };
     use crate::models::CreateIdentityRequest;
     use crate::services::{ContactsService, CryptoService, IdentityService, PermissionsService};
     use std::sync::Arc;
@@ -466,8 +468,10 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
         let info = identity_service
             .create_identity(CreateIdentityRequest {
@@ -485,7 +489,13 @@ mod tests {
             permissions_service.clone(),
         );
 
-        (service, db, identity_service, permissions_service, info.peer_id)
+        (
+            service,
+            db,
+            identity_service,
+            permissions_service,
+            info.peer_id,
+        )
     }
 
     /// Helper to add a peer contact and grant call permission
@@ -552,9 +562,12 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
-        let service = CallingService::new(db, identity_service, contacts_service, permissions_service);
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+        let service =
+            CallingService::new(db, identity_service, contacts_service, permissions_service);
 
         let result = service.create_offer("12D3KooWCallee", "sdp-data");
         assert!(result.is_err());
@@ -833,13 +846,8 @@ mod tests {
         };
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
 
-        let result = service.process_incoming_hangup(
-            "call-1",
-            sender_id,
-            "normal",
-            1000,
-            &vec![0u8; 64],
-        );
+        let result =
+            service.process_incoming_hangup("call-1", sender_id, "normal", 1000, &vec![0u8; 64]);
 
         assert!(result.is_err());
     }

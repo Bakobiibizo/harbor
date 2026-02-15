@@ -121,8 +121,7 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 
 /// Extract content from <meta property="..." content="..."> tags
 fn extract_meta_property(document: &scraper::Html, property: &str) -> Option<String> {
-    let selector =
-        scraper::Selector::parse(&format!("meta[property=\"{}\"]", property)).ok()?;
+    let selector = scraper::Selector::parse(&format!("meta[property=\"{}\"]", property)).ok()?;
     document
         .select(&selector)
         .next()
@@ -133,8 +132,7 @@ fn extract_meta_property(document: &scraper::Html, property: &str) -> Option<Str
 
 /// Extract content from <meta name="..." content="..."> tags
 fn extract_meta_name(document: &scraper::Html, name: &str) -> Option<String> {
-    let selector =
-        scraper::Selector::parse(&format!("meta[name=\"{}\"]", name)).ok()?;
+    let selector = scraper::Selector::parse(&format!("meta[name=\"{}\"]", name)).ok()?;
     document
         .select(&selector)
         .next()

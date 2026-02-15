@@ -143,9 +143,7 @@ describe('useWallStore', () => {
     it('should handle create errors', async () => {
       vi.mocked(postsService.createPost).mockRejectedValue(new Error('Create failed'));
 
-      await expect(useWallStore.getState().createPost('content')).rejects.toThrow(
-        'Create failed',
-      );
+      await expect(useWallStore.getState().createPost('content')).rejects.toThrow('Create failed');
     });
 
     it('should add media when provided', async () => {
@@ -212,9 +210,9 @@ describe('useWallStore', () => {
 
       vi.mocked(postsService.updatePost).mockRejectedValue(new Error('Update failed'));
 
-      await expect(
-        useWallStore.getState().updatePost('post-1', 'new content'),
-      ).rejects.toThrow('Update failed');
+      await expect(useWallStore.getState().updatePost('post-1', 'new content')).rejects.toThrow(
+        'Update failed',
+      );
     });
   });
 

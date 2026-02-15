@@ -80,9 +80,7 @@ describe('useContactsStore', () => {
     });
 
     it('should handle load errors', async () => {
-      vi.mocked(contactsService.getActiveContacts).mockRejectedValue(
-        new Error('Contacts error'),
-      );
+      vi.mocked(contactsService.getActiveContacts).mockRejectedValue(new Error('Contacts error'));
 
       await useContactsStore.getState().loadContacts();
 

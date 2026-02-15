@@ -124,7 +124,10 @@ export function MainLayout({ children }: MainLayoutProps) {
         }}
       >
         {/* App Branding - clickable for customization */}
-        <div className="p-5 border-b relative" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
+        <div
+          className="p-5 border-b relative"
+          style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+        >
           <button
             onClick={() => setIsCustomizationOpen((prev) => !prev)}
             className="flex items-center gap-3 w-full text-left group transition-opacity duration-200 hover:opacity-80"

@@ -46,7 +46,9 @@ function formatFileSize(bytes: number): string {
 }
 
 /** Parse message content into text segments and media segments */
-function parseMessageContent(content: string): { type: 'text' | 'media'; value: string; mimeType?: string }[] {
+function parseMessageContent(
+  content: string,
+): { type: 'text' | 'media'; value: string; mimeType?: string }[] {
   const segments: { type: 'text' | 'media'; value: string; mimeType?: string }[] = [];
   let lastIndex = 0;
 
@@ -345,10 +347,7 @@ function ConfirmDialog({
           border: '1px solid hsl(var(--harbor-border-subtle))',
         }}
       >
-        <h3
-          className="text-lg font-bold mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h3 className="text-lg font-bold mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           {title}
         </h3>
         <p className="text-sm mb-6" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
@@ -438,10 +437,7 @@ function ContactPicker({
           className="px-5 py-4 border-b flex items-center justify-between"
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
-          <h3
-            className="text-lg font-bold"
-            style={{ color: 'hsl(var(--harbor-text-primary))' }}
-          >
+          <h3 className="text-lg font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
             New Conversation
           </h3>
           <button
@@ -776,15 +772,40 @@ export function ChatPage() {
   );
 
   // Calculate search results
-  const searchResults = messageSearchQuery.trim()
-    ? currentMessages
-      .map((message, index) => ({
-        message,
-        index,
-        content: message.content.toLowerCase(),
-      }))
-      .filter((item) => item.content.includes(messageSearchQuery.toLowerCase()))
-    : [];
+  const searchResults = useMemo(
+    () =>
+      messageSearchQuery.trim()
+        ? currentMessages
+            .map((message, index) => ({
+              message,
+              index,
+              content: message.content.toLowerCase(),
+            }))
+            .filter((item) => item.content.includes(messageSearchQuery.toLowerCase()))
+        : [],
+    [messageSearchQuery, currentMessages],
+  );
+
+  // Build a set of message indices that match, and identify the active match index
+  const matchingMessageIndices = useMemo(
+    () => new Set(searchResults.map((r) => r.index)),
+    [searchResults],
+  );
+  const activeMatchMessageIndex = useMemo(
+    () => (searchResults.length > 0 ? (searchResults[currentSearchIndex]?.index ?? -1) : -1),
+    [searchResults, currentSearchIndex],
+  );
+
+  // Scroll to the currently active search match
+  useEffect(() => {
+    if (searchResults.length > 0 && currentSearchIndex < searchResults.length) {
+      const matchedMessageIndex = searchResults[currentSearchIndex].index;
+      const el = messageRefs.current.get(matchedMessageIndex);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [currentSearchIndex, searchResults]);
 
   // Navigate search results
   const navigateSearchResults = (direction: 'next' | 'prev') => {
@@ -808,7 +829,9 @@ export function ChatPage() {
 
     // Validate file type
     if (!ALL_ACCEPTED_TYPES.includes(file.type)) {
-      toast.error('Unsupported file type. Please select an image (jpg, png, gif, webp) or video (mp4, webm).');
+      toast.error(
+        'Unsupported file type. Please select an image (jpg, png, gif, webp) or video (mp4, webm).',
+      );
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
@@ -851,7 +874,7 @@ export function ChatPage() {
         URL.revokeObjectURL(pendingAttachment.previewUrl);
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load messages when selecting a conversation
   useEffect(() => {
@@ -1151,9 +1174,7 @@ export function ChatPage() {
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               />
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                {showArchived
-                  ? 'No archived conversations'
-                  : 'No conversations found'}
+                {showArchived ? 'No archived conversations' : 'No conversations found'}
               </p>
               {!showArchived && contacts.length > 0 && (
                 <button
@@ -1616,7 +1637,9 @@ export function ChatPage() {
                         <span
                           className="text-xs"
                           style={{
-                            color: isMine ? 'rgba(255,255,255,0.6)' : 'hsl(var(--harbor-text-tertiary))',
+                            color: isMine
+                              ? 'rgba(255,255,255,0.6)'
+                              : 'hsl(var(--harbor-text-tertiary))',
                           }}
                         >
                           Esc to cancel
@@ -1627,7 +1650,9 @@ export function ChatPage() {
                             className="px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
                             style={{
                               background: 'rgba(255,255,255,0.15)',
-                              color: isMine ? 'rgba(255,255,255,0.8)' : 'hsl(var(--harbor-text-secondary))',
+                              color: isMine
+                                ? 'rgba(255,255,255,0.8)'
+                                : 'hsl(var(--harbor-text-secondary))',
                             }}
                           >
                             Cancel
@@ -1643,8 +1668,12 @@ export function ChatPage() {
                                   : 'rgba(255,255,255,0.1)',
                               color:
                                 editContent.trim() && editContent.trim() !== content
-                                  ? isMine ? 'white' : 'hsl(var(--harbor-text-primary))'
-                                  : isMine ? 'rgba(255,255,255,0.4)' : 'hsl(var(--harbor-text-tertiary))',
+                                  ? isMine
+                                    ? 'white'
+                                    : 'hsl(var(--harbor-text-primary))'
+                                  : isMine
+                                    ? 'rgba(255,255,255,0.4)'
+                                    : 'hsl(var(--harbor-text-tertiary))',
                             }}
                           >
                             <CheckIcon size={12} />
@@ -1680,11 +1709,15 @@ export function ChatPage() {
                       <p
                         className="text-xs text-right px-2.5 pb-1"
                         style={{
-                          color: isMine ? 'rgba(255,255,255,0.7)' : 'hsl(var(--harbor-text-tertiary))',
+                          color: isMine
+                            ? 'rgba(255,255,255,0.7)'
+                            : 'hsl(var(--harbor-text-tertiary))',
                         }}
                       >
                         {isEdited && (
-                          <span className="mr-1" style={{ opacity: 0.7 }}>(edited)</span>
+                          <span className="mr-1" style={{ opacity: 0.7 }}>
+                            (edited)
+                          </span>
                         )}
                         {timestamp.toLocaleTimeString([], {
                           hour: '2-digit',
@@ -1708,11 +1741,15 @@ export function ChatPage() {
                       <p
                         className="text-xs mt-1 text-right"
                         style={{
-                          color: isMine ? 'rgba(255,255,255,0.7)' : 'hsl(var(--harbor-text-tertiary))',
+                          color: isMine
+                            ? 'rgba(255,255,255,0.7)'
+                            : 'hsl(var(--harbor-text-tertiary))',
                         }}
                       >
                         {isEdited && (
-                          <span className="mr-1" style={{ opacity: 0.7 }}>(edited)</span>
+                          <span className="mr-1" style={{ opacity: 0.7 }}>
+                            (edited)
+                          </span>
                         )}
                         {timestamp.toLocaleTimeString([], {
                           hour: '2-digit',
@@ -1776,7 +1813,11 @@ export function ChatPage() {
                       className="w-8 h-8 rounded-full flex items-center justify-center"
                       style={{ background: 'rgba(0,0,0,0.5)' }}
                     >
-                      <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                      <svg
+                        className="w-4 h-4 text-white ml-0.5"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
                         <path d="M8 5v14l11-7z" />
                       </svg>
                     </div>
@@ -1790,11 +1831,9 @@ export function ChatPage() {
                 >
                   {pendingAttachment.name}
                 </p>
-                <p
-                  className="text-xs mt-0.5"
-                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                >
-                  {formatFileSize(pendingAttachment.size)} -- {pendingAttachment.type === 'image' ? 'Image' : 'Video'}
+                <p className="text-xs mt-0.5" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  {formatFileSize(pendingAttachment.size)} --{' '}
+                  {pendingAttachment.type === 'image' ? 'Image' : 'Video'}
                 </p>
               </div>
               <button
@@ -1855,8 +1894,18 @@ export function ChatPage() {
                 title="Insert emoji"
                 type="button"
               >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z" />
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z"
+                  />
                 </svg>
               </button>
               {showEmojiPicker && (
@@ -1871,13 +1920,18 @@ export function ChatPage() {
               disabled={!messageInput.trim() && !pendingAttachment}
               className="p-3 rounded-lg transition-all duration-200 flex-shrink-0"
               style={{
-                background: (messageInput.trim() || pendingAttachment)
-                  ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                  : 'hsl(var(--harbor-surface-2))',
-                color: (messageInput.trim() || pendingAttachment) ? 'white' : 'hsl(var(--harbor-text-tertiary))',
-                boxShadow: (messageInput.trim() || pendingAttachment)
-                  ? '0 4px 12px hsl(var(--harbor-primary) / 0.3)'
-                  : 'none',
+                background:
+                  messageInput.trim() || pendingAttachment
+                    ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                    : 'hsl(var(--harbor-surface-2))',
+                color:
+                  messageInput.trim() || pendingAttachment
+                    ? 'white'
+                    : 'hsl(var(--harbor-text-tertiary))',
+                boxShadow:
+                  messageInput.trim() || pendingAttachment
+                    ? '0 4px 12px hsl(var(--harbor-primary) / 0.3)'
+                    : 'none',
               }}
             >
               <SendIcon className="w-5 h-5" />

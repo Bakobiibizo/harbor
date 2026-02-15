@@ -82,13 +82,11 @@ describe('useAccountsStore', () => {
     });
 
     it('should throw and set error on failure', async () => {
-      vi.mocked(accountsService.setActiveAccount).mockRejectedValue(
-        new Error('Switch failed'),
-      );
+      vi.mocked(accountsService.setActiveAccount).mockRejectedValue(new Error('Switch failed'));
 
-      await expect(
-        useAccountsStore.getState().setActiveAccount('acct-2'),
-      ).rejects.toThrow('Switch failed');
+      await expect(useAccountsStore.getState().setActiveAccount('acct-2')).rejects.toThrow(
+        'Switch failed',
+      );
 
       expect(useAccountsStore.getState().error).toBe('Switch failed');
     });
@@ -118,13 +116,11 @@ describe('useAccountsStore', () => {
     });
 
     it('should throw and set error on failure', async () => {
-      vi.mocked(accountsService.removeAccount).mockRejectedValue(
-        new Error('Remove failed'),
-      );
+      vi.mocked(accountsService.removeAccount).mockRejectedValue(new Error('Remove failed'));
 
-      await expect(
-        useAccountsStore.getState().removeAccount('acct-1'),
-      ).rejects.toThrow('Remove failed');
+      await expect(useAccountsStore.getState().removeAccount('acct-1')).rejects.toThrow(
+        'Remove failed',
+      );
 
       expect(useAccountsStore.getState().error).toBe('Remove failed');
     });

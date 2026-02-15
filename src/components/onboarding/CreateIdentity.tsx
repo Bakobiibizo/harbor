@@ -411,18 +411,16 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                       placeholder="A hint to help remember your passphrase"
                     />
                     <div className="flex items-center justify-between mt-1.5">
-                      <p
-                        className="text-xs"
-                        style={{ color: 'hsl(var(--harbor-warning))' }}
-                      >
+                      <p className="text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
                         Do not include your actual passphrase in the hint.
                       </p>
                       <p
                         className="text-xs flex-shrink-0 ml-2"
                         style={{
-                          color: passphraseHint.length >= 90
-                            ? 'hsl(var(--harbor-warning))'
-                            : 'hsl(var(--harbor-text-tertiary))',
+                          color:
+                            passphraseHint.length >= 90
+                              ? 'hsl(var(--harbor-warning))'
+                              : 'hsl(var(--harbor-text-tertiary))',
                         }}
                       >
                         {passphraseHint.length}/100

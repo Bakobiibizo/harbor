@@ -19,7 +19,9 @@ pub async fn add_comment(
     // Validate content
     let content = content.trim().to_string();
     if content.is_empty() {
-        return Err(AppError::Validation("Comment content cannot be empty".to_string()));
+        return Err(AppError::Validation(
+            "Comment content cannot be empty".to_string(),
+        ));
     }
 
     // Get current identity for author info

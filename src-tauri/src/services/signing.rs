@@ -731,7 +731,10 @@ mod tests {
         let bytes1 = req1.signable_bytes().unwrap();
         let bytes2 = req2.signable_bytes().unwrap();
 
-        assert_ne!(bytes1, bytes2, "Different data should produce different bytes");
+        assert_ne!(
+            bytes1, bytes2,
+            "Different data should produce different bytes"
+        );
     }
 
     #[test]

@@ -558,8 +558,10 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
         let info = identity_service
             .create_identity(CreateIdentityRequest {
@@ -612,15 +614,13 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
-        let service = ContentSyncService::new(
-            db,
-            identity_service,
-            contacts_service,
-            permissions_service,
-        );
+        let service =
+            ContentSyncService::new(db, identity_service, contacts_service, permissions_service);
 
         let result = service.create_manifest_request(HashMap::new(), 50);
         assert!(result.is_err());
@@ -664,7 +664,8 @@ mod tests {
         let (service, db, _identity_service, _peer_id) = create_test_env();
 
         // Create a peer with a real signing key so we can create a valid signature
-        let (peer_signing, peer_verifying) = crate::services::CryptoService::generate_ed25519_keypair();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
         let peer_peer_id = "12D3KooWRemotePeer".to_string();
 
         // Add the peer as a contact with their real public key
@@ -716,7 +717,8 @@ mod tests {
         let (service, db, _identity, _peer_id) = create_test_env();
 
         // Add a contact
-        let (_peer_signing, peer_verifying) = crate::services::CryptoService::generate_ed25519_keypair();
+        let (_peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
         let peer_peer_id = "12D3KooWRemotePeer".to_string();
         let contact_data = ContactData {
             peer_id: peer_peer_id.clone(),
@@ -765,7 +767,8 @@ mod tests {
     fn test_store_remote_post_update_existing() {
         let (service, db, _identity, _peer_id) = create_test_env();
 
-        let (peer_signing, peer_verifying) = crate::services::CryptoService::generate_ed25519_keypair();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
         let peer_peer_id = "12D3KooWRemotePeer".to_string();
 
         let contact_data = ContactData {
@@ -842,7 +845,8 @@ mod tests {
     fn test_store_remote_post_skip_older_version() {
         let (service, db, _identity, _peer_id) = create_test_env();
 
-        let (peer_signing, peer_verifying) = crate::services::CryptoService::generate_ed25519_keypair();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
         let peer_peer_id = "12D3KooWRemotePeer".to_string();
 
         let contact_data = ContactData {

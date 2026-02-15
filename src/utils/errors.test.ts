@@ -127,11 +127,7 @@ describe('HarborError', () => {
     });
 
     it('should return false for non-critical error codes', () => {
-      const nonCriticalCodes = [
-        'NETWORK_ERROR',
-        'VALIDATION_ERROR',
-        'NOT_FOUND',
-      ] as const;
+      const nonCriticalCodes = ['NETWORK_ERROR', 'VALIDATION_ERROR', 'NOT_FOUND'] as const;
 
       for (const code of nonCriticalCodes) {
         const error = new HarborError({ code, message: 'test' });
@@ -144,9 +140,9 @@ describe('HarborError', () => {
 describe('isErrorResponse', () => {
   it('should return true for valid error response objects', () => {
     expect(isErrorResponse({ code: 'INTERNAL_ERROR', message: 'Error' })).toBe(true);
-    expect(
-      isErrorResponse({ code: 'DATABASE_ERROR', message: 'DB down', details: 'extra' }),
-    ).toBe(true);
+    expect(isErrorResponse({ code: 'DATABASE_ERROR', message: 'DB down', details: 'extra' })).toBe(
+      true,
+    );
   });
 
   it('should return false for invalid objects', () => {

@@ -90,9 +90,7 @@ describe('useMessagingStore', () => {
         sentAt: 1700000200,
       };
       // First call: send_message, subsequent calls: get_conversations (from loadConversations)
-      vi.mocked(invoke)
-        .mockResolvedValueOnce(sendResult)
-        .mockResolvedValueOnce([]); // loadConversations
+      vi.mocked(invoke).mockResolvedValueOnce(sendResult).mockResolvedValueOnce([]); // loadConversations
 
       const result = await useMessagingStore.getState().sendMessage('peer-alice', 'Hi Alice!');
 
@@ -112,9 +110,9 @@ describe('useMessagingStore', () => {
     it('should throw on send failure', async () => {
       vi.mocked(invoke).mockRejectedValue(new Error('Send failed'));
 
-      await expect(
-        useMessagingStore.getState().sendMessage('peer-alice', 'Hi!'),
-      ).rejects.toThrow('Send failed');
+      await expect(useMessagingStore.getState().sendMessage('peer-alice', 'Hi!')).rejects.toThrow(
+        'Send failed',
+      );
     });
   });
 

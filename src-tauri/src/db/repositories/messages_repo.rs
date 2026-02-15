@@ -446,10 +446,7 @@ impl MessagesRepository {
     }
 
     /// Delete all messages in a conversation (clear history)
-    pub fn clear_conversation_messages(
-        db: &Database,
-        conversation_id: &str,
-    ) -> SqliteResult<i64> {
+    pub fn clear_conversation_messages(db: &Database, conversation_id: &str) -> SqliteResult<i64> {
         db.with_connection(|conn| {
             let rows = conn.execute(
                 "DELETE FROM messages WHERE conversation_id = ?",
@@ -460,10 +457,7 @@ impl MessagesRepository {
     }
 
     /// Delete a conversation and all its messages
-    pub fn delete_conversation(
-        db: &Database,
-        conversation_id: &str,
-    ) -> SqliteResult<i64> {
+    pub fn delete_conversation(db: &Database, conversation_id: &str) -> SqliteResult<i64> {
         db.with_connection(|conn| {
             // Delete message events first (referential integrity)
             conn.execute(

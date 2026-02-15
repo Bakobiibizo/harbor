@@ -19,16 +19,10 @@ export function PrivacySection() {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        title="Privacy"
-        description="Control who can see your content"
-      />
+      <SectionHeader title="Privacy" description="Control who can see your content" />
 
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Default post visibility
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
@@ -52,16 +46,10 @@ export function PrivacySection() {
       <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
-            <h4
-              className="font-medium"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               Message read notifications
             </h4>
-            <p
-              className="text-sm mt-0.5"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               Let others know when you've read their messages
             </p>
           </div>
@@ -72,16 +60,10 @@ export function PrivacySection() {
       <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
-            <h4
-              className="font-medium"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               Show online status
             </h4>
-            <p
-              className="text-sm mt-0.5"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               Show when you're online to your contacts
             </p>
           </div>

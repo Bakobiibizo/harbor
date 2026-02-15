@@ -132,14 +132,11 @@ impl CommentsRepository {
             let mut counts: std::collections::HashMap<String, i64> =
                 std::collections::HashMap::new();
 
-            let rows = stmt.query_map(
-                rusqlite::params_from_iter(post_ids.iter()),
-                |row| {
-                    let post_id: String = row.get(0)?;
-                    let count: i64 = row.get(1)?;
-                    Ok((post_id, count))
-                },
-            )?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(post_ids.iter()), |row| {
+                let post_id: String = row.get(0)?;
+                let count: i64 = row.get(1)?;
+                Ok((post_id, count))
+            })?;
 
             for row in rows {
                 let (post_id, count) = row?;
@@ -245,7 +242,12 @@ mod tests {
         };
 
         CommentsRepository::add_comment(&db, &data).unwrap();
-        assert_eq!(CommentsRepository::get_comments(&db, "post1").unwrap().len(), 1);
+        assert_eq!(
+            CommentsRepository::get_comments(&db, "post1")
+                .unwrap()
+                .len(),
+            1
+        );
 
         let deleted = CommentsRepository::delete_comment(&db, "comment-1").unwrap();
         assert!(deleted);
@@ -325,7 +327,11 @@ mod tests {
         };
         CommentsRepository::add_comment(&db, &data).unwrap();
 
-        let post_ids = vec!["post1".to_string(), "post2".to_string(), "post3".to_string()];
+        let post_ids = vec![
+            "post1".to_string(),
+            "post2".to_string(),
+            "post3".to_string(),
+        ];
         let counts = CommentsRepository::get_comment_counts_batch(&db, &post_ids).unwrap();
 
         assert_eq!(counts.len(), 3);

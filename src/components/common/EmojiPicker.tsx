@@ -29,16 +29,70 @@ const SKIN_TONES = [
 
 // Emojis that support skin tone modifiers
 const SKIN_TONE_ELIGIBLE = new Set([
-  '\u{1F44D}', '\u{1F44E}', '\u{1F44B}', '\u{270B}', '\u{1F44F}', '\u{1F64C}', '\u{1F64F}',
-  '\u{1F4AA}', '\u{1F448}', '\u{1F449}', '\u{1F446}', '\u{1F447}', '\u{270C}\u{FE0F}',
-  '\u{1F596}', '\u{1F918}', '\u{1F919}', '\u{1F91E}', '\u{1F91F}', '\u{1F91A}', '\u{1F91B}',
-  '\u{1F91C}', '\u{1F91D}', '\u{270D}\u{FE0F}', '\u{1F485}', '\u{1F933}', '\u{1F466}',
-  '\u{1F467}', '\u{1F468}', '\u{1F469}', '\u{1F474}', '\u{1F475}', '\u{1F476}', '\u{1F47C}',
-  '\u{1F385}', '\u{1F936}', '\u{1F478}', '\u{1F934}', '\u{1F470}', '\u{1F935}', '\u{1F930}',
-  '\u{1F931}', '\u{1F647}', '\u{1F481}', '\u{1F645}', '\u{1F646}', '\u{1F64B}', '\u{1F926}',
-  '\u{1F937}', '\u{1F486}', '\u{1F487}', '\u{1F6B6}', '\u{1F3C3}', '\u{1F483}', '\u{1F57A}',
-  '\u{1F9D6}', '\u{1F9D7}', '\u{1F9D8}', '\u{1F9D9}', '\u{1F9DA}', '\u{1F9DB}', '\u{1F9DC}',
-  '\u{1F9DD}', '\u{1F9DE}', '\u{1F9DF}',
+  '\u{1F44D}',
+  '\u{1F44E}',
+  '\u{1F44B}',
+  '\u{270B}',
+  '\u{1F44F}',
+  '\u{1F64C}',
+  '\u{1F64F}',
+  '\u{1F4AA}',
+  '\u{1F448}',
+  '\u{1F449}',
+  '\u{1F446}',
+  '\u{1F447}',
+  '\u{270C}\u{FE0F}',
+  '\u{1F596}',
+  '\u{1F918}',
+  '\u{1F919}',
+  '\u{1F91E}',
+  '\u{1F91F}',
+  '\u{1F91A}',
+  '\u{1F91B}',
+  '\u{1F91C}',
+  '\u{1F91D}',
+  '\u{270D}\u{FE0F}',
+  '\u{1F485}',
+  '\u{1F933}',
+  '\u{1F466}',
+  '\u{1F467}',
+  '\u{1F468}',
+  '\u{1F469}',
+  '\u{1F474}',
+  '\u{1F475}',
+  '\u{1F476}',
+  '\u{1F47C}',
+  '\u{1F385}',
+  '\u{1F936}',
+  '\u{1F478}',
+  '\u{1F934}',
+  '\u{1F470}',
+  '\u{1F935}',
+  '\u{1F930}',
+  '\u{1F931}',
+  '\u{1F647}',
+  '\u{1F481}',
+  '\u{1F645}',
+  '\u{1F646}',
+  '\u{1F64B}',
+  '\u{1F926}',
+  '\u{1F937}',
+  '\u{1F486}',
+  '\u{1F487}',
+  '\u{1F6B6}',
+  '\u{1F3C3}',
+  '\u{1F483}',
+  '\u{1F57A}',
+  '\u{1F9D6}',
+  '\u{1F9D7}',
+  '\u{1F9D8}',
+  '\u{1F9D9}',
+  '\u{1F9DA}',
+  '\u{1F9DB}',
+  '\u{1F9DC}',
+  '\u{1F9DD}',
+  '\u{1F9DE}',
+  '\u{1F9DF}',
 ]);
 
 const EMOJI_CATEGORIES: EmojiCategory[] = [
@@ -70,7 +124,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F619}', name: 'kissing face with smiling eyes', keywords: ['kiss'] },
       { emoji: '\u{1F60B}', name: 'face savoring food', keywords: ['yummy', 'delicious'] },
       { emoji: '\u{1F61B}', name: 'face with tongue', keywords: ['tongue', 'playful'] },
-      { emoji: '\u{1F61C}', name: 'winking face with tongue', keywords: ['tongue', 'wink', 'playful'] },
+      {
+        emoji: '\u{1F61C}',
+        name: 'winking face with tongue',
+        keywords: ['tongue', 'wink', 'playful'],
+      },
       { emoji: '\u{1F92A}', name: 'zany face', keywords: ['crazy', 'wild'] },
       { emoji: '\u{1F61D}', name: 'squinting face with tongue', keywords: ['tongue', 'playful'] },
       { emoji: '\u{1F911}', name: 'money mouth face', keywords: ['money', 'rich'] },
@@ -79,7 +137,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F92B}', name: 'shushing face', keywords: ['quiet', 'shh', 'secret'] },
       { emoji: '\u{1F914}', name: 'thinking face', keywords: ['think', 'hmm'] },
       { emoji: '\u{1F910}', name: 'zipper mouth face', keywords: ['secret', 'quiet', 'zip'] },
-      { emoji: '\u{1F928}', name: 'face with raised eyebrow', keywords: ['skeptical', 'suspicious'] },
+      {
+        emoji: '\u{1F928}',
+        name: 'face with raised eyebrow',
+        keywords: ['skeptical', 'suspicious'],
+      },
       { emoji: '\u{1F610}', name: 'neutral face', keywords: ['meh', 'neutral'] },
       { emoji: '\u{1F611}', name: 'expressionless face', keywords: ['blank', 'expressionless'] },
       { emoji: '\u{1F636}', name: 'face without mouth', keywords: ['silent', 'speechless'] },
@@ -87,7 +149,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F612}', name: 'unamused face', keywords: ['bored', 'unamused'] },
       { emoji: '\u{1F644}', name: 'face with rolling eyes', keywords: ['eyeroll', 'annoyed'] },
       { emoji: '\u{1F62C}', name: 'grimacing face', keywords: ['grimace', 'awkward'] },
-      { emoji: '\u{1F62E}\u200D\u{1F4A8}', name: 'face exhaling', keywords: ['exhale', 'sigh', 'relief'] },
+      {
+        emoji: '\u{1F62E}\u200D\u{1F4A8}',
+        name: 'face exhaling',
+        keywords: ['exhale', 'sigh', 'relief'],
+      },
       { emoji: '\u{1F925}', name: 'lying face', keywords: ['lie', 'pinocchio'] },
       { emoji: '\u{1F60C}', name: 'relieved face', keywords: ['relieved', 'peaceful'] },
       { emoji: '\u{1F614}', name: 'pensive face', keywords: ['sad', 'pensive'] },
@@ -108,7 +174,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F920}', name: 'cowboy hat face', keywords: ['cowboy'] },
       { emoji: '\u{1F973}', name: 'partying face', keywords: ['party', 'celebrate'] },
       { emoji: '\u{1F978}', name: 'disguised face', keywords: ['disguise', 'spy'] },
-      { emoji: '\u{1F60E}', name: 'smiling face with sunglasses', keywords: ['cool', 'sunglasses'] },
+      {
+        emoji: '\u{1F60E}',
+        name: 'smiling face with sunglasses',
+        keywords: ['cool', 'sunglasses'],
+      },
       { emoji: '\u{1F913}', name: 'nerd face', keywords: ['nerd', 'geek'] },
       { emoji: '\u{1F9D0}', name: 'face with monocle', keywords: ['monocle', 'classy', 'hmm'] },
       { emoji: '\u{1F615}', name: 'confused face', keywords: ['confused'] },
@@ -128,7 +198,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F625}', name: 'sad but relieved face', keywords: ['sad', 'relieved'] },
       { emoji: '\u{1F622}', name: 'crying face', keywords: ['cry', 'sad', 'tear'] },
       { emoji: '\u{1F62D}', name: 'loudly crying face', keywords: ['cry', 'sob', 'sad'] },
-      { emoji: '\u{1F631}', name: 'face screaming in fear', keywords: ['scream', 'fear', 'horror'] },
+      {
+        emoji: '\u{1F631}',
+        name: 'face screaming in fear',
+        keywords: ['scream', 'fear', 'horror'],
+      },
       { emoji: '\u{1F616}', name: 'confounded face', keywords: ['confounded'] },
       { emoji: '\u{1F623}', name: 'persevering face', keywords: ['persevere', 'struggle'] },
       { emoji: '\u{1F61E}', name: 'disappointed face', keywords: ['disappointed', 'sad'] },
@@ -177,8 +251,16 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F90C}', name: 'pinched fingers', keywords: ['italian', 'what'] },
       { emoji: '\u{1F90F}', name: 'pinching hand', keywords: ['small', 'tiny'] },
       { emoji: '\u{270C}\u{FE0F}', name: 'victory hand', keywords: ['peace', 'victory', 'v'] },
-      { emoji: '\u{1F91E}', name: 'crossed fingers', keywords: ['luck', 'hope', 'fingers crossed'] },
-      { emoji: '\u{1FAF0}', name: 'hand with index finger and thumb crossed', keywords: ['love', 'money'] },
+      {
+        emoji: '\u{1F91E}',
+        name: 'crossed fingers',
+        keywords: ['luck', 'hope', 'fingers crossed'],
+      },
+      {
+        emoji: '\u{1FAF0}',
+        name: 'hand with index finger and thumb crossed',
+        keywords: ['love', 'money'],
+      },
       { emoji: '\u{1F91F}', name: 'love you gesture', keywords: ['love', 'ily'] },
       { emoji: '\u{1F918}', name: 'sign of the horns', keywords: ['rock', 'metal'] },
       { emoji: '\u{1F919}', name: 'call me hand', keywords: ['call', 'shaka'] },
@@ -387,7 +469,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{2615}', name: 'hot beverage', keywords: ['coffee', 'tea', 'hot'] },
       { emoji: '\u{1F375}', name: 'teacup without handle', keywords: ['tea'] },
       { emoji: '\u{1F376}', name: 'sake', keywords: ['sake', 'japanese'] },
-      { emoji: '\u{1F37E}', name: 'bottle with popping cork', keywords: ['champagne', 'celebrate'] },
+      {
+        emoji: '\u{1F37E}',
+        name: 'bottle with popping cork',
+        keywords: ['champagne', 'celebrate'],
+      },
       { emoji: '\u{1F377}', name: 'wine glass', keywords: ['wine'] },
       { emoji: '\u{1F378}', name: 'cocktail glass', keywords: ['cocktail', 'drink'] },
       { emoji: '\u{1F379}', name: 'tropical drink', keywords: ['tropical', 'drink'] },
@@ -639,7 +725,11 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F53D}', name: 'downwards button', keywords: ['down'] },
       { emoji: '\u{2757}', name: 'red exclamation mark', keywords: ['exclamation', 'important'] },
       { emoji: '\u{2753}', name: 'red question mark', keywords: ['question'] },
-      { emoji: '\u{2049}\u{FE0F}', name: 'exclamation question mark', keywords: ['exclamation', 'question'] },
+      {
+        emoji: '\u{2049}\u{FE0F}',
+        name: 'exclamation question mark',
+        keywords: ['exclamation', 'question'],
+      },
       { emoji: '\u{203C}\u{FE0F}', name: 'double exclamation mark', keywords: ['exclamation'] },
       { emoji: '\u{1F51E}', name: 'no one under eighteen', keywords: ['18', 'adult'] },
       { emoji: '\u{1F4F3}', name: 'vibration mode', keywords: ['vibrate'] },
@@ -655,9 +745,21 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
       { emoji: '\u{1F6A9}', name: 'triangular flag', keywords: ['flag'] },
       { emoji: '\u{1F3F4}', name: 'black flag', keywords: ['flag'] },
       { emoji: '\u{1F3F3}\u{FE0F}', name: 'white flag', keywords: ['flag', 'surrender'] },
-      { emoji: '\u{1F3F3}\u{FE0F}\u200D\u{1F308}', name: 'rainbow flag', keywords: ['pride', 'rainbow', 'lgbtq'] },
-      { emoji: '\u{1F3F3}\u{FE0F}\u200D\u26A7\u{FE0F}', name: 'transgender flag', keywords: ['trans', 'pride'] },
-      { emoji: '\u{1F1FA}\u{1F1F8}', name: 'flag: United States', keywords: ['us', 'usa', 'america'] },
+      {
+        emoji: '\u{1F3F3}\u{FE0F}\u200D\u{1F308}',
+        name: 'rainbow flag',
+        keywords: ['pride', 'rainbow', 'lgbtq'],
+      },
+      {
+        emoji: '\u{1F3F3}\u{FE0F}\u200D\u26A7\u{FE0F}',
+        name: 'transgender flag',
+        keywords: ['trans', 'pride'],
+      },
+      {
+        emoji: '\u{1F1FA}\u{1F1F8}',
+        name: 'flag: United States',
+        keywords: ['us', 'usa', 'america'],
+      },
       { emoji: '\u{1F1EC}\u{1F1E7}', name: 'flag: United Kingdom', keywords: ['uk', 'britain'] },
       { emoji: '\u{1F1E8}\u{1F1E6}', name: 'flag: Canada', keywords: ['canada'] },
       { emoji: '\u{1F1E6}\u{1F1FA}', name: 'flag: Australia', keywords: ['australia'] },
@@ -1001,17 +1103,25 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
               type="button"
               style={{
                 background:
-                  activeCategory === 'recent'
-                    ? 'hsl(var(--harbor-primary) / 0.15)'
-                    : 'transparent',
+                  activeCategory === 'recent' ? 'hsl(var(--harbor-primary) / 0.15)' : 'transparent',
                 color:
                   activeCategory === 'recent'
                     ? 'hsl(var(--harbor-primary))'
                     : 'hsl(var(--harbor-text-tertiary))',
               }}
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
               </svg>
             </button>
           )}
@@ -1024,9 +1134,7 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
               type="button"
               style={{
                 background:
-                  activeCategory === cat.id
-                    ? 'hsl(var(--harbor-primary) / 0.15)'
-                    : 'transparent',
+                  activeCategory === cat.id ? 'hsl(var(--harbor-primary) / 0.15)' : 'transparent',
                 color:
                   activeCategory === cat.id
                     ? 'hsl(var(--harbor-primary))'

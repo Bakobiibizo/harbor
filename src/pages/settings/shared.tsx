@@ -66,7 +66,13 @@ export function DownloadIcon(props: React.SVGProps<SVGSVGElement>) {
 }
 
 /** Reusable toggle switch component */
-export function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+export function Toggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <button
       onClick={() => onChange(!enabled)}

@@ -8,16 +8,10 @@ export function AppearanceSection() {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        title="Appearance"
-        description="Customize how Harbor looks"
-      />
+      <SectionHeader title="Appearance" description="Customize how Harbor looks" />
 
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Theme
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>

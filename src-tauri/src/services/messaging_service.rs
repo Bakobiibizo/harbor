@@ -775,7 +775,7 @@ impl MessagingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{ContactData, ContactsRepository, Capability};
+    use crate::db::{Capability, ContactData, ContactsRepository};
     use crate::models::CreateIdentityRequest;
     use crate::services::{ContactsService, CryptoService, PermissionsService};
     use std::sync::Arc;
@@ -791,8 +791,10 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
         // Create our identity
         let info = identity_service
@@ -834,7 +836,12 @@ mod tests {
             permissions_service,
         );
 
-        (messaging_service, identity_service, our_peer_id, peer_peer_id)
+        (
+            messaging_service,
+            identity_service,
+            our_peer_id,
+            peer_peer_id,
+        )
     }
 
     #[test]
@@ -858,9 +865,12 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
-        let service = MessagingService::new(db, identity_service, contacts_service, permissions_service);
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+        let service =
+            MessagingService::new(db, identity_service, contacts_service, permissions_service);
 
         let result = service.send_message("12D3KooWPeer", "Hello!", "text", None);
         assert!(result.is_err());
@@ -871,8 +881,10 @@ mod tests {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-        let permissions_service =
-            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
 
         identity_service
             .create_identity(CreateIdentityRequest {
@@ -883,7 +895,8 @@ mod tests {
             })
             .unwrap();
 
-        let service = MessagingService::new(db, identity_service, contacts_service, permissions_service);
+        let service =
+            MessagingService::new(db, identity_service, contacts_service, permissions_service);
 
         // No permission granted to this peer
         let result = service.send_message("12D3KooWUnknownPeer", "Hello!", "text", None);

@@ -187,17 +187,11 @@ export function SecuritySection() {
         className="hidden"
       />
 
-      <SectionHeader
-        title="Security"
-        description="Manage your passphrase and encryption keys"
-      />
+      <SectionHeader title="Security" description="Manage your passphrase and encryption keys" />
 
       {/* Change passphrase */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Change Passphrase
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
@@ -210,11 +204,7 @@ export function SecuritySection() {
             value={currentPass}
             onChange={setCurrentPass}
           />
-          <PasswordInput
-            placeholder="New passphrase"
-            value={newPass}
-            onChange={setNewPass}
-          />
+          <PasswordInput placeholder="New passphrase" value={newPass} onChange={setNewPass} />
           <PasswordInput
             placeholder="Confirm new passphrase"
             value={confirmPass}
@@ -244,15 +234,11 @@ export function SecuritySection() {
 
       {/* Passphrase Hint */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Passphrase Hint
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Set a hint to help you remember your passphrase. This will be shown on the unlock
-          screen.
+          Set a hint to help you remember your passphrase. This will be shown on the unlock screen.
         </p>
 
         <div className="space-y-3">
@@ -274,10 +260,7 @@ export function SecuritySection() {
               }}
             />
             <div className="flex items-center justify-between mt-1.5">
-              <p
-                className="text-xs"
-                style={{ color: 'hsl(var(--harbor-warning))' }}
-              >
+              <p className="text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
                 Do not include your actual passphrase in the hint.
               </p>
               <p
@@ -316,15 +299,12 @@ export function SecuritySection() {
 
       {/* Backup & Recovery */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Backup & Recovery
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Export your identity to create a backup, or import an existing backup to recover
-          your account
+          Export your identity to create a backup, or import an existing backup to recover your
+          account
         </p>
 
         <div className="flex gap-3">
@@ -379,8 +359,8 @@ export function SecuritySection() {
           Delete Account
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Permanently delete your identity, messages, posts, and all associated data. This
-          action cannot be undone.
+          Permanently delete your identity, messages, posts, and all associated data. This action
+          cannot be undone.
         </p>
         <button
           onClick={handleDeleteIdentity}
