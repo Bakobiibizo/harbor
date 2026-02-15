@@ -752,6 +752,12 @@ impl MessagingService {
         Ok(())
     }
 
+    /// Get the database reference (for testing)
+    #[cfg(test)]
+    pub fn db(&self) -> &Database {
+        &self.db
+    }
+
     /// Delete a conversation and all its messages entirely
     pub fn delete_conversation(&self, peer_id: &str) -> Result<i64> {
         let identity = self
@@ -763,5 +769,253 @@ impl MessagingService {
 
         MessagesRepository::delete_conversation(&self.db, &conversation_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ContactData, ContactsRepository, Capability};
+    use crate::models::CreateIdentityRequest;
+    use crate::services::{ContactsService, CryptoService, PermissionsService};
+    use std::sync::Arc;
+
+    /// Set up two identities (ours and a peer) and return the service plus metadata.
+    /// The peer is added as a contact with chat permission granted.
+    fn create_test_env() -> (
+        MessagingService,
+        Arc<IdentityService>,
+        String, // our peer_id
+        String, // peer's peer_id
+    ) {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service =
+            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+
+        // Create our identity
+        let info = identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Our User".to_string(),
+                passphrase: "test-pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let our_peer_id = info.peer_id;
+
+        // Create a fake peer with X25519 keys
+        let (_peer_ed25519, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let (_peer_x25519_secret, peer_x25519_public) = CryptoService::generate_x25519_keypair();
+
+        let peer_peer_id = "12D3KooWPeerTest123456789".to_string();
+
+        // Add the peer as a contact
+        let contact_data = ContactData {
+            peer_id: peer_peer_id.clone(),
+            public_key: peer_verifying.to_bytes().to_vec(),
+            x25519_public: peer_x25519_public.to_bytes().to_vec(),
+            display_name: "Peer User".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Grant chat permission to the peer
+        permissions_service
+            .create_permission_grant(&peer_peer_id, Capability::Chat, None)
+            .unwrap();
+
+        let messaging_service = MessagingService::new(
+            db,
+            identity_service.clone(),
+            contacts_service,
+            permissions_service,
+        );
+
+        (messaging_service, identity_service, our_peer_id, peer_peer_id)
+    }
+
+    #[test]
+    fn test_send_message_success() {
+        let (service, _identity, our_peer_id, peer_peer_id) = create_test_env();
+
+        let msg = service
+            .send_message(&peer_peer_id, "Hello!", "text", None)
+            .unwrap();
+
+        assert!(!msg.message_id.is_empty());
+        assert_eq!(msg.sender_peer_id, our_peer_id);
+        assert_eq!(msg.recipient_peer_id, peer_peer_id);
+        assert!(!msg.content_encrypted.is_empty());
+        assert!(!msg.signature.is_empty());
+        assert_eq!(msg.content_type, "text");
+    }
+
+    #[test]
+    fn test_send_message_requires_identity() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service =
+            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+        let service = MessagingService::new(db, identity_service, contacts_service, permissions_service);
+
+        let result = service.send_message("12D3KooWPeer", "Hello!", "text", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_message_no_permission_fails() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service =
+            Arc::new(PermissionsService::new(db.clone(), identity_service.clone()));
+
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test".to_string(),
+                passphrase: "pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+
+        let service = MessagingService::new(db, identity_service, contacts_service, permissions_service);
+
+        // No permission granted to this peer
+        let result = service.send_message("12D3KooWUnknownPeer", "Hello!", "text", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_multiple_messages_increment_counters() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        let msg1 = service
+            .send_message(&peer_peer_id, "First", "text", None)
+            .unwrap();
+        let msg2 = service
+            .send_message(&peer_peer_id, "Second", "text", None)
+            .unwrap();
+
+        assert!(msg2.nonce_counter > msg1.nonce_counter);
+        assert!(msg2.lamport_clock > msg1.lamport_clock);
+    }
+
+    #[test]
+    fn test_get_conversations() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        // Send a message to create a conversation
+        service
+            .send_message(&peer_peer_id, "Hello!", "text", None)
+            .unwrap();
+
+        let conversations = service.get_conversations().unwrap();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].peer_id, peer_peer_id);
+    }
+
+    #[test]
+    fn test_get_conversations_empty() {
+        let (service, _identity, _our_peer_id, _peer_peer_id) = create_test_env();
+
+        let conversations = service.get_conversations().unwrap();
+        assert!(conversations.is_empty());
+    }
+
+    #[test]
+    fn test_update_message_status() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        let msg = service
+            .send_message(&peer_peer_id, "Hello!", "text", None)
+            .unwrap();
+
+        let updated = service
+            .update_message_status(&msg.message_id, MessageStatus::Sent)
+            .unwrap();
+        assert!(updated);
+    }
+
+    #[test]
+    fn test_update_message_status_nonexistent() {
+        let (service, _identity, _our_peer_id, _peer_peer_id) = create_test_env();
+
+        let updated = service
+            .update_message_status("nonexistent-msg", MessageStatus::Sent)
+            .unwrap();
+        assert!(!updated);
+    }
+
+    #[test]
+    fn test_clear_conversation_history() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        // Send some messages
+        service
+            .send_message(&peer_peer_id, "Msg 1", "text", None)
+            .unwrap();
+        service
+            .send_message(&peer_peer_id, "Msg 2", "text", None)
+            .unwrap();
+
+        let cleared = service.clear_conversation_history(&peer_peer_id).unwrap();
+        assert_eq!(cleared, 2);
+    }
+
+    #[test]
+    fn test_clear_empty_conversation() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        let cleared = service.clear_conversation_history(&peer_peer_id).unwrap();
+        assert_eq!(cleared, 0);
+    }
+
+    #[test]
+    fn test_delete_conversation() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        service
+            .send_message(&peer_peer_id, "Msg 1", "text", None)
+            .unwrap();
+        service
+            .send_message(&peer_peer_id, "Msg 2", "text", None)
+            .unwrap();
+
+        let deleted = service.delete_conversation(&peer_peer_id).unwrap();
+        assert_eq!(deleted, 2);
+
+        // Conversations should be empty now
+        let conversations = service.get_conversations().unwrap();
+        assert!(conversations.is_empty());
+    }
+
+    #[test]
+    fn test_send_message_locked_identity_fails() {
+        let (service, identity_service, _our_peer_id, peer_peer_id) = create_test_env();
+
+        identity_service.lock();
+
+        let result = service.send_message(&peer_peer_id, "Hello!", "text", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_conversation_id_is_deterministic() {
+        // Conversation IDs should be the same regardless of direction
+        let id1 = derive_conversation_id("peer-a", "peer-b");
+        let id2 = derive_conversation_id("peer-b", "peer-a");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_conversation_id_different_peers() {
+        let id1 = derive_conversation_id("peer-a", "peer-b");
+        let id2 = derive_conversation_id("peer-a", "peer-c");
+        assert_ne!(id1, id2);
     }
 }

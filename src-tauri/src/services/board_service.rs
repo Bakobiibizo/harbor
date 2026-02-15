@@ -499,3 +499,286 @@ pub struct StorableBoardPost {
     pub deleted_at: Option<i64>,
     pub signature: Vec<u8>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CreateIdentityRequest;
+    use crate::services::IdentityService;
+    use std::sync::Arc;
+
+    fn create_test_env() -> (
+        BoardService,
+        Arc<Database>,
+        Arc<IdentityService>,
+        String, // our peer_id
+    ) {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+
+        let info = identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Board User".to_string(),
+                passphrase: "test-pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+
+        let board_service = BoardService::new(db.clone(), identity_service.clone());
+
+        (board_service, db, identity_service, info.peer_id)
+    }
+
+    #[test]
+    fn test_join_community() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        service
+            .join_community("relay-peer-1", "/ip4/1.2.3.4/tcp/9000", Some("Test Community"))
+            .unwrap();
+
+        let communities = service.get_communities().unwrap();
+        assert_eq!(communities.len(), 1);
+        assert_eq!(communities[0].relay_peer_id, "relay-peer-1");
+        assert_eq!(communities[0].community_name, Some("Test Community".to_string()));
+    }
+
+    #[test]
+    fn test_join_multiple_communities() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9000", Some("Community 1"))
+            .unwrap();
+        service
+            .join_community("relay-2", "/ip4/5.6.7.8/tcp/9001", Some("Community 2"))
+            .unwrap();
+
+        let communities = service.get_communities().unwrap();
+        assert_eq!(communities.len(), 2);
+    }
+
+    #[test]
+    fn test_leave_community() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9000", Some("Community"))
+            .unwrap();
+
+        service.leave_community("relay-1").unwrap();
+
+        let communities = service.get_communities().unwrap();
+        assert!(communities.is_empty());
+    }
+
+    #[test]
+    fn test_leave_nonexistent_community() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        // Should not error, just no-op
+        service.leave_community("nonexistent").unwrap();
+    }
+
+    #[test]
+    fn test_store_and_get_boards() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9000", Some("Community"))
+            .unwrap();
+
+        let boards = vec![
+            ("board-1".to_string(), "General".to_string(), Some("General discussion".to_string()), true),
+            ("board-2".to_string(), "Random".to_string(), None, false),
+        ];
+
+        service.store_boards("relay-1", &boards).unwrap();
+
+        let stored_boards = service.get_boards("relay-1").unwrap();
+        assert_eq!(stored_boards.len(), 2);
+
+        // Default board should be first
+        assert_eq!(stored_boards[0].name, "General");
+        assert!(stored_boards[0].is_default);
+    }
+
+    #[test]
+    fn test_store_and_get_board_posts() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9000", None)
+            .unwrap();
+
+        let boards = vec![("board-1".to_string(), "General".to_string(), None, true)];
+        service.store_boards("relay-1", &boards).unwrap();
+
+        let posts = vec![
+            StorableBoardPost {
+                post_id: "bp-1".to_string(),
+                board_id: "board-1".to_string(),
+                author_peer_id: "author-1".to_string(),
+                author_display_name: Some("Alice".to_string()),
+                content_type: "text".to_string(),
+                content_text: Some("Hello community!".to_string()),
+                lamport_clock: 1,
+                created_at: 1000,
+                deleted_at: None,
+                signature: vec![0u8; 64],
+            },
+            StorableBoardPost {
+                post_id: "bp-2".to_string(),
+                board_id: "board-1".to_string(),
+                author_peer_id: "author-2".to_string(),
+                author_display_name: Some("Bob".to_string()),
+                content_type: "text".to_string(),
+                content_text: Some("Hi everyone!".to_string()),
+                lamport_clock: 2,
+                created_at: 2000,
+                deleted_at: None,
+                signature: vec![0u8; 64],
+            },
+        ];
+
+        service.store_board_posts("relay-1", &posts).unwrap();
+
+        let stored_posts = service.get_board_posts("relay-1", "board-1", 10, None).unwrap();
+        assert_eq!(stored_posts.len(), 2);
+    }
+
+    #[test]
+    fn test_get_board_posts_empty() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        let posts = service.get_board_posts("relay-1", "board-1", 10, None).unwrap();
+        assert!(posts.is_empty());
+    }
+
+    #[test]
+    fn test_sync_cursor() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        // Initially no cursor
+        let cursor = service.get_sync_cursor("relay-1", "board-1").unwrap();
+        assert!(cursor.is_none());
+
+        // Store board posts should update cursor
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9000", None)
+            .unwrap();
+        let boards = vec![("board-1".to_string(), "General".to_string(), None, true)];
+        service.store_boards("relay-1", &boards).unwrap();
+
+        let posts = vec![StorableBoardPost {
+            post_id: "bp-1".to_string(),
+            board_id: "board-1".to_string(),
+            author_peer_id: "author-1".to_string(),
+            author_display_name: None,
+            content_type: "text".to_string(),
+            content_text: Some("Post".to_string()),
+            lamport_clock: 1,
+            created_at: 5000,
+            deleted_at: None,
+            signature: vec![0u8; 64],
+        }];
+
+        service.store_board_posts("relay-1", &posts).unwrap();
+
+        let cursor = service.get_sync_cursor("relay-1", "board-1").unwrap();
+        assert_eq!(cursor, Some(5000));
+    }
+
+    #[test]
+    fn test_create_board_post_success() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let post = service.create_board_post("board-1", "Hello board!").unwrap();
+
+        assert!(!post.post_id.is_empty());
+        assert_eq!(post.board_id, "board-1");
+        assert_eq!(post.author_peer_id, peer_id);
+        assert_eq!(post.content_type, "text");
+        assert_eq!(post.content_text, Some("Hello board!".to_string()));
+        assert!(!post.signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_board_post_requires_identity() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let service = BoardService::new(db, identity_service);
+
+        let result = service.create_board_post("board-1", "Hello");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_peer_registration() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let reg = service.create_peer_registration().unwrap();
+
+        assert_eq!(reg.peer_id, peer_id);
+        assert_eq!(reg.display_name, "Board User");
+        assert!(!reg.public_key.is_empty());
+        assert!(!reg.signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_list_boards_request() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let req = service.create_list_boards_request().unwrap();
+
+        assert_eq!(req.requester_peer_id, peer_id);
+        assert!(!req.signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_get_board_posts_request() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let req = service
+            .create_get_board_posts_request("board-1", Some(1000), 50)
+            .unwrap();
+
+        assert_eq!(req.requester_peer_id, peer_id);
+        assert_eq!(req.board_id, "board-1");
+        assert_eq!(req.after_timestamp, Some(1000));
+        assert_eq!(req.limit, 50);
+        assert!(!req.signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_delete_post_request() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let req = service.create_delete_post_request("post-123").unwrap();
+
+        assert_eq!(req.post_id, "post-123");
+        assert_eq!(req.author_peer_id, peer_id);
+        assert!(!req.signature.is_empty());
+    }
+
+    #[test]
+    fn test_upsert_community() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        // Join community
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9000", Some("Community V1"))
+            .unwrap();
+
+        // Re-join with updated name (upsert)
+        service
+            .join_community("relay-1", "/ip4/1.2.3.4/tcp/9001", Some("Community V2"))
+            .unwrap();
+
+        let communities = service.get_communities().unwrap();
+        assert_eq!(communities.len(), 1);
+        // Address should be updated
+        assert_eq!(communities[0].relay_address, "/ip4/1.2.3.4/tcp/9001");
+    }
+}
