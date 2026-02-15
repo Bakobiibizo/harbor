@@ -55,8 +55,8 @@ describe('loggingService', () => {
       const mockUrl = 'blob:http://localhost/mock-url';
       const createObjectURL = vi.fn().mockReturnValue(mockUrl);
       const revokeObjectURL = vi.fn();
-      global.URL.createObjectURL = createObjectURL;
-      global.URL.revokeObjectURL = revokeObjectURL;
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
 
       const mockLink = {
         href: '',

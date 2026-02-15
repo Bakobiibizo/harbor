@@ -2,7 +2,7 @@
 # Frontend: TypeScript/npm at project root
 # Backend: Rust at src-tauri/
 
-default_language = "typescript"
+default_language = "rust"
 
 # ===================== TypeScript/Frontend ========================
 
