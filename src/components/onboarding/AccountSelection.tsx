@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Button } from '../common';
 import { useAccountsStore } from '../../stores';
-import { HarborIcon, UserPlusIcon, TrashIcon } from '../icons';
+import { HarborIcon, UserPlusIcon, TrashIcon, LockIcon } from '../icons';
 import type { AccountInfo } from '../../types';
 import toast from 'react-hot-toast';
-import { getInitials } from '../../utils/formatting';
 
 interface AccountSelectionProps {
   onSelectAccount: (account: AccountInfo) => void;
@@ -13,88 +12,34 @@ interface AccountSelectionProps {
 
 export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSelectionProps) {
   const { accounts, removeAccount } = useAccountsStore();
-  const [deletingAccountId, setDeletingAccountId] = useState<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [deleteData, setDeleteData] = useState(false);
 
   const handleLogin = (account: AccountInfo) => {
     onSelectAccount(account);
   };
 
-  const handleDeleteClick = (e: React.MouseEvent, account: AccountInfo) => {
-    e.stopPropagation();
-
-    // Show a warning toast with a confirmation button
-    toast(
-      (t) => (
-        <div>
-          <p style={{ fontWeight: 600, marginBottom: 4 }}>
-            Delete "{account.displayName}"?
-          </p>
-          <p style={{ fontSize: 13, opacity: 0.85, marginBottom: 12 }}>
-            Deleting this account is irreversible. All data will be permanently lost.
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              style={{
-                flex: 1,
-                padding: '6px 12px',
-                borderRadius: 8,
-                border: '1px solid hsl(222, 30%, 22%)',
-                background: 'transparent',
-                color: 'hsl(220, 14%, 96%)',
-                fontSize: 13,
-                cursor: 'pointer',
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                toast.dismiss(t.id);
-                confirmDelete(account.id);
-              }}
-              style={{
-                flex: 1,
-                padding: '6px 12px',
-                borderRadius: 8,
-                border: 'none',
-                background: 'hsl(0, 84%, 60%)',
-                color: 'white',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      ),
-      {
-        duration: Infinity,
-        style: {
-          maxWidth: 360,
-          background: 'hsl(222, 41%, 13%)',
-          color: 'hsl(220, 14%, 96%)',
-          border: '1px solid hsl(0, 84%, 60%, 0.4)',
-          borderRadius: 12,
-          padding: '16px',
-        },
-        icon: '⚠',
-      },
-    );
+  const handleDelete = async (accountId: string) => {
+    try {
+      await removeAccount(accountId, deleteData);
+      toast.success('Account removed');
+      setShowDeleteConfirm(null);
+      setDeleteData(false);
+    } catch (error) {
+      toast.error(`Failed to remove account: ${error}`);
+    }
   };
 
-  const confirmDelete = async (accountId: string) => {
-    setDeletingAccountId(accountId);
-    try {
-      await removeAccount(accountId, true);
-      toast.success('Account deleted permanently');
-    } catch (error) {
-      toast.error(`Failed to delete account: ${error}`);
-    } finally {
-      setDeletingAccountId(null);
-    }
+  const getInitials = (name: string) => {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+
+    if (parts.length === 0) return '?';
+
+    return parts
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase() ?? '')
+      .join('');
   };
 
   const formatDate = (timestamp: number) => {
@@ -201,20 +146,20 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
               {accounts.map((account) => (
                 <div
                   key={account.id}
-                  className="group p-4 rounded-xl cursor-pointer transition-all duration-200"
+                  className={`p-4 rounded-xl cursor-pointer transition-all duration-200 ${
+                    selectedAccountId === account.id ? 'ring-2' : ''
+                  }`}
                   style={{
-                    background: 'hsl(var(--harbor-surface-1))',
-                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                    background:
+                      selectedAccountId === account.id
+                        ? 'hsl(var(--harbor-primary) / 0.1)'
+                        : 'hsl(var(--harbor-surface-1))',
+                    border:
+                      selectedAccountId === account.id
+                        ? '1px solid hsl(var(--harbor-primary))'
+                        : '1px solid hsl(var(--harbor-border-subtle))',
                   }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'hsl(var(--harbor-primary) / 0.1)';
-                    e.currentTarget.style.borderColor = 'hsl(var(--harbor-primary))';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'hsl(var(--harbor-surface-1))';
-                    e.currentTarget.style.borderColor = 'hsl(var(--harbor-border-subtle))';
-                  }}
-                  onClick={() => handleLogin(account)}
+                  onClick={() => setSelectedAccountId(account.id)}
                 >
                   <div className="flex items-center gap-4">
                     {/* Avatar */}
@@ -248,7 +193,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         className="text-xs truncate font-mono"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                       >
-                        {account.peerId.slice(0, 8)}...{account.peerId.slice(-4)}
+                        {account.peerId.slice(0, 12)}...
                       </p>
                       {account.lastAccessedAt && (
                         <p
@@ -260,38 +205,34 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                       )}
                     </div>
 
-                    {/* Delete button - always visible */}
-                    <button
-                      className="p-2 rounded-lg transition-all duration-200 opacity-40 hover:opacity-100 hover:bg-red-500/10 flex-shrink-0"
-                      style={{ color: 'hsl(var(--harbor-error))' }}
-                      onClick={(e) => handleDeleteClick(e, account)}
-                      disabled={deletingAccountId === account.id}
-                      title="Delete account"
-                    >
-                      {deletingAccountId === account.id ? (
-                        <svg
-                          className="w-4 h-4 animate-spin"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          />
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                          />
-                        </svg>
-                      ) : (
-                        <TrashIcon className="w-4 h-4" />
+                    {/* Actions */}
+                    <div className="flex items-center gap-2">
+                      {selectedAccountId === account.id && (
+                        <>
+                          <Button
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleLogin(account);
+                            }}
+                          >
+                            <LockIcon className="w-4 h-4 mr-1" />
+                            Login
+                          </Button>
+                          <button
+                            className="p-2 rounded-lg transition-colors duration-200 hover:bg-red-500/10"
+                            style={{ color: 'hsl(var(--harbor-error))' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowDeleteConfirm(account.id);
+                            }}
+                            title="Delete account"
+                          >
+                            <TrashIcon className="w-4 h-4" />
+                          </button>
+                        </>
                       )}
-                    </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -305,6 +246,75 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50 p-4"
+          style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+          onClick={() => setShowDeleteConfirm(null)}
+        >
+          <div
+            className="rounded-2xl p-6 w-full max-w-sm"
+            style={{
+              background: 'hsl(var(--harbor-bg-elevated))',
+              border: '1px solid hsl(var(--harbor-border-subtle))',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              className="text-lg font-bold mb-2"
+              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+            >
+              Delete Account?
+            </h3>
+            <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+              This will remove the account from the list. You can optionally delete all account data
+              permanently.
+            </p>
+
+            <label
+              className="flex items-center gap-3 mb-4 p-3 rounded-lg cursor-pointer"
+              style={{ background: 'hsl(var(--harbor-surface-1))' }}
+            >
+              <input
+                type="checkbox"
+                checked={deleteData}
+                onChange={(e) => setDeleteData(e.target.checked)}
+                className="w-4 h-4 rounded"
+              />
+              <div>
+                <p
+                  className="text-sm font-medium"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  Delete all account data
+                </p>
+                <p className="text-xs" style={{ color: 'hsl(var(--harbor-error))' }}>
+                  This cannot be undone
+                </p>
+              </div>
+            </label>
+
+            <div className="flex gap-3">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => setShowDeleteConfirm(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                onClick={() => handleDelete(showDeleteConfirm)}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

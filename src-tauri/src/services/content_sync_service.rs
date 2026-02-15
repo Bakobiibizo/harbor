@@ -64,18 +64,6 @@ pub struct OutgoingFetchResponse {
     pub signature: Vec<u8>,
 }
 
-/// Parameters for storing a remote post received from a peer
-pub struct RemotePostParams<'a> {
-    pub post_id: &'a str,
-    pub author_peer_id: &'a str,
-    pub content_type: &'a str,
-    pub content_text: Option<&'a str>,
-    pub visibility: &'a str,
-    pub lamport_clock: u64,
-    pub created_at: i64,
-    pub signature: &'a [u8],
-}
-
 impl ContentSyncService {
     /// Create a new content sync service
     pub fn new(
@@ -101,7 +89,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -132,7 +120,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -164,7 +152,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Validate timestamp is within acceptable window (5 minutes)
         let now = chrono::Utc::now().timestamp();
@@ -255,7 +243,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // Verify the requester's signature
         let requester_public_key = self
@@ -410,15 +398,18 @@ impl ContentSyncService {
     }
 
     /// Store a post received from a peer
-    pub fn store_remote_post(&self, params: &RemotePostParams<'_>) -> Result<()> {
-        let post_id = params.post_id;
-        let author_peer_id = params.author_peer_id;
-        let content_type = params.content_type;
-        let content_text = params.content_text;
-        let visibility = params.visibility;
-        let lamport_clock = params.lamport_clock;
-        let created_at = params.created_at;
-        let signature = params.signature;
+    #[allow(clippy::too_many_arguments)]
+    pub fn store_remote_post(
+        &self,
+        post_id: &str,
+        author_peer_id: &str,
+        content_type: &str,
+        content_text: Option<&str>,
+        visibility: &str,
+        lamport_clock: u64,
+        created_at: i64,
+        signature: &[u8],
+    ) -> Result<()> {
         // Verify the signature
         let author_public_key = self
             .contacts_service
@@ -498,15 +489,18 @@ impl ContentSyncService {
         cursor: u64,
         limit: u32,
     ) -> Result<Vec<crate::db::Post>> {
-        let posts = PostsRepository::get_by_author_after_cursor(
-            &self.db,
-            author_peer_id,
-            cursor as i64,
-            limit as i64,
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        // For now, just get posts and filter by lamport clock
+        // TODO: Add a more efficient query
+        let posts = PostsRepository::get_by_author(&self.db, author_peer_id, 1000, None)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        Ok(posts)
+        let filtered: Vec<_> = posts
+            .into_iter()
+            .filter(|p| p.lamport_clock as u64 > cursor)
+            .take(limit as usize)
+            .collect();
+
+        Ok(filtered)
     }
 
     /// Store sync cursor for a peer
@@ -514,7 +508,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
 
         // We are syncing *from* peer_id, so the cursor is keyed by (source_peer_id=peer_id)
         // for our local identity.

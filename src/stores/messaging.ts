@@ -1,10 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { invoke } from '@tauri-apps/api/core';
-import { createLogger } from '../utils/logger';
 import type { Message, Conversation, SendMessageResult } from '../types';
-
-const log = createLogger('MessagingStore');
 
 interface MessagingState {
   // State
@@ -28,12 +25,6 @@ interface MessagingState {
   setSelectedConversation: (id: string | null) => void;
   clearConversationSelection: () => void;
   handleIncomingMessage: (message: Message) => void;
-  updateMessageStatus: (
-    messageId: string,
-    status: Message['status'],
-    deliveredAt?: number | null,
-    readAt?: number | null,
-  ) => void;
   markConversationRead: (peerId: string) => Promise<void>;
   clearConversationHistory: (peerId: string) => Promise<void>;
   deleteConversation: (peerId: string) => Promise<void>;

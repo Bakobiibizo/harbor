@@ -1,7 +1,4 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
-import { createLogger } from '../../utils/logger';
-
-const log = createLogger('ErrorBoundary');
 
 interface Props {
   children: ReactNode;
@@ -24,7 +21,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    log.error('Uncaught error', { error, errorInfo });
+    console.error('[Harbor] Uncaught error:', error, errorInfo);
   }
 
   handleReload = (): void => {

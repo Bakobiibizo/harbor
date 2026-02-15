@@ -8,11 +8,7 @@ import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/o
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { HarborIcon } from './components/icons';
 import { BoardsPage, ChatPage, WallPage, FeedPage, NetworkPage, SettingsPage } from './pages';
-import { preloadSounds } from './services/audioNotifications';
-import { createLogger } from './utils/logger';
 import type { AccountInfo } from './types';
-
-const log = createLogger('App');
 
 function LoadingScreen() {
   return (
@@ -100,20 +96,15 @@ function AppContent() {
   // Set up Tauri event listeners for real-time updates from backend
   useTauriEvents();
 
-  // Preload notification sounds once on mount
-  useEffect(() => {
-    preloadSounds();
-  }, []);
-
   // Load accounts on mount
   useEffect(() => {
-    loadAccounts().catch((err) => log.error('Failed to load accounts', err));
+    loadAccounts();
   }, [loadAccounts]);
 
   // Initialize identity after accounts are loaded
   useEffect(() => {
     if (!accountsLoading) {
-      initialize().catch((err) => log.error('Failed to initialize identity', err));
+      initialize();
     }
   }, [accountsLoading, initialize]);
 
@@ -124,35 +115,35 @@ function AppContent() {
         // Only auto-start if setting is enabled and network isn't already running
         const networkState = useNetworkStore.getState();
         if (autoStartNetwork && !networkState.isRunning) {
-          log.info('Auto-starting network...');
+          console.log('[Harbor] Auto-starting network...');
           await startNetwork();
 
           // Auto-connect to public relays for circuit addressing
-          log.info('Auto-connecting to public relays...');
+          console.log('[Harbor] Auto-connecting to public relays...');
           const { connectToPublicRelays } = useNetworkStore.getState();
           try {
             await connectToPublicRelays();
-            log.info('Connected to public relays');
+            console.log('[Harbor] Connected to public relays');
           } catch (error) {
-            log.error('Failed to connect to public relays', error);
+            console.error('[Harbor] Failed to connect to public relays:', error);
           }
 
           // Connect to saved bootstrap nodes
           const settingsState = useSettingsStore.getState();
           if (settingsState.bootstrapNodes.length > 0) {
-            log.info('Connecting to saved bootstrap nodes...');
+            console.log('[Harbor] Connecting to saved bootstrap nodes...');
             const { addBootstrapNode } = useNetworkStore.getState();
             for (const node of settingsState.bootstrapNodes) {
               try {
                 await addBootstrapNode(node);
-                log.info(`Connected to bootstrap node: ${node}`);
+                console.log(`[Harbor] Connected to bootstrap node: ${node}`);
               } catch (error) {
-                log.error(`Failed to connect to bootstrap node: ${node}`, error);
+                console.error(`[Harbor] Failed to connect to bootstrap node: ${node}`, error);
               }
             }
           }
         }
-      }).catch((err) => log.error('Failed during auto-start network', err));
+      });
     }
   }, [state.status, checkStatus, autoStartNetwork, startNetwork]);
 
@@ -170,19 +161,14 @@ function AppContent() {
     );
   }
 
-  // Accounts exist - show account selection list with delete and create options
-  if (accounts.length >= 1 && state.status !== 'unlocked' && !selectedAccount) {
+  // Multiple accounts exist - show account selection
+  if (accounts.length > 1 && state.status !== 'unlocked' && !selectedAccount) {
     return (
       <AccountSelection
-        onSelectAccount={async (account) => {
-          try {
-            await useAccountsStore.getState().setActiveAccount(account.id);
-          } catch {
-            // Non-critical: active account tracking may not be set up
-          }
+        onSelectAccount={(account) => {
           setSelectedAccount(account);
           // Re-initialize identity to load the selected account's data
-          initialize().catch((err) => log.error('Failed to re-initialize identity', err));
+          initialize();
         }}
         onCreateAccount={() => setShowCreateAccount(true)}
       />
@@ -198,9 +184,13 @@ function AppContent() {
   if (state.status === 'locked') {
     return (
       <UnlockIdentity
-        onSwitchAccount={() => {
-          setSelectedAccount(null);
-        }}
+        onSwitchAccount={
+          accounts.length > 1
+            ? () => {
+                setSelectedAccount(null);
+              }
+            : undefined
+        }
       />
     );
   }

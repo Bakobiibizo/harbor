@@ -1,11 +1,30 @@
 import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useBoardsStore, useIdentityStore } from '../stores';
-import { createLogger } from '../utils/logger';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
-import { formatTimeAgo, shortPeerId } from '../utils/formatting';
 
-const log = createLogger('Boards');
+function formatTimeAgo(unixSeconds: number): string {
+  const now = Date.now();
+  const date = new Date(unixSeconds * 1000);
+  const diff = now - date.getTime();
+
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+
+  return date.toLocaleDateString();
+}
+
+function shortPeerId(peerId: string): string {
+  if (peerId.length <= 16) return peerId;
+  return `${peerId.slice(0, 8)}...${peerId.slice(-6)}`;
+}
 
 // Post card component
 function PostCard({
@@ -337,7 +356,7 @@ export function BoardsPage() {
   } = useBoardsStore();
 
   useEffect(() => {
-    loadCommunities().catch((err) => log.error('Failed to load communities', err));
+    loadCommunities();
   }, [loadCommunities]);
 
   const handleDeletePost = async (postId: string) => {

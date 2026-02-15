@@ -19,7 +19,6 @@ import {
   HarborIcon,
   ChevronRightIcon,
 } from '../icons';
-import { getInitials } from '../../utils/formatting';
 
 interface MainLayoutProps {
   children: ReactNode;
@@ -111,6 +110,16 @@ export function MainLayout({ children }: MainLayoutProps) {
     } finally {
       setIsLocking(false);
     }
+  };
+
+  // Generate avatar initials
+  const getInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
   };
 
   return (

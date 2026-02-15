@@ -10,13 +10,13 @@ interface KeyboardShortcut {
   description: string;
 }
 
-const PAGE_ROUTES = ['/chat', '/wall', '/feed', '/boards', '/network', '/settings'] as const;
+const PAGE_ROUTES = ['/chat', '/wall', '/feed', '/network', '/settings'] as const;
 
 export function useKeyboardNavigation() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Navigate to page by index (0-based, maps to Ctrl+1 through Ctrl+6)
+  // Navigate to page by index (1-5)
   const navigateToPage = useCallback(
     (index: number) => {
       if (index >= 0 && index < PAGE_ROUTES.length) {
@@ -56,10 +56,10 @@ export function useKeyboardNavigation() {
       const isInputField =
         target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      // Ctrl+1-6: Navigate to pages (Chat, Wall, Feed, Boards, Network, Settings)
+      // Ctrl+1-5: Navigate to pages
       if (event.ctrlKey && !event.altKey && !event.shiftKey) {
         const keyNum = parseInt(event.key);
-        if (keyNum >= 1 && keyNum <= PAGE_ROUTES.length) {
+        if (keyNum >= 1 && keyNum <= 5) {
           event.preventDefault();
           navigateToPage(keyNum - 1);
           return;
@@ -168,73 +168,20 @@ export function useListKeyboardNavigation<T>(
   }, [items, selectedIndex, onSelect, onActivate]);
 }
 
-// Helper to simulate a keyboard shortcut by dispatching its corresponding event
-function simulateCtrlKey(key: string): void {
-  window.dispatchEvent(
-    new KeyboardEvent('keydown', {
-      key,
-      ctrlKey: true,
-      bubbles: true,
-    }),
-  );
-}
-
-function simulateAltKey(key: string): void {
-  window.dispatchEvent(
-    new KeyboardEvent('keydown', {
-      key,
-      altKey: true,
-      bubbles: true,
-    }),
-  );
-}
-
 // Keyboard shortcuts info for help display
-// Actions dispatch the corresponding keyboard events so they work identically
-// to pressing the actual key combination
 export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
-  { key: '1', ctrlKey: true, action: () => simulateCtrlKey('1'), description: 'Go to Messages' },
-  { key: '2', ctrlKey: true, action: () => simulateCtrlKey('2'), description: 'Go to Journal' },
-  { key: '3', ctrlKey: true, action: () => simulateCtrlKey('3'), description: 'Go to Feed' },
-  { key: '4', ctrlKey: true, action: () => simulateCtrlKey('4'), description: 'Go to Boards' },
-  { key: '5', ctrlKey: true, action: () => simulateCtrlKey('5'), description: 'Go to Network' },
-  { key: '6', ctrlKey: true, action: () => simulateCtrlKey('6'), description: 'Go to Settings' },
-  {
-    key: 'N',
-    ctrlKey: true,
-    action: () => window.dispatchEvent(new CustomEvent('harbor:new-action')),
-    description: 'New message/post',
-  },
-  {
-    key: 'K',
-    ctrlKey: true,
-    action: () => window.dispatchEvent(new CustomEvent('harbor:quick-search')),
-    description: 'Quick search',
-  },
-  {
-    key: '/',
-    ctrlKey: true,
-    action: () => window.dispatchEvent(new CustomEvent('harbor:show-shortcuts')),
-    description: 'Show shortcuts',
-  },
-  {
-    key: 'Escape',
-    action: () => window.dispatchEvent(new CustomEvent('harbor:escape')),
-    description: 'Close dialog/modal',
-  },
-  {
-    key: '\u2190',
-    altKey: true,
-    action: () => simulateAltKey('ArrowLeft'),
-    description: 'Previous page',
-  },
-  {
-    key: '\u2192',
-    altKey: true,
-    action: () => simulateAltKey('ArrowRight'),
-    description: 'Next page',
-  },
-  { key: '\u2191/k', action: () => {}, description: 'Previous item in list' },
-  { key: '\u2193/j', action: () => {}, description: 'Next item in list' },
+  { key: '1', ctrlKey: true, action: () => {}, description: 'Go to Messages' },
+  { key: '2', ctrlKey: true, action: () => {}, description: 'Go to Journal' },
+  { key: '3', ctrlKey: true, action: () => {}, description: 'Go to Feed' },
+  { key: '4', ctrlKey: true, action: () => {}, description: 'Go to Network' },
+  { key: '5', ctrlKey: true, action: () => {}, description: 'Go to Settings' },
+  { key: 'N', ctrlKey: true, action: () => {}, description: 'New message/post' },
+  { key: 'K', ctrlKey: true, action: () => {}, description: 'Quick search' },
+  { key: '/', ctrlKey: true, action: () => {}, description: 'Show shortcuts' },
+  { key: 'Escape', action: () => {}, description: 'Close dialog/modal' },
+  { key: '←', altKey: true, action: () => {}, description: 'Previous page' },
+  { key: '→', altKey: true, action: () => {}, description: 'Next page' },
+  { key: '↑/k', action: () => {}, description: 'Previous item in list' },
+  { key: '↓/j', action: () => {}, description: 'Next item in list' },
   { key: 'Enter', action: () => {}, description: 'Select/activate item' },
 ];

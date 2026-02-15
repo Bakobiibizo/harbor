@@ -1,5 +1,11 @@
-// CloudFormation templates for deploying Harbor relay servers on AWS
-// These templates are embedded in the app for easy copy-paste deployment
+// CloudFormation template for deploying a libp2p relay server on AWS
+// This template is embedded in the app for easy copy-paste deployment
+
+export const RELAY_BINARY_SHA256 =
+  'c5dcb143d69558107ced27a0dfd30542a88a69906aa53404d9b31ef97a1c66a3';
+export const RELAY_PEER_ID = '12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9';
+export const RELAY_IDENTITY_KEY_B64 =
+  'CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo=';
 
 export const RELAY_CLOUDFORMATION_TEMPLATE = `AWSTemplateFormatVersion: "2010-09-09"
 Description: "Harbor libp2p Relay Server - Enables NAT traversal for Harbor chat app users"
@@ -135,6 +141,12 @@ Resources:
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay UDP/QUIC
+        # SSH access (only if key pair provided)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -142,18 +154,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "\${AWS::StackName}-sg"
-
-  # SSH access - only created when a key pair is configured
-  SSHIngressRule:
-    Type: AWS::EC2::SecurityGroupIngress
-    Condition: HasKeyPair
-    Properties:
-      GroupId: !Ref RelaySecurityGroup
-      IpProtocol: tcp
-      FromPort: 22
-      ToPort: 22
-      CidrIp: 0.0.0.0/0
-      Description: SSH access (only when key pair is provided)
 
   # SSM Parameter to store the relay address
   RelayAddressParameter:
@@ -244,16 +244,17 @@ Resources:
           echo "RelayPort: \${RelayPort}"
 
           EXPECTED_SHA256="c5dcb143d69558107ced27a0dfd30542a88a69906aa53404d9b31ef97a1c66a3"
-          SERVICE_NAME="\${AWS::StackName}"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
+          RELAY_PEER_ID="12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+          IDENTITY_KEY_B64="CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo="
 
           # Download pre-compiled binary
           echo "Downloading pre-compiled relay binary..."
-          curl -L -o /usr/local/bin/$SERVICE_NAME "$BINARY_URL"
+          curl -L -o /usr/local/bin/harbor-relay "$BINARY_URL"
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/$SERVICE_NAME | cut -d ' ' -f 1)
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print $1}')
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
@@ -262,13 +263,13 @@ Resources:
           fi
           echo "SHA256 verified OK"
 
-          chmod +x /usr/local/bin/$SERVICE_NAME
+          chmod +x /usr/local/bin/harbor-relay
 
-          # Security: identity key is generated at deploy time by the relay binary
-          # (load_or_generate_identity). No secrets are baked into this template.
-          IDENTITY_DIR="/var/lib/$SERVICE_NAME/identity"
-          mkdir -p "$IDENTITY_DIR"
-          chmod 700 "$IDENTITY_DIR"
+          # Install static identity key (same peer ID across restarts/redeployments)
+          echo "Installing static relay identity key..."
+          mkdir -p /root/.config/harbor-relay
+          echo "$IDENTITY_KEY_B64" | base64 -d > /root/.config/harbor-relay/id.key
+          echo "Relay Peer ID: $RELAY_PEER_ID"
 
           # Get public IP using IMDSv2
           echo "Getting public IP..."
@@ -281,20 +282,19 @@ Resources:
           fi
           echo "Public IP: $PUBLIC_IP"
 
-          # Start relay without announce-ip so it generates its identity
-          echo "Creating initial systemd service..."
-          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
+          # Create systemd service
+          echo "Creating systemd service..."
+          cat > /etc/systemd/system/libp2p-relay.service << SERVICEEOF
           [Unit]
-          Description=Harbor Relay Server ($SERVICE_NAME)
-          After=network-online.target
-          Wants=network-online.target
+          Description=Harbor libp2p Relay Server
+          After=network.target
 
           [Service]
           Type=simple
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
+          ExecStart=/usr/local/bin/harbor-relay --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
           StandardOutput=journal
           StandardError=journal
 
@@ -302,96 +302,34 @@ Resources:
           WantedBy=multi-user.target
           SERVICEEOF
 
+          # Start the relay service
+          echo "Starting relay service..."
           systemctl daemon-reload
-          systemctl enable $SERVICE_NAME
-          systemctl start $SERVICE_NAME
+          systemctl enable libp2p-relay
+          systemctl start libp2p-relay
 
-          echo "Waiting for relay to start..."
+          # Wait for startup
+          echo "Waiting for relay to start (10 seconds)..."
           sleep 10
-          PEER_ID=""
-          for i in {1..30}; do
-            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
-            if [ -n "$PEER_ID" ]; then
-              echo "Found Peer ID: $PEER_ID"
-              break
-            fi
-            sleep 2
-          done
 
-          # Wait for Elastic IP to be associated (happens after UserData)
-          echo "Waiting for Elastic IP association..."
-          PREV_IP=""
-          STABLE_COUNT=0
-          for attempt in {1..60}; do
-            CURRENT_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\\n')
-            if [ "$CURRENT_IP" = "$PREV_IP" ] && [ -n "$CURRENT_IP" ]; then
-              STABLE_COUNT=$((STABLE_COUNT + 1))
-            else
-              STABLE_COUNT=0
-            fi
-            PREV_IP="$CURRENT_IP"
-            if [ "$STABLE_COUNT" -ge 3 ]; then
-              echo "Public IP stabilized at $CURRENT_IP"
-              break
-            fi
-            sleep 5
-          done
-          PUBLIC_IP="$CURRENT_IP"
-          echo "Public IP: $PUBLIC_IP"
+          systemctl status libp2p-relay --no-pager || true
 
-          # Rewrite service with correct announce-ip and restart
-          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
-          [Unit]
-          Description=Harbor Relay Server ($SERVICE_NAME)
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=simple
-          Restart=always
-          RestartSec=10
-          Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits}
-          StandardOutput=journal
-          StandardError=journal
-
-          [Install]
-          WantedBy=multi-user.target
-          SERVICEEOF
-
-          systemctl daemon-reload
-          systemctl restart $SERVICE_NAME
-          sleep 5
-
+          # Build relay address using known peer ID (no need to extract from logs)
           SSM_PARAM_NAME="/harbor/\${AWS::StackName}/relay-address"
+          RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/\${RelayPort}/p2p/$RELAY_PEER_ID"
 
-          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
-            RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/\${RelayPort}/p2p/$PEER_ID"
-            echo "Relay address: $RELAY_ADDRESS"
+          echo "Relay address: $RELAY_ADDRESS"
 
-            aws ssm put-parameter \\
-              --name "$SSM_PARAM_NAME" \\
-              --value "$RELAY_ADDRESS" \\
-              --type String \\
-              --overwrite \\
-              --region \${AWS::Region}
+          aws ssm put-parameter \\
+            --name "$SSM_PARAM_NAME" \\
+            --value "$RELAY_ADDRESS" \\
+            --type String \\
+            --overwrite \\
+            --region \${AWS::Region}
 
-            echo "=== SUCCESS ==="
-            echo "YOUR RELAY ADDRESS (copy this to Harbor):"
-            echo "$RELAY_ADDRESS"
-          else
-            echo "=== PARTIAL FAILURE ==="
-            echo "Public IP: $PUBLIC_IP"
-            echo "Peer ID: $PEER_ID"
-
-            aws ssm put-parameter \\
-              --name "$SSM_PARAM_NAME" \\
-              --value "ERROR: Setup incomplete. Check /var/log/user-data.log" \\
-              --type String \\
-              --overwrite \\
-              --region \${AWS::Region}
-          fi
-
+          echo "=== SUCCESS ==="
+          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+          echo "$RELAY_ADDRESS"
           echo "=== Setup Complete ==="
 
       Tags:
@@ -401,25 +339,25 @@ Resources:
           Value: harbor-chat
 
 Outputs:
+  RelayAddress:
+    Description: "Your relay address (once the EIP is assigned)"
+    Value: !Sub "/ip4/\${RelayEIP}/tcp/\${RelayPort}/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+
   Step1WaitTwoMinutes:
-    Description: "STEP 1: Wait ~2 minutes for the server to start"
-    Value: "The relay generates a unique identity on first boot. Allow a couple of minutes for startup."
+    Description: "STEP 1: Wait ~1 minute for the server to start"
+    Value: "Uses pre-compiled binary with static identity - starts quickly."
 
-  Step2GetYourRelayAddress:
-    Description: "STEP 2: Click this link to get your relay address"
-    Value: !Sub "https://\${AWS::Region}.console.aws.amazon.com/systems-manager/parameters/harbor/\${AWS::StackName}/relay-address/description?region=\${AWS::Region}"
-
-  Step3CopyRelayAddress:
-    Description: "STEP 3: Copy the 'Value' field and paste it into Harbor"
-    Value: "On that page, find the 'Value' field. It looks like: /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."
+  Step2CopyRelayAddress:
+    Description: "STEP 2: Copy the RelayAddress output above into Harbor"
+    Value: "Paste it into Network > Advanced > Add Relay Address"
 
   RelayPublicIP:
     Description: "Public IP address (for reference)"
     Value: !Ref RelayEIP
 
   RelayPeerID:
-    Description: "Relay Peer ID (auto-generated on first boot, persists across restarts)"
-    Value: "Check SSM Parameter Store for the full relay address including Peer ID"
+    Description: "Relay Peer ID (static, survives restarts)"
+    Value: "12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
 
   EstimatedMonthlyCost:
     Description: "Cost: FREE for 12 months, then ~$9/month"
@@ -427,7 +365,7 @@ Outputs:
 `;
 
 export const COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE = `AWSTemplateFormatVersion: "2010-09-09"
-Description: "Harbor Community Relay Server - NAT traversal + community boards with SQLite storage"
+Description: "Harbor Community Relay Server - NAT traversal + community boards with storage"
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -447,8 +385,6 @@ Metadata:
           default: "Community Configuration"
         Parameters:
           - CommunityName
-          - RateLimitMaxRequests
-          - RateLimitWindowSecs
 
 Parameters:
   InstanceType:
@@ -471,7 +407,7 @@ Parameters:
     Default: 4001
     MinValue: 1024
     MaxValue: 65535
-    Description: "Port for the libp2p relay server (TCP + UDP/QUIC)"
+    Description: "Port for the libp2p relay server"
 
   MaxReservations:
     Type: Number
@@ -488,20 +424,11 @@ Parameters:
     Default: "Harbor Community"
     Description: "Name for your community (shown to peers who join)"
 
-  RateLimitMaxRequests:
-    Type: Number
-    Default: 60
-    Description: "Maximum board sync requests per peer within the rate limit window"
-
-  RateLimitWindowSecs:
-    Type: Number
-    Default: 60
-    Description: "Rate limit window duration in seconds"
-
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
 
 Resources:
+  # VPC for the relay server
   RelayVPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -512,6 +439,7 @@ Resources:
         - Key: Name
           Value: !Sub "\${AWS::StackName}-vpc"
 
+  # Internet Gateway
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -525,6 +453,7 @@ Resources:
       VpcId: !Ref RelayVPC
       InternetGatewayId: !Ref InternetGateway
 
+  # Public Subnet
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -536,6 +465,7 @@ Resources:
         - Key: Name
           Value: !Sub "\${AWS::StackName}-public-subnet"
 
+  # Route Table
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -558,22 +488,31 @@ Resources:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
+  # Security Group
   RelaySecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: !Sub "Security group for \${AWS::StackName} Harbor community relay"
+      GroupDescription: !Sub "Security group for \${AWS::StackName} Harbor community relay server"
       VpcId: !Ref RelayVPC
       SecurityGroupIngress:
+        # libp2p relay port (TCP)
         - IpProtocol: tcp
           FromPort: !Ref RelayPort
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay TCP
+        # libp2p relay port (UDP for QUIC)
         - IpProtocol: udp
           FromPort: !Ref RelayPort
           ToPort: !Ref RelayPort
           CidrIp: 0.0.0.0/0
           Description: libp2p relay UDP/QUIC
+        # SSH access (only if key pair provided)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -582,17 +521,7 @@ Resources:
         - Key: Name
           Value: !Sub "\${AWS::StackName}-sg"
 
-  SSHIngressRule:
-    Type: AWS::EC2::SecurityGroupIngress
-    Condition: HasKeyPair
-    Properties:
-      GroupId: !Ref RelaySecurityGroup
-      IpProtocol: tcp
-      FromPort: 22
-      ToPort: 22
-      CidrIp: 0.0.0.0/0
-      Description: SSH access (only when key pair is provided)
-
+  # SSM Parameter to store the relay address
   RelayAddressParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -603,6 +532,7 @@ Resources:
       Tags:
         Application: harbor-chat
 
+  # IAM Role for EC2
   RelayInstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -634,6 +564,7 @@ Resources:
       Roles:
         - !Ref RelayInstanceRole
 
+  # Elastic IP for stable address
   RelayEIP:
     Type: AWS::EC2::EIP
     Properties:
@@ -648,6 +579,7 @@ Resources:
       InstanceId: !Ref RelayInstance
       AllocationId: !GetAtt RelayEIP.AllocationId
 
+  # EC2 Instance
   RelayInstance:
     Type: AWS::EC2::Instance
     Properties:
@@ -664,7 +596,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
-            VolumeSize: 20
+            VolumeSize: 8
             VolumeType: gp3
             Encrypted: true
       UserData:
@@ -678,17 +610,18 @@ Resources:
           echo "RelayPort: \${RelayPort}"
           echo "CommunityName: \${CommunityName}"
 
-          EXPECTED_SHA256="9425ab1d055fa3ceb4f2cc6eba6b29571e12fe2da868f305374d000d3892a05d"
-          SERVICE_NAME="\${AWS::StackName}"
+          EXPECTED_SHA256="c5dcb143d69558107ced27a0dfd30542a88a69906aa53404d9b31ef97a1c66a3"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
+          RELAY_PEER_ID="12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+          IDENTITY_KEY_B64="CAESQKx8WZyvKhxB8KflROQ4EB1jdu+FabKRVVTRo99ulO0wdUP+7I9QeNCLNS8XaxV4JejWR1himdtbElg2ImtLBXo="
 
           # Download pre-compiled binary
           echo "Downloading pre-compiled relay binary..."
-          curl -L -o /usr/local/bin/$SERVICE_NAME "$BINARY_URL"
+          curl -L -o /usr/local/bin/harbor-relay "$BINARY_URL"
 
           # Verify SHA256 hash
           echo "Verifying binary integrity..."
-          ACTUAL_SHA256=$(sha256sum /usr/local/bin/$SERVICE_NAME | cut -d ' ' -f 1)
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print \\$1}')
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
             echo "ERROR: SHA256 mismatch!"
             echo "  Expected: $EXPECTED_SHA256"
@@ -697,87 +630,42 @@ Resources:
           fi
           echo "SHA256 verified OK"
 
-          chmod +x /usr/local/bin/$SERVICE_NAME
+          chmod +x /usr/local/bin/harbor-relay
 
-          # Security: identity key is generated at deploy time by the relay binary
-          # (load_or_generate_identity). No secrets are baked into this template.
-          IDENTITY_DIR="/var/lib/$SERVICE_NAME/identity"
-          DATA_DIR="/var/lib/$SERVICE_NAME/data"
-          mkdir -p "$IDENTITY_DIR"
-          mkdir -p "$DATA_DIR"
-          chmod 700 "$IDENTITY_DIR"
+          # Install static identity key (same peer ID across restarts/redeployments)
+          echo "Installing static relay identity key..."
+          mkdir -p /root/.config/harbor-relay
+          echo "$IDENTITY_KEY_B64" | base64 -d > /root/.config/harbor-relay/id.key
+          echo "Relay Peer ID: $RELAY_PEER_ID"
 
-          # Start relay without announce-ip so it generates its identity
-          echo "Creating initial systemd service..."
-          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
-          [Unit]
-          Description=Harbor Community Relay Server ($SERVICE_NAME)
-          After=network-online.target
-          Wants=network-online.target
+          # Create data directory for SQLite storage
+          echo "Creating data directory..."
+          mkdir -p /var/lib/harbor-relay/data
 
-          [Service]
-          Type=simple
-          Restart=always
-          RestartSec=10
-          Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir $DATA_DIR --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
-          StandardOutput=journal
-          StandardError=journal
+          # Get public IP using IMDSv2
+          echo "Getting public IP..."
+          IMDS_TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+          PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null)
 
-          [Install]
-          WantedBy=multi-user.target
-          SERVICEEOF
-
-          systemctl daemon-reload
-          systemctl enable $SERVICE_NAME
-          systemctl start $SERVICE_NAME
-
-          echo "Waiting for relay to start..."
-          sleep 10
-          PEER_ID=""
-          for i in {1..30}; do
-            PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>&1 | grep -oE '(12D3KooW|Qm)[a-zA-Z0-9]+' | head -1)
-            if [ -n "$PEER_ID" ]; then
-              echo "Found Peer ID: $PEER_ID"
-              break
-            fi
-            sleep 2
-          done
-
-          # Wait for Elastic IP to be associated (happens after UserData)
-          echo "Waiting for Elastic IP association..."
-          PREV_IP=""
-          STABLE_COUNT=0
-          for attempt in {1..60}; do
-            CURRENT_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\\n')
-            if [ "$CURRENT_IP" = "$PREV_IP" ] && [ -n "$CURRENT_IP" ]; then
-              STABLE_COUNT=$((STABLE_COUNT + 1))
-            else
-              STABLE_COUNT=0
-            fi
-            PREV_IP="$CURRENT_IP"
-            if [ "$STABLE_COUNT" -ge 3 ]; then
-              echo "Public IP stabilized at $CURRENT_IP"
-              break
-            fi
-            sleep 5
-          done
-          PUBLIC_IP="$CURRENT_IP"
+          if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -q "<?xml"; then
+            echo "IMDSv2 failed, trying external IP service..."
+            PUBLIC_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\\n')
+          fi
           echo "Public IP: $PUBLIC_IP"
 
-          # Rewrite service with correct announce-ip and restart
-          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
+          # Create systemd service (community mode with --community flag)
+          echo "Creating systemd service..."
+          cat > /etc/systemd/system/libp2p-relay.service << SERVICEEOF
           [Unit]
-          Description=Harbor Community Relay Server ($SERVICE_NAME)
-          After=network-online.target
-          Wants=network-online.target
+          Description=Harbor Community Relay Server
+          After=network.target
 
           [Service]
           Type=simple
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/$SERVICE_NAME --port \${RelayPort} --identity-key-path $IDENTITY_DIR/id.key --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir $DATA_DIR --rate-limit-max-requests \${RateLimitMaxRequests} --rate-limit-window-secs \${RateLimitWindowSecs}
+          ExecStart=/usr/local/bin/harbor-relay --port \${RelayPort} --announce-ip $PUBLIC_IP --max-reservations \${MaxReservations} --max-circuits-per-peer \${MaxCircuits} --community --community-name "\${CommunityName}" --data-dir /var/lib/harbor-relay/data
           StandardOutput=journal
           StandardError=journal
 
@@ -785,39 +673,35 @@ Resources:
           WantedBy=multi-user.target
           SERVICEEOF
 
+          # Start the relay service
+          echo "Starting relay service..."
           systemctl daemon-reload
-          systemctl restart $SERVICE_NAME
-          sleep 5
+          systemctl enable libp2p-relay
+          systemctl start libp2p-relay
 
+          # Wait for startup
+          echo "Waiting for relay to start (10 seconds)..."
+          sleep 10
+
+          systemctl status libp2p-relay --no-pager || true
+
+          # Build relay address using known peer ID (no need to extract from logs)
           SSM_PARAM_NAME="/harbor/\${AWS::StackName}/relay-address"
+          RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/\${RelayPort}/p2p/$RELAY_PEER_ID"
 
-          if [ -n "$PEER_ID" ] && [ -n "$PUBLIC_IP" ]; then
-            RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/\${RelayPort}/p2p/$PEER_ID"
-            echo "Relay address: $RELAY_ADDRESS"
+          echo "Relay address: $RELAY_ADDRESS"
 
-            aws ssm put-parameter \\
-              --name "$SSM_PARAM_NAME" \\
-              --value "$RELAY_ADDRESS" \\
-              --type String \\
-              --overwrite \\
-              --region \${AWS::Region}
+          aws ssm put-parameter \\
+            --name "$SSM_PARAM_NAME" \\
+            --value "$RELAY_ADDRESS" \\
+            --type String \\
+            --overwrite \\
+            --region \${AWS::Region}
 
-            echo "=== SUCCESS ==="
-            echo "$RELAY_ADDRESS"
-            echo "Community: \${CommunityName}"
-          else
-            echo "=== PARTIAL FAILURE ==="
-            echo "Public IP: $PUBLIC_IP"
-            echo "Peer ID: $PEER_ID"
-
-            aws ssm put-parameter \\
-              --name "$SSM_PARAM_NAME" \\
-              --value "ERROR: Setup incomplete. Check /var/log/user-data.log" \\
-              --type String \\
-              --overwrite \\
-              --region \${AWS::Region}
-          fi
-
+          echo "=== SUCCESS ==="
+          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+          echo "$RELAY_ADDRESS"
+          echo "Community: \${CommunityName}"
           echo "=== Setup Complete ==="
 
       Tags:
@@ -827,17 +711,17 @@ Resources:
           Value: harbor-chat
 
 Outputs:
+  RelayAddress:
+    Description: "Your relay address (once the EIP is assigned)"
+    Value: !Sub "/ip4/\${RelayEIP}/tcp/\${RelayPort}/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
+
   Step1WaitTwoMinutes:
-    Description: "STEP 1: Wait ~2 minutes for the server to start"
-    Value: "The relay downloads a pre-compiled binary and generates a unique identity on first boot."
+    Description: "STEP 1: Wait ~1 minute for the server to start"
+    Value: "Uses pre-compiled binary with static identity - starts quickly."
 
-  Step2GetYourRelayAddress:
-    Description: "STEP 2: Click this link to get your relay address"
-    Value: !Sub "https://\${AWS::Region}.console.aws.amazon.com/systems-manager/parameters/harbor/\${AWS::StackName}/relay-address/description?region=\${AWS::Region}"
-
-  Step3CopyRelayAddress:
-    Description: "STEP 3: Copy the 'Value' field and paste it into Harbor"
-    Value: "On that page, find the 'Value' field. It looks like: /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."
+  Step2CopyRelayAddress:
+    Description: "STEP 2: Copy the RelayAddress output above into Harbor"
+    Value: "Paste it into Network > Advanced > Add Relay Address"
 
   CommunityNameOutput:
     Description: "Community name"
@@ -848,8 +732,8 @@ Outputs:
     Value: !Ref RelayEIP
 
   RelayPeerID:
-    Description: "Relay Peer ID (auto-generated on first boot, persists across restarts)"
-    Value: "Check SSM Parameter Store for the full relay address including Peer ID"
+    Description: "Relay Peer ID (static, survives restarts)"
+    Value: "12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9"
 
   EstimatedMonthlyCost:
     Description: "Cost: FREE for 12 months, then ~$9/month"

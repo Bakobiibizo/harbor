@@ -1,9 +1,5 @@
 import { create } from 'zustand';
-import toast from 'react-hot-toast';
 import { postsService } from '../services/posts';
-import { mediaService } from '../services/media';
-import { feedService } from '../services/feed';
-import { createLogger } from '../utils/logger';
 import type { Post, PostMedia } from '../types';
 
 const log = createLogger('WallStore');
@@ -118,17 +114,15 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
     likes: 0, // Backend doesn't track likes yet
     comments: 0, // Backend doesn't track comments yet
     liked: false,
-    media: resolvedMedia,
+    media: media?.map((m) => ({
+      type: m.mediaType === 'video' ? 'video' : 'image',
+      url: m.mediaHash, // In real impl, this would be resolved to a URL
+      name: m.fileName,
+    })),
     authorPeerId: post.authorPeerId,
     visibility: post.visibility,
     lamportClock: post.lamportClock,
   };
-}
-
-/** Read a File object into a Uint8Array */
-async function readFileAsBytes(file: File): Promise<Uint8Array> {
-  const buffer = await file.arrayBuffer();
-  return new Uint8Array(buffer);
 }
 
 export const useWallStore = create<WallState>((set) => ({
@@ -142,21 +136,21 @@ export const useWallStore = create<WallState>((set) => ({
     try {
       const posts = await postsService.getMyPosts(50);
 
-      // Load media for each post and resolve hashes to URLs
+      // Load media for each post
       const wallPosts = await Promise.all(
         posts.map(async (post) => {
           try {
             const media = await postsService.getPostMedia(post.postId);
-            return await toWallPost(post, media);
+            return toWallPost(post, media);
           } catch {
-            return await toWallPost(post);
+            return toWallPost(post);
           }
         }),
       );
 
       set({ posts: wallPosts, isLoading: false });
     } catch (err) {
-      log.error('Failed to load posts', err);
+      console.error('Failed to load posts:', err);
       set({ error: String(err), isLoading: false });
     }
   },
@@ -171,57 +165,24 @@ export const useWallStore = create<WallState>((set) => ({
       const backendContentType = contentType === 'post' ? 'text' : contentType;
       const result = await postsService.createPost(backendContentType, content, 'contacts');
 
-      // Store media files and record metadata
-      const storedMedia: { type: 'image' | 'video'; url: string; name?: string }[] = [];
-
+      // Add media if provided
+      // Note: For now, media handling is simplified - in production,
+      // media would be stored in content-addressed storage and hashed
       if (media && media.length > 0) {
         for (let i = 0; i < media.length; i++) {
           const m = media[i];
-          let mediaHash: string;
-          let fileSize = 0;
-          const mimeType = m.type === 'image' ? 'image/jpeg' : 'video/mp4';
-
-          if (m.file) {
-            // Store the actual file data via content-addressed storage
-            const bytes = await readFileAsBytes(m.file);
-            fileSize = bytes.length;
-            mediaHash = await mediaService.storeMediaBytes(bytes, m.file.type || mimeType);
-          } else {
-            // Fallback: fetch blob URL and store the bytes
-            try {
-              const response = await fetch(m.url);
-              const blob = await response.blob();
-              const bytes = new Uint8Array(await blob.arrayBuffer());
-              fileSize = bytes.length;
-              const detectedMime = blob.type || mimeType;
-              mediaHash = await mediaService.storeMediaBytes(bytes, detectedMime);
-            } catch (fetchErr) {
-              log.warn('Could not fetch blob URL, using URL as hash fallback', fetchErr);
-              mediaHash = m.url;
-            }
-          }
-
-          // Record the media metadata in the database
           await postsService.addPostMedia(
             result.postId,
-            mediaHash,
+            m.url, // Using URL as hash for now (would be content hash in production)
             m.type,
-            m.file?.type || mimeType,
+            m.type === 'image' ? 'image/jpeg' : 'video/mp4',
             m.name || `media-${i}`,
-            fileSize,
+            0, // File size unknown from blob URL
             undefined,
             undefined,
             undefined,
             i,
           );
-
-          // Resolve the hash to a displayable URL for the UI
-          const displayUrl = await resolveMediaUrl(mediaHash);
-          storedMedia.push({
-            type: m.type,
-            url: displayUrl || m.url, // Fall back to blob URL for immediate display
-            name: m.name,
-          });
         }
       }
 
@@ -234,7 +195,7 @@ export const useWallStore = create<WallState>((set) => ({
         likes: 0,
         comments: 0,
         liked: false,
-        media: storedMedia.length > 0 ? storedMedia : undefined,
+        media,
         authorPeerId: '', // Will be set properly on reload
         visibility: 'contacts',
         lamportClock: 0,
@@ -243,18 +204,8 @@ export const useWallStore = create<WallState>((set) => ({
       set((state) => ({
         posts: [newPost, ...state.posts],
       }));
-
-      // Best-effort sync to relay -- post is already saved locally
-      feedService
-        .syncWallToRelay()
-        .then(() => {
-          toast.success('Post synced to relay');
-        })
-        .catch((err) => {
-          log.warn('Failed to sync post to relay (saved locally)', err);
-        });
     } catch (err) {
-      log.error('Failed to create post', err);
+      console.error('Failed to create post:', err);
       throw err;
     }
   },
@@ -302,7 +253,7 @@ export const useWallStore = create<WallState>((set) => ({
         editingPostId: null,
       }));
     } catch (err) {
-      log.error('Failed to update post', err);
+      console.error('Failed to update post:', err);
       throw err;
     }
   },
@@ -316,7 +267,7 @@ export const useWallStore = create<WallState>((set) => ({
         posts: state.posts.filter((p) => p.postId !== postId),
       }));
     } catch (err) {
-      log.error('Failed to delete post', err);
+      console.error('Failed to delete post:', err);
       throw err;
     }
   },

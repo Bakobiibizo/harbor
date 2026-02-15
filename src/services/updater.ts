@@ -1,9 +1,6 @@
 import { check, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { ask, message } from '@tauri-apps/plugin-dialog';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { createLogger } from '../utils/logger';
-
-const log = createLogger('Updater');
 
 export interface UpdateInfo {
   available: boolean;
@@ -33,7 +30,7 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
       currentVersion: 'unknown',
     };
   } catch (error) {
-    log.error('Failed to check for updates', error);
+    console.error('Failed to check for updates:', error);
     throw error;
   }
 }
@@ -64,15 +61,15 @@ export async function downloadAndInstallUpdate(): Promise<void> {
     switch (event.event) {
       case 'Started':
         contentLength = event.data.contentLength || 0;
-        log.info(`Download started, size: ${contentLength} bytes`);
+        console.log(`[Updater] Download started, size: ${contentLength} bytes`);
         break;
       case 'Progress':
         downloaded += event.data.chunkLength;
         const percent = contentLength > 0 ? Math.round((downloaded / contentLength) * 100) : 0;
-        log.info(`Download progress: ${percent}%`);
+        console.log(`[Updater] Download progress: ${percent}%`);
         break;
       case 'Finished':
-        log.info('Download finished');
+        console.log('[Updater] Download finished');
         break;
     }
   });

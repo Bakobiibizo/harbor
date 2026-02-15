@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
@@ -20,10 +20,6 @@ import {
   RELAY_CLOUDFORMATION_TEMPLATE,
   COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
 } from '../constants/cloudformation-template';
-import { getInitials, getContactColor, shortPeerId } from '../utils/formatting';
-import { createLogger } from '../utils/logger';
-
-const log = createLogger('Network');
 
 // Adjectives and animals for generating human-friendly peer names
 const ADJECTIVES = [
@@ -108,6 +104,24 @@ function getPeerFriendlyName(peerId: string): string {
   return `${ADJECTIVES[adjIndex]} ${ANIMALS[animalIndex]}`;
 }
 
+function getPeerColor(peerId: string): string {
+  const colors = [
+    'linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))',
+    'linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))',
+    'linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))',
+    'linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))',
+    'linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))',
+    'linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))',
+    'linear-gradient(135deg, hsl(280 70% 50%), hsl(320 75% 55%))',
+    'linear-gradient(135deg, hsl(170 65% 45%), hsl(200 70% 50%))',
+  ];
+  let hash = 0;
+  for (let characterIndex = 0; characterIndex < peerId.length; characterIndex++) {
+    hash = peerId.charCodeAt(characterIndex) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
 // Inline toggle component
 function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (value: boolean) => void }) {
   return (
@@ -170,11 +184,14 @@ export function NetworkPage() {
     isLoading,
     startNetwork,
     stopNetwork,
+    refreshPeers,
+    refreshStats,
+    refreshAddresses,
+    refreshShareableAddresses,
     checkStatus,
     connectToPeer,
     connectToRelay,
     connectToPublicRelays,
-    communityRelayPeerIds,
   } = useNetworkStore();
 
   const { contacts, refreshContacts } = useContactsStore();
@@ -193,25 +210,42 @@ export function NetworkPage() {
   const [shareableContactString, setShareableContactString] = useState<string | null>(null);
   const relayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check network status on mount
+  // Check network status on mount and set up refresh interval
   useEffect(() => {
-    checkStatus().catch((err) => log.error('Failed to check status', err));
-  }, [checkStatus]);
-
-  // Refresh network data on an interval while running
-  useEffect(() => {
-    if (!isRunning) return;
+    checkStatus();
 
     const interval = setInterval(() => {
-      const store = useNetworkStore.getState();
-      store.refreshPeers().catch((err) => log.error('Failed to refresh peers', err));
-      store.refreshStats().catch((err) => log.error('Failed to refresh stats', err));
-      store.refreshAddresses().catch((err) => log.error('Failed to refresh addresses', err));
-      store.refreshShareableAddresses().catch((err) => log.error('Failed to refresh shareable addresses', err));
+      if (isRunning) {
+        refreshPeers();
+        refreshStats();
+        refreshAddresses();
+        refreshShareableAddresses();
+      }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isRunning]);
+  }, [
+    isRunning,
+    checkStatus,
+    refreshPeers,
+    refreshStats,
+    refreshAddresses,
+    refreshShareableAddresses,
+  ]);
+
+  // NAT status "Detecting..." timeout (30s)
+  useEffect(() => {
+    if (stats.natStatus !== 'unknown' || !isRunning) {
+      setNatDetectionTimedOut(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setNatDetectionTimedOut(true);
+    }, 30_000);
+
+    return () => clearTimeout(timeout);
+  }, [isRunning, stats.natStatus]);
 
   // Fetch shareable contact string when relay is connected
   useEffect(() => {
@@ -220,7 +254,7 @@ export function NetworkPage() {
         .getShareableContactString()
         .then(setShareableContactString)
         .catch((err) => {
-          log.warn('Could not get shareable contact string', err);
+          console.warn('Could not get shareable contact string:', err);
           setShareableContactString(null);
         });
     } else {
@@ -228,7 +262,7 @@ export function NetworkPage() {
     }
   }, [relayStatus, isRunning]);
 
-  // Relay "Connecting..." spinner timeout (30s)
+  // Fix 3: Relay "Connecting..." spinner timeout (30s)
   useEffect(() => {
     if (relayTimeoutRef.current) {
       clearTimeout(relayTimeoutRef.current);
@@ -253,7 +287,7 @@ export function NetworkPage() {
     };
   }, [relayStatus]);
 
-  // NAT status "Detecting..." timeout (30s)
+  // Fix 4: NAT status "Detecting..." timeout (30s)
   useEffect(() => {
     if (stats.natStatus !== 'unknown' || !isRunning) {
       setNatDetectionTimedOut(false);
@@ -314,7 +348,7 @@ export function NetworkPage() {
       if (input.startsWith('harbor://')) {
         await networkService.addContactFromString(input);
         toast.success('Contact added successfully!');
-        refreshContacts().catch((err) => log.error('Failed to refresh contacts', err));
+        refreshContacts();
         setPeerAddress('');
       } else if (input.includes('/p2p/')) {
         // Legacy multiaddr format - just connect (requires identity exchange)
@@ -349,56 +383,38 @@ export function NetworkPage() {
   };
 
   // Filter peers by search (also checks contact display names)
-  const filteredPeers = useMemo(
-    () =>
-      connectedPeers.filter((peer) => {
-        const query = searchQuery.toLowerCase();
-        if (!query) return true;
-        const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-        const contactName =
-          contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ??
-          '';
-        return (
-          friendlyName.includes(query) ||
-          contactName.includes(query) ||
-          peer.peerId.toLowerCase().includes(query) ||
-          peer.addresses.some((addr) => addr.toLowerCase().includes(query))
-        );
-      }),
-    [connectedPeers, searchQuery, contacts],
-  );
+  const filteredPeers = connectedPeers.filter((peer) => {
+    const query = searchQuery.toLowerCase();
+    if (!query) return true;
+    const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
+    const contactName =
+      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
+    return (
+      friendlyName.includes(query) ||
+      contactName.includes(query) ||
+      peer.peerId.toLowerCase().includes(query) ||
+      peer.addresses.some((addr) => addr.toLowerCase().includes(query))
+    );
+  });
 
-  const discoveredPeers = useMemo(
-    () => filteredPeers.filter((peer) => !peer.isConnected),
-    [filteredPeers],
-  );
-  const connectedPeersList = useMemo(
-    () => filteredPeers.filter((peer) => peer.isConnected),
-    [filteredPeers],
-  );
-  const filteredContacts = useMemo(
-    () =>
-      contacts.filter((contact) => {
-        const query = searchQuery.toLowerCase();
-        if (!query) return true;
-        return (
-          contact.displayName.toLowerCase().includes(query) ||
-          contact.peerId.toLowerCase().includes(query)
-        );
-      }),
-    [contacts, searchQuery],
-  );
+  const discoveredPeers = filteredPeers.filter((peer) => !peer.isConnected);
+  const connectedPeersList = filteredPeers.filter((peer) => peer.isConnected);
+  const filteredContacts = contacts.filter((contact) => {
+    const query = searchQuery.toLowerCase();
+    if (!query) return true;
+    return (
+      contact.displayName.toLowerCase().includes(query) ||
+      contact.peerId.toLowerCase().includes(query)
+    );
+  });
 
   // Get the circuit address (the one shareable address for remote peers)
-  const circuitAddress = useMemo(
-    () =>
-      shareableAddresses.length > 0
-        ? shareableAddresses[0]
-        : stats.relayAddresses.length > 0
-          ? stats.relayAddresses[0]
-          : null,
-    [shareableAddresses, stats.relayAddresses],
-  );
+  const circuitAddress =
+    shareableAddresses.length > 0
+      ? shareableAddresses[0]
+      : stats.relayAddresses.length > 0
+        ? stats.relayAddresses[0]
+        : null;
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
@@ -609,66 +625,38 @@ export function NetworkPage() {
 
             {relayStatus === 'connected' && stats.relayAddresses.length > 0 ? (
               // Connected state: show green relay status
-              (() => {
-                // Check if any connected relay is a community relay by extracting
-                // the relay peer ID from the relay address (format: .../p2p/RELAY_ID/p2p-circuit/...)
-                const relayAddr = stats.relayAddresses[0];
-                const p2pSegments = relayAddr.split('/p2p/');
-                // The relay peer ID is typically the first /p2p/ segment (not the local peer ID)
-                const relayPeerId = p2pSegments.length >= 2 ? p2pSegments[1].split('/')[0] : null;
-                const isCommunityRelay =
-                  relayPeerId != null && communityRelayPeerIds.includes(relayPeerId);
-
-                return (
-                  <div>
-                    <div
-                      className="flex items-center gap-3 p-3 rounded-lg mb-3"
-                      style={{
-                        background: 'hsl(var(--harbor-success) / 0.1)',
-                        border: '1px solid hsl(var(--harbor-success) / 0.2)',
-                      }}
+              <div>
+                <div
+                  className="flex items-center gap-3 p-3 rounded-lg mb-3"
+                  style={{
+                    background: 'hsl(var(--harbor-success) / 0.1)',
+                    border: '1px solid hsl(var(--harbor-success) / 0.2)',
+                  }}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0"
+                    style={{ background: 'hsl(var(--harbor-success))' }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p
+                      className="text-sm font-medium"
+                      style={{ color: 'hsl(var(--harbor-success))' }}
                     >
-                      <span
-                        className="w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0"
-                        style={{ background: 'hsl(var(--harbor-success))' }}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p
-                            className="text-sm font-medium"
-                            style={{ color: 'hsl(var(--harbor-success))' }}
-                          >
-                            Connected to Harbor Relay
-                          </p>
-                          {isCommunityRelay && (
-                            <span
-                              className="px-2 py-0.5 rounded-full text-xs font-medium"
-                              style={{
-                                background: 'hsl(var(--harbor-primary) / 0.15)',
-                                color: 'hsl(var(--harbor-primary))',
-                              }}
-                            >
-                              Community
-                            </span>
-                          )}
-                        </div>
-                        <code
-                          className="text-xs break-all font-mono block mt-1"
-                          style={{ color: 'hsl(var(--harbor-success) / 0.8)' }}
-                        >
-                          {relayAddr}
-                        </code>
-                      </div>
-                      <CopyButton text={relayAddr} label="Relay address copied!" />
-                    </div>
-                    <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                      {isCommunityRelay
-                        ? 'Connected to a community relay with boards. Check Community Boards to see posts.'
-                        : 'Peers anywhere on the internet can reach you through this relay.'}
+                      Connected to Harbor Relay
                     </p>
+                    <code
+                      className="text-xs break-all font-mono block mt-1"
+                      style={{ color: 'hsl(var(--harbor-success) / 0.8)' }}
+                    >
+                      {stats.relayAddresses[0]}
+                    </code>
                   </div>
-                );
-              })()
+                  <CopyButton text={stats.relayAddresses[0]} label="Relay address copied!" />
+                </div>
+                <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Peers anywhere on the internet can reach you through this relay.
+                </p>
+              </div>
             ) : (
               // Disconnected/connecting state: show connect options
               <div className="space-y-3">
@@ -1241,9 +1229,14 @@ export function NetworkPage() {
                     >
                       <div
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
-                        style={{ background: getContactColor(contact.peerId) }}
+                        style={{ background: getPeerColor(contact.peerId) }}
                       >
-                        {getInitials(contact.displayName)}
+                        {contact.displayName
+                          .split(' ')
+                          .map((word) => word[0])
+                          .join('')
+                          .toUpperCase()
+                          .slice(0, 2)}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p
@@ -1257,7 +1250,7 @@ export function NetworkPage() {
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                           title={contact.peerId}
                         >
-                          {shortPeerId(contact.peerId)}
+                          {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
                         </p>
                       </div>
                       {contact.bio && (
@@ -1326,7 +1319,7 @@ export function NetworkPage() {
 
 // --- Sub-components ---
 
-const PeerRow = memo(function PeerRow({
+function PeerRow({
   peerId,
   displayName,
   isConnected,
@@ -1341,12 +1334,14 @@ const PeerRow = memo(function PeerRow({
   actionStyle: 'primary' | 'success';
   onAction: () => Promise<void>;
 }) {
-  const friendlyName = useMemo(
-    () => displayName ?? getPeerFriendlyName(peerId),
-    [displayName, peerId],
-  );
-  const avatarColor = useMemo(() => getContactColor(peerId), [peerId]);
-  const initials = useMemo(() => getInitials(friendlyName), [friendlyName]);
+  const friendlyName = displayName ?? getPeerFriendlyName(peerId);
+  const avatarColor = getPeerColor(peerId);
+  const initials = friendlyName
+    .split(' ')
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
 
   return (
     <div
@@ -1368,7 +1363,7 @@ const PeerRow = memo(function PeerRow({
           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
           title={peerId}
         >
-          {shortPeerId(peerId)}
+          {peerId.slice(0, 12)}...{peerId.slice(-6)}
         </p>
       </div>
 
@@ -1415,7 +1410,7 @@ const PeerRow = memo(function PeerRow({
       </button>
     </div>
   );
-});
+}
 
 function DeployRelayContent() {
   const handleDownloadTemplate = async (filename: string, content: string, label: string) => {
@@ -1426,7 +1421,7 @@ function DeployRelayContent() {
       });
       toast.success(`${label} saved to ${savedPath}`);
     } catch (error) {
-      log.error('Failed to save template via Tauri', error);
+      console.error('Failed to save template via Tauri:', error);
       try {
         await navigator.clipboard.writeText(content);
         toast.success(`${label} copied to clipboard! Paste it into a .yaml file.`);
