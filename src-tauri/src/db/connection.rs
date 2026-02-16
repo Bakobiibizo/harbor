@@ -146,6 +146,19 @@ impl Database {
 
         if version < 10 {
             info!("Running migration 010...");
+            // Check if edited_at column already exists (handles partial migration)
+            let has_edited_at: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'edited_at'",
+                    [],
+                    |row| row.get::<_, i32>(0),
+                )
+                .map(|count| count > 0)
+                .unwrap_or(false);
+
+            if !has_edited_at {
+                conn.execute("ALTER TABLE messages ADD COLUMN edited_at INTEGER", [])?;
+            }
             conn.execute_batch(MIGRATION_010)?;
             info!("Migration 010 complete");
         }
