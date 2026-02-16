@@ -97,6 +97,20 @@ pub struct PostMediaData {
     pub sort_order: i32,
 }
 
+/// Aggregated visibility counts for an author's posts.
+///
+/// Computed entirely in SQL via `COUNT`/`GROUP BY` -- no post rows are
+/// transferred to Rust.
+#[derive(Debug, Clone)]
+pub struct VisibilityCounts {
+    /// Total number of non-deleted posts
+    pub total_posts: usize,
+    /// Number of posts with `public` visibility
+    pub public_posts: usize,
+    /// Number of posts with `contacts` visibility
+    pub contacts_only_posts: usize,
+}
+
 /// Repository for post operations
 /// Parameters for recording a post event
 pub struct RecordPostEventParams<'a> {
@@ -350,6 +364,222 @@ impl PostsRepository {
                 params![deleted_at, post_id],
             )?;
             Ok(rows > 0)
+        })
+    }
+
+    /// Get feed posts from multiple authors, sorted by created_at DESC.
+    ///
+    /// This is more efficient than querying per-author and merging,
+    /// and correctly applies the limit across all authors.
+    ///
+    /// The SQL `IN` clause is built dynamically using
+    /// [`build_in_clause_placeholders`](crate::db::sql_utils::build_in_clause_placeholders),
+    /// which produces only literal `?` characters.  All actual peer-id values
+    /// are bound via rusqlite parameter binding, so no user data is ever
+    /// interpolated into the query string.
+    pub fn get_feed_posts(
+        db: &Database,
+        author_peer_ids: &[String],
+        limit: i64,
+        before_timestamp: Option<i64>,
+    ) -> SqliteResult<Vec<Post>> {
+        if author_peer_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        db.with_connection(|conn| {
+            let mut posts = Vec::new();
+
+            // SAFETY: `build_in_clause_placeholders` returns only literal "?"
+            // characters joined by commas (e.g., "?,?,?").  No user input is
+            // interpolated into the SQL structure.  All actual values are bound
+            // via parameterized placeholders.
+            let placeholders =
+                crate::db::sql_utils::build_in_clause_placeholders(author_peer_ids.len());
+
+            if let Some(before) = before_timestamp {
+                let sql = format!(
+                    "SELECT id, post_id, author_peer_id, content_type, content_text,
+                            visibility, lamport_clock, created_at, updated_at,
+                            deleted_at, is_local, signature
+                     FROM posts
+                     WHERE author_peer_id IN ({}) AND deleted_at IS NULL AND created_at < ?
+                     ORDER BY created_at DESC
+                     LIMIT ?",
+                    placeholders
+                );
+                let mut stmt = conn.prepare(&sql)?;
+
+                // Build params: author_peer_ids + before + limit
+                let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                for id in author_peer_ids {
+                    param_values.push(Box::new(id.clone()));
+                }
+                param_values.push(Box::new(before));
+                param_values.push(Box::new(limit));
+
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    param_values.iter().map(|p| p.as_ref()).collect();
+
+                let mut rows = stmt.query(param_refs.as_slice())?;
+                while let Some(row) = rows.next()? {
+                    posts.push(Self::row_to_post(row)?);
+                }
+            } else {
+                let sql = format!(
+                    "SELECT id, post_id, author_peer_id, content_type, content_text,
+                            visibility, lamport_clock, created_at, updated_at,
+                            deleted_at, is_local, signature
+                     FROM posts
+                     WHERE author_peer_id IN ({}) AND deleted_at IS NULL
+                     ORDER BY created_at DESC
+                     LIMIT ?",
+                    placeholders
+                );
+                let mut stmt = conn.prepare(&sql)?;
+
+                // Build params: author_peer_ids + limit
+                let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                for id in author_peer_ids {
+                    param_values.push(Box::new(id.clone()));
+                }
+                param_values.push(Box::new(limit));
+
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    param_values.iter().map(|p| p.as_ref()).collect();
+
+                let mut rows = stmt.query(param_refs.as_slice())?;
+                while let Some(row) = rows.next()? {
+                    posts.push(Self::row_to_post(row)?);
+                }
+            }
+
+            Ok(posts)
+        })
+    }
+
+    /// Count posts by visibility for a given author.
+    ///
+    /// Returns a [`VisibilityCounts`] with the total, public, and contacts-only
+    /// counts computed entirely in SQL -- no rows are transferred to Rust.
+    pub fn count_by_visibility(
+        db: &Database,
+        author_peer_id: &str,
+    ) -> SqliteResult<VisibilityCounts> {
+        db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT visibility, COUNT(*) as cnt
+                 FROM posts
+                 WHERE author_peer_id = ? AND deleted_at IS NULL
+                 GROUP BY visibility",
+            )?;
+
+            let mut public_posts: usize = 0;
+            let mut contacts_only_posts: usize = 0;
+
+            let mut rows = stmt.query(params![author_peer_id])?;
+            while let Some(row) = rows.next()? {
+                let visibility: String = row.get(0)?;
+                let count: usize = row.get::<_, i64>(1)? as usize;
+                match visibility.as_str() {
+                    "public" => public_posts = count,
+                    "contacts" => contacts_only_posts = count,
+                    _ => {} // ignore unknown visibility values
+                }
+            }
+
+            let total_posts = public_posts + contacts_only_posts;
+
+            Ok(VisibilityCounts {
+                total_posts,
+                public_posts,
+                contacts_only_posts,
+            })
+        })
+    }
+
+    /// Get posts by author, optionally filtered to a specific visibility.
+    ///
+    /// When `visibility` is `Some`, only posts matching that visibility are
+    /// returned.  When `None`, all non-deleted posts for the author are returned
+    /// (same behaviour as [`get_by_author`]).
+    pub fn get_by_author_with_visibility(
+        db: &Database,
+        author_peer_id: &str,
+        visibility: Option<PostVisibility>,
+        limit: i64,
+        before_timestamp: Option<i64>,
+    ) -> SqliteResult<Vec<Post>> {
+        db.with_connection(|conn| {
+            let mut posts = Vec::new();
+
+            match (visibility, before_timestamp) {
+                (Some(vis), Some(before)) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, post_id, author_peer_id, content_type, content_text,
+                                visibility, lamport_clock, created_at, updated_at,
+                                deleted_at, is_local, signature
+                         FROM posts
+                         WHERE author_peer_id = ? AND deleted_at IS NULL
+                               AND visibility = ? AND created_at < ?
+                         ORDER BY created_at DESC
+                         LIMIT ?",
+                    )?;
+                    let mut rows =
+                        stmt.query(params![author_peer_id, vis.as_str(), before, limit])?;
+                    while let Some(row) = rows.next()? {
+                        posts.push(Self::row_to_post(row)?);
+                    }
+                }
+                (Some(vis), None) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, post_id, author_peer_id, content_type, content_text,
+                                visibility, lamport_clock, created_at, updated_at,
+                                deleted_at, is_local, signature
+                         FROM posts
+                         WHERE author_peer_id = ? AND deleted_at IS NULL
+                               AND visibility = ?
+                         ORDER BY created_at DESC
+                         LIMIT ?",
+                    )?;
+                    let mut rows = stmt.query(params![author_peer_id, vis.as_str(), limit])?;
+                    while let Some(row) = rows.next()? {
+                        posts.push(Self::row_to_post(row)?);
+                    }
+                }
+                (None, Some(before)) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, post_id, author_peer_id, content_type, content_text,
+                                visibility, lamport_clock, created_at, updated_at,
+                                deleted_at, is_local, signature
+                         FROM posts
+                         WHERE author_peer_id = ? AND deleted_at IS NULL AND created_at < ?
+                         ORDER BY created_at DESC
+                         LIMIT ?",
+                    )?;
+                    let mut rows = stmt.query(params![author_peer_id, before, limit])?;
+                    while let Some(row) = rows.next()? {
+                        posts.push(Self::row_to_post(row)?);
+                    }
+                }
+                (None, None) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, post_id, author_peer_id, content_type, content_text,
+                                visibility, lamport_clock, created_at, updated_at,
+                                deleted_at, is_local, signature
+                         FROM posts
+                         WHERE author_peer_id = ? AND deleted_at IS NULL
+                         ORDER BY created_at DESC
+                         LIMIT ?",
+                    )?;
+                    let mut rows = stmt.query(params![author_peer_id, limit])?;
+                    while let Some(row) = rows.next()? {
+                        posts.push(Self::row_to_post(row)?);
+                    }
+                }
+            }
+
+            Ok(posts)
         })
     }
 

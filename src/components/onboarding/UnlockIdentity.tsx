@@ -13,6 +13,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
   const [passphrase, setPassphrase] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassphrase, setShowPassphrase] = useState(false);
+  const [showHint, setShowHint] = useState(false);
 
   const identity = state.status === 'locked' ? state.identity : null;
 
@@ -213,32 +214,53 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
               </button>
             </div>
 
-            {/* Passphrase hint */}
+            {/* Passphrase hint toggle */}
             {identity?.passphraseHint && (
-              <div
-                className="p-3 rounded-xl text-sm flex items-center gap-2"
-                style={{
-                  background: 'hsl(var(--harbor-primary) / 0.1)',
-                  color: 'hsl(var(--harbor-primary))',
-                  border: '1px solid hsl(var(--harbor-primary) / 0.2)',
-                }}
-              >
-                <svg
-                  className="w-4 h-4 flex-shrink-0"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                <span>
-                  <strong>Hint:</strong> {identity.passphraseHint}
-                </span>
+              <div>
+                {showHint ? (
+                  <div
+                    className="p-3 rounded-xl text-sm flex items-center gap-2"
+                    style={{
+                      background: 'hsl(var(--harbor-primary) / 0.1)',
+                      color: 'hsl(var(--harbor-primary))',
+                      border: '1px solid hsl(var(--harbor-primary) / 0.2)',
+                    }}
+                  >
+                    <svg
+                      className="w-4 h-4 flex-shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>
+                      <strong>Hint:</strong> {identity.passphraseHint}
+                    </span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowHint(true)}
+                    className="text-sm transition-colors duration-200 flex items-center gap-1.5"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    Show passphrase hint
+                  </button>
+                )}
               </div>
             )}
 

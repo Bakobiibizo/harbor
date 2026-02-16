@@ -37,12 +37,6 @@ D:\apps\chat-app\
 │   │   ├── settings.ts  # User settings (persisted)
 │   │   └── mockPeers.ts # Mock peer data for testing
 │   └── services/        # Frontend API services
-├── mock-peer/           # Standalone mock peer server
-│   ├── src/
-│   │   ├── main.rs      # Mock peer server entry point
-│   │   └── protocols.rs # Protocol type definitions
-│   ├── Cargo.toml
-│   └── README.md
 └── package.json
 ```
 
@@ -134,30 +128,8 @@ CSS custom properties in `src/index.css`:
 16. Created settings store with persistence (localStorage)
 17. Fixed real-time message display - messages now appear immediately without needing to reload or send a new message (fixed stale closure issue in useTauriEvents hook)
 
-## Mock Peer Server (for P2P Testing)
-
-The `mock-peer/` directory contains a standalone Rust binary that implements the same libp2p protocols as Harbor. Use this to test real P2P connectivity.
-
-### Building and Running
-```bash
-cd mock-peer
-cargo build --release
-cargo run --release -- --name "Test Peer" --bio "For testing" --port 9000
-```
-
-### What It Does
-- Announces itself via mDNS on the local network
-- Responds to identity exchange requests with a signed identity
-- Acknowledges incoming messages
-- Logs auto-reply content (doesn't actually send replies back yet)
-
-### Protocols Implemented
-- `/harbor/identity/1.0.0` - Identity exchange
-- `/harbor/messaging/1.0.0` - Messaging
-
 ## Known Issues / Future Work
 - Network stats show 0s when network starts (need to populate from actual Rust backend)
-- Mock peer server logs replies but doesn't send them back through the messaging protocol yet
 
 ## Bug Fixes (Recent)
 
@@ -195,8 +167,6 @@ npm run tauri build  # Build full app
 # Type check
 npx tsc --noEmit
 
-# Mock peer server (for P2P testing)
-cd mock-peer && cargo run --release -- --name "Mock Peer"
 ```
 
 ## Project Info
@@ -204,8 +174,8 @@ cd mock-peer && cargo run --release -- --name "Mock Peer"
 - **Owner**: bakobiibizo
 
 ## AWS Relay Infrastructure
-The `infrastructure/` directory contains CloudFormation templates for deploying a libp2p relay server:
-- `libp2p-relay-cloudformation.yaml` - Full CloudFormation template
+The `infrastructure/` directory contains CloudFormation templates for deploying a community relay server:
+- `community-relay-cloudformation.yaml` - Full CloudFormation template (downloads pre-compiled binary, no Docker)
 - `README.md` - Deployment instructions with one-click deploy buttons
 
 The Network page has an "Advanced" section that allows users to:

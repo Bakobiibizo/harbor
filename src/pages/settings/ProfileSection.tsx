@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore } from '../../stores';
 import { getInitials } from '../../utils/formatting';
+import { SectionHeader, SettingsCard } from './shared';
 
 export function ProfileSection() {
   const { state, updateDisplayName, updateBio } = useIdentityStore();
@@ -21,26 +22,50 @@ export function ProfileSection() {
     }
   }, [identity]);
 
+  const handleAvatarUpload = () => {
+    avatarInputRef.current?.click();
+  };
+
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     if (file.size > 5 * 1024 * 1024) {
       toast.error('Image must be less than 5MB');
       return;
     }
+
     const url = URL.createObjectURL(file);
     setAvatarUrl(url);
     toast.success('Profile photo updated!');
-    if (avatarInputRef.current) avatarInputRef.current.value = '';
+
+    if (avatarInputRef.current) {
+      avatarInputRef.current.value = '';
+    }
+  };
+
+  const handleCopyPeerId = () => {
+    if (identity) {
+      navigator.clipboard.writeText(identity.peerId);
+      toast.success('Peer ID copied to clipboard!');
+    }
   };
 
   const handleSaveProfile = async () => {
     if (!identity) return;
+
     try {
       const trimmedName = displayName.trim() || identity.displayName;
       const trimmedBio = bio.trim() || null;
-      if (trimmedName !== identity.displayName) await updateDisplayName(trimmedName);
-      if (trimmedBio !== identity.bio) await updateBio(trimmedBio);
+
+      if (trimmedName !== identity.displayName) {
+        await updateDisplayName(trimmedName);
+      }
+
+      if (trimmedBio !== identity.bio) {
+        await updateBio(trimmedBio);
+      }
+
       setHasUnsavedChanges(false);
       toast.success('Profile saved!');
     } catch {
@@ -50,18 +75,6 @@ export function ProfileSection() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3
-          className="text-xl font-semibold mb-1"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
-          Profile
-        </h3>
-        <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Manage your identity and how others see you
-        </p>
-      </div>
-
       <input
         ref={avatarInputRef}
         type="file"
@@ -70,14 +83,10 @@ export function ProfileSection() {
         className="hidden"
       />
 
-      {/* Avatar */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SectionHeader title="Profile" description="Manage your identity and how others see you" />
+
+      {/* Avatar section */}
+      <SettingsCard>
         <div className="flex items-center gap-6">
           {identity && (
             <div
@@ -104,8 +113,8 @@ export function ProfileSection() {
             </p>
             <div className="flex gap-2">
               <button
-                onClick={() => avatarInputRef.current?.click()}
-                className="px-4 py-2 rounded-lg text-sm font-medium"
+                onClick={handleAvatarUpload}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
                 style={{
                   background: 'hsl(var(--harbor-surface-1))',
                   color: 'hsl(var(--harbor-text-primary))',
@@ -120,8 +129,10 @@ export function ProfileSection() {
                     setAvatarUrl(null);
                     toast.success('Photo removed');
                   }}
-                  className="px-4 py-2 rounded-lg text-sm font-medium"
-                  style={{ color: 'hsl(var(--harbor-error))' }}
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
+                  style={{
+                    color: 'hsl(var(--harbor-error))',
+                  }}
                 >
                   Remove
                 </button>
@@ -129,16 +140,10 @@ export function ProfileSection() {
             </div>
           </div>
         </div>
-      </div>
+      </SettingsCard>
 
       {/* Display name */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <label
           className="block text-sm font-medium mb-2"
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
@@ -159,16 +164,10 @@ export function ProfileSection() {
             color: 'hsl(var(--harbor-text-primary))',
           }}
         />
-      </div>
+      </SettingsCard>
 
       {/* Bio */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <label
           className="block text-sm font-medium mb-2"
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
@@ -182,7 +181,7 @@ export function ProfileSection() {
             setHasUnsavedChanges(true);
           }}
           rows={5}
-          placeholder="Tell others about yourself..."
+          placeholder="Tell others about yourself, your interests, what you're working on..."
           className="w-full px-4 py-3 rounded-lg text-sm resize-none"
           style={{
             background: 'hsl(var(--harbor-surface-1))',
@@ -193,16 +192,10 @@ export function ProfileSection() {
         <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           This will be visible to your contacts
         </p>
-      </div>
+      </SettingsCard>
 
-      {/* Unique ID */}
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      {/* Your unique ID */}
+      <SettingsCard>
         <label
           className="block text-sm font-medium mb-2"
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
@@ -221,13 +214,8 @@ export function ProfileSection() {
             {identity?.peerId || 'No identity'}
           </div>
           <button
-            onClick={() => {
-              if (identity) {
-                navigator.clipboard.writeText(identity.peerId);
-                toast.success('Peer ID copied!');
-              }
-            }}
-            className="px-4 py-3 rounded-lg text-sm font-medium"
+            onClick={handleCopyPeerId}
+            className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
             style={{
               background: 'hsl(var(--harbor-surface-1))',
               color: 'hsl(var(--harbor-text-primary))',
@@ -240,9 +228,9 @@ export function ProfileSection() {
         <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           Share this ID with others so they can add you as a contact
         </p>
-      </div>
+      </SettingsCard>
 
-      {/* Save */}
+      {/* Save button */}
       <div className="flex justify-end">
         <button
           onClick={handleSaveProfile}

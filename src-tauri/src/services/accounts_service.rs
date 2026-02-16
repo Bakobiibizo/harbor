@@ -215,7 +215,12 @@ impl AccountsService {
         registry.active_account_id = Some(account_id.to_string());
         self.save_registry(&registry)?;
 
-        Ok(registry.accounts.get(account_id).cloned().unwrap())
+        registry.accounts.get(account_id).cloned().ok_or_else(|| {
+            AppError::Internal(format!(
+                "Account {} disappeared from registry after existence check",
+                account_id
+            ))
+        })
     }
 
     /// Remove an account from the registry

@@ -286,6 +286,49 @@ pub struct SignableBoardPostsRequest {
 impl Signable for SignableBoardPostsRequest {}
 
 // ============================================================
+// WALL POST MESSAGES (relay-synced personal posts)
+// ============================================================
+
+/// Signable version of a wall post submission request (excludes request_signature).
+/// The inner post `signature` field is included as data being signed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallPostSubmit {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallPostSubmit {}
+
+/// Signable version of a wall posts retrieval request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableGetWallPosts {
+    pub requester_peer_id: String,
+    pub author_peer_id: String,
+    pub since_lamport_clock: i64,
+    pub limit: u32,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableGetWallPosts {}
+
+/// Signable version of a wall post delete request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallPostDelete {
+    pub author_peer_id: String,
+    pub post_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallPostDelete {}
+
+// ============================================================
 // SIGNALING (Voice Calls)
 // ============================================================
 
@@ -477,5 +520,247 @@ mod tests {
         let bytes2 = request2.signable_bytes().unwrap();
 
         assert_eq!(bytes1, bytes2, "Same data should produce same bytes");
+    }
+
+    #[test]
+    fn test_invalid_signature_bytes() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let request = SignableIdentityRequest {
+            requester_peer_id: "12D3KooWTest".to_string(),
+            timestamp: 1234567890,
+        };
+
+        // Too short signature should return an error
+        let result = verify(&verifying_key, &request, &[0u8; 10]);
+        assert!(result.is_err());
+
+        // Empty signature should return an error
+        let result = verify(&verifying_key, &request, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sign_and_verify_direct_message() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let msg = SignableDirectMessage {
+            message_id: "msg-1".to_string(),
+            conversation_id: "conv-1".to_string(),
+            sender_peer_id: "12D3KooWSender".to_string(),
+            recipient_peer_id: "12D3KooWRecipient".to_string(),
+            content_encrypted: vec![1, 2, 3, 4],
+            content_type: "text".to_string(),
+            reply_to: None,
+            nonce_counter: 42,
+            lamport_clock: 5,
+            timestamp: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &msg).unwrap();
+        assert!(verify(&verifying_key, &msg, &signature).unwrap());
+
+        // Tamper with nonce_counter
+        let tampered = SignableDirectMessage {
+            nonce_counter: 43,
+            ..msg.clone()
+        };
+        assert!(!verify(&verifying_key, &tampered, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_post() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let post = SignablePost {
+            post_id: "post-1".to_string(),
+            author_peer_id: "12D3KooWAuthor".to_string(),
+            content_type: "text".to_string(),
+            content_text: Some("Hello world".to_string()),
+            media_hashes: vec![],
+            visibility: "public".to_string(),
+            lamport_clock: 1,
+            created_at: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &post).unwrap();
+        assert!(verify(&verifying_key, &post, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_post_update() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let update = SignablePostUpdate {
+            post_id: "post-1".to_string(),
+            author_peer_id: "12D3KooWAuthor".to_string(),
+            content_text: Some("Updated content".to_string()),
+            lamport_clock: 2,
+            updated_at: 1234567900,
+        };
+
+        let signature = sign(&signing_key, &update).unwrap();
+        assert!(verify(&verifying_key, &update, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_post_delete() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let delete = SignablePostDelete {
+            post_id: "post-1".to_string(),
+            author_peer_id: "12D3KooWAuthor".to_string(),
+            lamport_clock: 3,
+            deleted_at: 1234567910,
+        };
+
+        let signature = sign(&signing_key, &delete).unwrap();
+        assert!(verify(&verifying_key, &delete, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_message_ack() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let ack = SignableMessageAck {
+            message_id: "msg-1".to_string(),
+            conversation_id: "conv-1".to_string(),
+            ack_sender_peer_id: "12D3KooWSender".to_string(),
+            status: "delivered".to_string(),
+            timestamp: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &ack).unwrap();
+        assert!(verify(&verifying_key, &ack, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_permission_grant() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let grant = SignablePermissionGrant {
+            grant_id: "grant-1".to_string(),
+            issuer_peer_id: "12D3KooWIssuer".to_string(),
+            subject_peer_id: "12D3KooWSubject".to_string(),
+            capability: "chat".to_string(),
+            scope: None,
+            lamport_clock: 1,
+            issued_at: 1234567890,
+            expires_at: None,
+        };
+
+        let signature = sign(&signing_key, &grant).unwrap();
+        assert!(verify(&verifying_key, &grant, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_signaling_offer() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let offer = SignableSignalingOffer {
+            call_id: "call-1".to_string(),
+            caller_peer_id: "12D3KooWCaller".to_string(),
+            callee_peer_id: "12D3KooWCallee".to_string(),
+            sdp: "v=0\r\no=- 123 456 IN IP4 127.0.0.1".to_string(),
+            timestamp: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &offer).unwrap();
+        assert!(verify(&verifying_key, &offer, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_board_post() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let post = SignableBoardPost {
+            post_id: "board-post-1".to_string(),
+            board_id: "board-1".to_string(),
+            author_peer_id: "12D3KooWAuthor".to_string(),
+            content_type: "text".to_string(),
+            content_text: Some("Board post content".to_string()),
+            lamport_clock: 1,
+            created_at: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &post).unwrap();
+        assert!(verify(&verifying_key, &post, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_content_manifest_request() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let mut cursor = std::collections::HashMap::new();
+        cursor.insert("12D3KooWPeer1".to_string(), 5u64);
+        cursor.insert("12D3KooWPeer2".to_string(), 10u64);
+
+        let request = SignableContentManifestRequest {
+            requester_peer_id: "12D3KooWRequester".to_string(),
+            cursor,
+            limit: 50,
+            timestamp: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &request).unwrap();
+        assert!(verify(&verifying_key, &request, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_different_data_produces_different_bytes() {
+        let req1 = SignableIdentityRequest {
+            requester_peer_id: "12D3KooWTest".to_string(),
+            timestamp: 1234567890,
+        };
+
+        let req2 = SignableIdentityRequest {
+            requester_peer_id: "12D3KooWOther".to_string(),
+            timestamp: 1234567890,
+        };
+
+        let bytes1 = req1.signable_bytes().unwrap();
+        let bytes2 = req2.signable_bytes().unwrap();
+
+        assert_ne!(
+            bytes1, bytes2,
+            "Different data should produce different bytes"
+        );
+    }
+
+    #[test]
+    fn test_signable_bytes_not_empty() {
+        let request = SignableIdentityRequest {
+            requester_peer_id: "12D3KooWTest".to_string(),
+            timestamp: 1234567890,
+        };
+
+        let bytes = request.signable_bytes().unwrap();
+        assert!(!bytes.is_empty(), "Signable bytes should not be empty");
+    }
+
+    #[test]
+    fn test_sign_and_verify_post_like() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let like = SignablePostLike {
+            post_id: "post-1".to_string(),
+            liker_peer_id: "12D3KooWLiker".to_string(),
+            reaction_type: "heart".to_string(),
+            timestamp: 1234567890,
+        };
+
+        let signature = sign(&signing_key, &like).unwrap();
+        assert!(verify(&verifying_key, &like, &signature).unwrap());
     }
 }

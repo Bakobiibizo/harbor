@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 /// and RSA-based peer IDs that are incompatible with relay v2.
 const PUBLIC_RELAYS: &[&str] = &[
     // Harbor community relay (primary)
-    "/ip4/34.194.15.67/tcp/4001/p2p/12D3KooWCPbmZtdd7kUQMMRvAEvM9cSBeQarpGr511jxRu5xT8wg",
+    "/ip4/100.49.60.15/tcp/4001/p2p/12D3KooWHi81G15poZuH4BL5WnifQ3b2S2uSkvsa1wAhBZNA8PW9",
 ];
 
 use super::behaviour::{
@@ -34,9 +34,12 @@ use super::types::*;
 use crate::db::Capability;
 use crate::error::{AppError, Result};
 use crate::services::board_service::StorableBoardPost;
+use crate::services::content_sync_service::RemotePostParams;
+use crate::services::messaging_service::IncomingMessageParams;
 use crate::services::{
     BoardService, ContactsService, ContentSyncService, IdentityService, MessagingService,
-    PermissionsService, PostsService,
+    PermissionsService, PostsService, SignableGetWallPosts, SignableWallPostDelete,
+    SignableWallPostSubmit,
 };
 use std::sync::Arc;
 
@@ -375,6 +378,104 @@ impl NetworkHandle {
         }
     }
 
+    /// Submit a wall post to a relay for offline availability
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_wall_post_to_relay(
+        &self,
+        relay_peer_id: PeerId,
+        post_id: String,
+        content_type: String,
+        content_text: Option<String>,
+        visibility: String,
+        lamport_clock: i64,
+        created_at: i64,
+        signature: Vec<u8>,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::SubmitWallPostToRelay {
+                    relay_peer_id,
+                    post_id,
+                    content_type,
+                    content_text,
+                    visibility,
+                    lamport_clock,
+                    created_at,
+                    signature,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Get wall posts for a specific author from a relay
+    pub async fn get_wall_posts_from_relay(
+        &self,
+        relay_peer_id: PeerId,
+        author_peer_id: String,
+        since_lamport_clock: i64,
+        limit: u32,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::GetWallPostsFromRelay {
+                    relay_peer_id,
+                    author_peer_id,
+                    since_lamport_clock,
+                    limit,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Delete a wall post on a relay
+    pub async fn delete_wall_post_on_relay(
+        &self,
+        relay_peer_id: PeerId,
+        post_id: String,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::DeleteWallPostOnRelay {
+                    relay_peer_id,
+                    post_id,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
     /// Connect to public relay servers for NAT traversal
     pub async fn connect_to_public_relays(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
@@ -471,6 +572,18 @@ pub struct NetworkService {
     /// Key: relay peer ID, Value: full relay multiaddr (transport + /p2p/<id>).
     /// Reservation is requested in Identify::Received after the connection is fully negotiated.
     pending_relay_reservations: HashMap<PeerId, Multiaddr>,
+    /// Relay peers that we're probing for community support.
+    /// Key: relay peer ID, Value: the original relay multiaddr string (e.g. "/ip4/.../p2p/...").
+    /// After a relay reservation is accepted, we send a ListBoards probe; if we get
+    /// a BoardList response back, the relay is a community relay and we auto-join.
+    pending_community_probes: HashMap<PeerId, String>,
+    /// Relay peers that have been confirmed as community relays.
+    community_relays: HashMap<PeerId, String>,
+    /// Relay peers where we've sent RegisterPeer and are waiting for PeerRegistered
+    /// before sending ListBoards. This prevents the race condition where ListBoards
+    /// arrives at the relay before RegisterPeer has been processed (which would fail
+    /// signature verification since the peer's public key hasn't been stored yet).
+    pending_board_registrations: std::collections::HashSet<PeerId>,
 }
 
 impl NetworkService {
@@ -509,6 +622,9 @@ impl NetworkService {
             external_addresses: Vec::new(),
             relay_connection_attempted: false,
             pending_relay_reservations: HashMap::new(),
+            pending_community_probes: HashMap::new(),
+            community_relays: HashMap::new(),
+            pending_board_registrations: std::collections::HashSet::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -960,16 +1076,16 @@ impl NetworkService {
                 }
 
                 // Store the remote post
-                match content_sync_service.store_remote_post(
-                    &post_id,
-                    &author_peer_id,
-                    &content_type,
-                    content_text.as_deref(),
-                    &visibility,
+                match content_sync_service.store_remote_post(&RemotePostParams {
+                    post_id: &post_id,
+                    author_peer_id: &author_peer_id,
+                    content_type: &content_type,
+                    content_text: content_text.as_deref(),
+                    visibility: &visibility,
                     lamport_clock,
                     created_at,
-                    &signature,
-                ) {
+                    signature: &signature,
+                }) {
                     Ok(_) => {
                         info!("Stored remote post {} from {}", post_id, peer);
                         // Emit event for UI to refresh feed
@@ -1001,7 +1117,56 @@ impl NetworkService {
 
     async fn handle_behaviour_event(&mut self, event: ChatBehaviourEvent) {
         match event {
-            ChatBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
+            ChatBehaviourEvent::Mdns(event) => {
+                self.handle_mdns_event(event).await;
+            }
+
+            ChatBehaviourEvent::Identify(event) => {
+                self.handle_identify_event(event).await;
+            }
+
+            ChatBehaviourEvent::Kademlia(event) => {
+                self.handle_kademlia_event(event).await;
+            }
+
+            ChatBehaviourEvent::Ping(event) => {
+                self.handle_ping_event(event);
+            }
+
+            ChatBehaviourEvent::IdentityExchange(event) => {
+                self.handle_identity_exchange_event(event).await;
+            }
+
+            ChatBehaviourEvent::Messaging(event) => {
+                self.handle_messaging_event(event).await;
+            }
+
+            ChatBehaviourEvent::ContentSync(event) => {
+                self.handle_content_sync_event(event).await;
+            }
+
+            ChatBehaviourEvent::BoardSync(event) => {
+                self.handle_board_sync_event(event).await;
+            }
+
+            ChatBehaviourEvent::RelayClient(event) => {
+                self.handle_relay_client_event(event).await;
+            }
+
+            ChatBehaviourEvent::Dcutr(event) => {
+                self.handle_dcutr_event(event).await;
+            }
+
+            ChatBehaviourEvent::Autonat(event) => {
+                self.handle_autonat_event(event).await;
+            }
+        }
+    }
+
+    /// Handle mDNS discovery and expiry events
+    async fn handle_mdns_event(&mut self, event: mdns::Event) {
+        match event {
+            mdns::Event::Discovered(peers) => {
                 for (peer_id, addr) in peers {
                     info!("mDNS discovered peer: {} at {}", peer_id, addr);
                     self.discovered_peers
@@ -1024,7 +1189,7 @@ impl NetworkService {
                 }
             }
 
-            ChatBehaviourEvent::Mdns(mdns::Event::Expired(peers)) => {
+            mdns::Event::Expired(peers) => {
                 for (peer_id, addr) in peers {
                     debug!("mDNS peer expired: {} at {}", peer_id, addr);
                     if let Some(addrs) = self.discovered_peers.get_mut(&peer_id) {
@@ -1041,68 +1206,76 @@ impl NetworkService {
                     }
                 }
             }
+        }
+    }
 
-            ChatBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-                debug!("Identified peer: {} - {}", peer_id, info.agent_version);
-                if let Some(peer_info) = self.connected_peers.get_mut(&peer_id) {
-                    peer_info.protocol_version = Some(info.protocol_version);
-                    peer_info.agent_version = Some(info.agent_version);
-                }
+    /// Handle libp2p Identify protocol events
+    async fn handle_identify_event(&mut self, event: identify::Event) {
+        if let identify::Event::Received { peer_id, info, .. } = event {
+            debug!("Identified peer: {} - {}", peer_id, info.agent_version);
+            if let Some(peer_info) = self.connected_peers.get_mut(&peer_id) {
+                peer_info.protocol_version = Some(info.protocol_version);
+                peer_info.agent_version = Some(info.agent_version);
+            }
 
-                // Add addresses to Kademlia
-                for addr in info.listen_addrs {
-                    self.swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, addr);
-                }
+            // Add addresses to Kademlia
+            for addr in info.listen_addrs {
+                self.swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, addr);
+            }
 
-                // If this peer is a relay we're waiting on, request the reservation NOW.
-                // This is the correct timing — the connection is fully negotiated and
-                // the relay client transport knows about it.
-                if let Some(relay_addr) = self.pending_relay_reservations.remove(&peer_id) {
-                    let circuit_listen_addr: Multiaddr = relay_addr
-                        .clone()
-                        .with(libp2p::multiaddr::Protocol::P2pCircuit);
-                    info!(
-                        "Requesting relay reservation on {} (post-identify)",
-                        circuit_listen_addr
-                    );
-                    match self.swarm.listen_on(circuit_listen_addr.clone()) {
-                        Ok(id) => {
-                            info!(
-                                "Relay listener registered: {:?} on {}",
-                                id, circuit_listen_addr
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to request relay reservation {}: {}",
-                                circuit_listen_addr, e
-                            );
-                        }
+            // If this peer is a relay we're waiting on, request the reservation NOW.
+            // This is the correct timing — the connection is fully negotiated and
+            // the relay client transport knows about it.
+            if let Some(relay_addr) = self.pending_relay_reservations.remove(&peer_id) {
+                let circuit_listen_addr: Multiaddr = relay_addr
+                    .clone()
+                    .with(libp2p::multiaddr::Protocol::P2pCircuit);
+                info!(
+                    "Requesting relay reservation on {} (post-identify)",
+                    circuit_listen_addr
+                );
+                match self.swarm.listen_on(circuit_listen_addr.clone()) {
+                    Ok(id) => {
+                        info!(
+                            "Relay listener registered: {:?} on {}",
+                            id, circuit_listen_addr
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to request relay reservation {}: {}",
+                            circuit_listen_addr, e
+                        );
                     }
                 }
             }
+        }
+    }
 
-            ChatBehaviourEvent::Kademlia(kad::Event::RoutingUpdated { peer, .. }) => {
-                debug!("Kademlia routing updated for peer: {}", peer);
-            }
+    /// Handle Kademlia DHT events
+    async fn handle_kademlia_event(&mut self, event: kad::Event) {
+        if let kad::Event::RoutingUpdated { peer, .. } = event {
+            debug!("Kademlia routing updated for peer: {}", peer);
+        }
+    }
 
-            ChatBehaviourEvent::Ping(ping::Event {
-                peer,
-                result: Ok(rtt),
-                ..
-            }) => {
-                debug!("Ping to {} succeeded: {:?}", peer, rtt);
-            }
-            ChatBehaviourEvent::Ping(_) => {}
+    /// Handle ping protocol events
+    fn handle_ping_event(&mut self, event: ping::Event) {
+        if let Ok(rtt) = event.result {
+            debug!("Ping to {} succeeded: {:?}", event.peer, rtt);
+        }
+    }
 
-            ChatBehaviourEvent::IdentityExchange(request_response::Event::Message {
-                peer,
-                message,
-                ..
-            }) => match message {
+    /// Handle identity exchange request/response events
+    async fn handle_identity_exchange_event(
+        &mut self,
+        event: request_response::Event<IdentityExchangeRequest, IdentityExchangeResponse>,
+    ) {
+        if let request_response::Event::Message { peer, message, .. } = event {
+            match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1120,37 +1293,44 @@ impl NetworkService {
                     self.handle_identity_response(peer, request_id, response)
                         .await;
                 }
-            },
+            }
+        }
+    }
 
-            ChatBehaviourEvent::Messaging(request_response::Event::Message {
-                peer,
-                message,
-                ..
-            }) => {
-                match message {
-                    request_response::Message::Request {
-                        request_id,
-                        request,
-                        channel,
-                    } => {
-                        debug!("Received message request from {}", peer);
-                        self.handle_messaging_request(peer, request_id, request, channel)
-                            .await;
-                    }
-                    request_response::Message::Response {
-                        request_id: _,
-                        response: _,
-                    } => {
-                        debug!("Received message response from {}", peer);
-                        // Handle response (e.g., update message delivery status)
-                    }
+    /// Handle messaging protocol request/response events
+    async fn handle_messaging_event(
+        &mut self,
+        event: request_response::Event<MessagingRequest, MessagingResponse>,
+    ) {
+        if let request_response::Event::Message { peer, message, .. } = event {
+            match message {
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                } => {
+                    debug!("Received message request from {}", peer);
+                    self.handle_messaging_request(peer, request_id, request, channel)
+                        .await;
+                }
+                request_response::Message::Response {
+                    request_id: _,
+                    response: _,
+                } => {
+                    debug!("Received message response from {}", peer);
+                    // Handle response (e.g., update message delivery status)
                 }
             }
-            ChatBehaviourEvent::ContentSync(request_response::Event::Message {
-                peer,
-                message,
-                ..
-            }) => match message {
+        }
+    }
+
+    /// Handle content sync protocol request/response events
+    async fn handle_content_sync_event(
+        &mut self,
+        event: request_response::Event<ContentSyncRequest, ContentSyncResponse>,
+    ) {
+        if let request_response::Event::Message { peer, message, .. } = event {
+            match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1168,14 +1348,17 @@ impl NetworkService {
                     self.handle_content_sync_response(peer, request_id, response)
                         .await;
                 }
-            },
+            }
+        }
+    }
 
-            // Board sync events
-            ChatBehaviourEvent::BoardSync(request_response::Event::Message {
-                peer,
-                message,
-                ..
-            }) => match message {
+    /// Handle board sync protocol events (messages and outbound failures)
+    async fn handle_board_sync_event(
+        &mut self,
+        event: request_response::Event<WireBoardSyncRequest, WireBoardSyncResponse>,
+    ) {
+        match event {
+            request_response::Event::Message { peer, message, .. } => match message {
                 request_response::Message::Request { channel, .. } => {
                     // Client doesn't serve board requests; send error
                     let _ = self.swarm.behaviour_mut().board_sync.send_response(
@@ -1190,19 +1373,26 @@ impl NetworkService {
                 }
             },
 
-            // Relay client events for NAT traversal
-            ChatBehaviourEvent::RelayClient(event) => {
-                self.handle_relay_client_event(event).await;
-            }
-
-            // DCUtR events for hole punching
-            ChatBehaviourEvent::Dcutr(event) => {
-                self.handle_dcutr_event(event).await;
-            }
-
-            // AutoNAT events for NAT detection
-            ChatBehaviourEvent::Autonat(event) => {
-                self.handle_autonat_event(event).await;
+            request_response::Event::OutboundFailure { peer, error, .. } => {
+                // Clean up any pending community probe / registration state.
+                // This happens when the relay doesn't support the board sync protocol.
+                let was_probe = self.pending_community_probes.remove(&peer).is_some();
+                let was_registration = self.pending_board_registrations.remove(&peer);
+                if was_probe || was_registration {
+                    debug!(
+                        "Relay {} does not support board sync protocol (outbound failure: {})",
+                        peer, error
+                    );
+                } else {
+                    warn!("Board sync outbound failure to peer {}: {}", peer, error);
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::BoardSyncError {
+                            relay_peer_id: peer.to_string(),
+                            error: format!("Failed to reach relay: {}", error),
+                        })
+                        .await;
+                }
             }
 
             _ => {}
@@ -1242,25 +1432,44 @@ impl NetworkService {
                             }
 
                             // Build: TRANSPORT/p2p/RELAY_ID/p2p-circuit/p2p/LOCAL_ID
-                            let full_circuit_addr: Multiaddr = format!(
+                            let circuit_str = format!(
                                 "{}/p2p/{}/p2p-circuit/p2p/{}",
                                 transport_addr, relay_peer_id, local_peer_id
-                            )
-                            .parse()
-                            .expect("valid relay circuit multiaddr");
-
-                            relay_circuit_addr = Some(full_circuit_addr);
-                            break;
+                            );
+                            match circuit_str.parse::<Multiaddr>() {
+                                Ok(full_circuit_addr) => {
+                                    relay_circuit_addr = Some(full_circuit_addr);
+                                    break;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to parse relay circuit multiaddr '{}': {}",
+                                        circuit_str, e
+                                    );
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
 
                 // Fallback: if we couldn't find a transport address, use bare p2p form
-                let relay_circuit_addr = relay_circuit_addr.unwrap_or_else(|| {
-                    format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id)
-                        .parse()
-                        .expect("valid relay circuit multiaddr")
-                });
+                let relay_circuit_addr = if let Some(addr) = relay_circuit_addr {
+                    addr
+                } else {
+                    let fallback_str =
+                        format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id);
+                    match fallback_str.parse() {
+                        Ok(addr) => addr,
+                        Err(e) => {
+                            error!(
+                                "Failed to parse fallback relay circuit multiaddr '{}': {}",
+                                fallback_str, e
+                            );
+                            return;
+                        }
+                    }
+                };
 
                 // Register as external address so Identify advertises it to other peers
                 self.swarm.add_external_address(relay_circuit_addr.clone());
@@ -1292,6 +1501,55 @@ impl NetworkService {
                             status: self.nat_status,
                         })
                         .await;
+                }
+
+                // Probe the relay for community support.
+                // Step 1: Send RegisterPeer so the relay has our public key.
+                // Step 2 (after PeerRegistered response): Send ListBoards to detect boards.
+                // If the relay responds with a BoardList, it's a community relay and we auto-join.
+                // If it returns an error (non-community relay), the probe silently fails.
+                if !self.community_relays.contains_key(&relay_peer_id) {
+                    if let Some(ref board_service) = self.board_service {
+                        // Reconstruct the relay's original multiaddr for storing later
+                        let relay_addr_str =
+                            if let Some(peer_info) = self.connected_peers.get(&relay_peer_id) {
+                                peer_info.addresses.first().cloned().unwrap_or_default()
+                            } else {
+                                relay_peer_id.to_string()
+                            };
+
+                        // Store relay addr for later use when community is confirmed
+                        self.pending_community_probes
+                            .insert(relay_peer_id, relay_addr_str);
+
+                        match board_service.create_peer_registration() {
+                            Ok(reg) => {
+                                info!(
+                                    "Probing relay {} for community support (RegisterPeer first)",
+                                    relay_peer_id
+                                );
+                                self.pending_board_registrations.insert(relay_peer_id);
+                                let request = WireBoardSyncRequest::RegisterPeer {
+                                    peer_id: reg.peer_id,
+                                    public_key: reg.public_key,
+                                    display_name: reg.display_name,
+                                    timestamp: reg.timestamp,
+                                    signature: reg.signature,
+                                };
+                                self.swarm
+                                    .behaviour_mut()
+                                    .board_sync
+                                    .send_request(&relay_peer_id, request);
+                            }
+                            Err(e) => {
+                                debug!(
+                                    "Skipping community probe for relay {} (no identity?): {}",
+                                    relay_peer_id, e
+                                );
+                                self.pending_community_probes.remove(&relay_peer_id);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1457,6 +1715,7 @@ impl NetworkService {
 
         match response {
             WireBoardSyncResponse::BoardList { boards, .. } => {
+                let board_count = boards.len();
                 let board_data: Vec<(String, String, Option<String>, bool)> = boards
                     .iter()
                     .map(|b| {
@@ -1468,18 +1727,70 @@ impl NetworkService {
                         )
                     })
                     .collect();
-                match board_service.store_boards(&relay_peer_id, &board_data) {
-                    Ok(()) => {
-                        let _ = self
-                            .event_tx
-                            .send(NetworkEvent::BoardListReceived {
-                                relay_peer_id,
-                                board_count: boards.len(),
-                            })
-                            .await;
+
+                // Check if this is a response to a community probe
+                let is_community_probe = self.pending_community_probes.contains_key(&peer);
+                if is_community_probe {
+                    let relay_addr = self
+                        .pending_community_probes
+                        .remove(&peer)
+                        .unwrap_or_default();
+                    info!(
+                        "Community relay detected: {} ({} boards) - auto-joining",
+                        peer, board_count
+                    );
+
+                    // Mark as community relay
+                    self.community_relays.insert(peer, relay_addr.clone());
+
+                    // Auto-join: store community locally
+                    if let Err(e) = board_service.join_community(&relay_peer_id, &relay_addr, None)
+                    {
+                        warn!("Failed to auto-join community on {}: {}", peer, e);
                     }
-                    Err(e) => {
+
+                    // Note: RegisterPeer was already sent during the probe phase
+                    // (before ListBoards), so no need to register again.
+
+                    // Store boards from probe response
+                    if let Err(e) = board_service.store_boards(&relay_peer_id, &board_data) {
                         warn!("Failed to store boards from {}: {}", peer, e);
+                    }
+
+                    // Emit auto-join event to frontend
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::CommunityAutoJoined {
+                            relay_peer_id: relay_peer_id.clone(),
+                            relay_address: relay_addr,
+                            community_name: None,
+                            board_count,
+                        })
+                        .await;
+
+                    // Also emit the standard board list event
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::BoardListReceived {
+                            relay_peer_id,
+                            board_count,
+                        })
+                        .await;
+                } else {
+                    // Normal board list response (not a probe)
+                    match board_service.store_boards(&relay_peer_id, &board_data) {
+                        Ok(()) => {
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::BoardListReceived {
+                                    relay_peer_id,
+                                    board_count,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            warn!("Failed to store boards from {}: {}", peer, e);
+                        }
                     }
                 }
             }
@@ -1530,19 +1841,135 @@ impl NetworkService {
             }
             WireBoardSyncResponse::PeerRegistered { peer_id } => {
                 info!("Registered with relay {} as {}", peer, peer_id);
+
+                // If we were waiting for registration to complete before listing boards,
+                // send the ListBoards request now.
+                if self.pending_board_registrations.remove(&peer) {
+                    info!(
+                        "Registration complete for {}, now requesting board list",
+                        peer
+                    );
+                    if let Some(ref board_service) = self.board_service {
+                        match board_service.create_list_boards_request() {
+                            Ok(list_req) => {
+                                let request = WireBoardSyncRequest::ListBoards {
+                                    requester_peer_id: list_req.requester_peer_id,
+                                    timestamp: list_req.timestamp,
+                                    signature: list_req.signature,
+                                };
+                                self.swarm
+                                    .behaviour_mut()
+                                    .board_sync
+                                    .send_request(&peer, request);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to create list boards request after registration: {}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
             }
             WireBoardSyncResponse::PostDeleted { post_id } => {
                 info!("Board post {} deleted on relay {}", post_id, peer);
             }
-            WireBoardSyncResponse::Error { error } => {
-                warn!("Board sync error from {}: {}", peer, error);
+            WireBoardSyncResponse::WallPostStored { post_id } => {
+                info!("Wall post {} stored on relay {}", post_id, peer);
                 let _ = self
                     .event_tx
-                    .send(NetworkEvent::BoardSyncError {
-                        relay_peer_id,
-                        error,
+                    .send(NetworkEvent::WallPostSynced {
+                        relay_peer_id: relay_peer_id.clone(),
+                        post_id,
                     })
                     .await;
+            }
+            WireBoardSyncResponse::WallPosts { posts, has_more } => {
+                let post_count = posts.len();
+                // Determine the author from the first post (all posts should be from same author)
+                let author_peer_id = posts
+                    .first()
+                    .map(|p| p.author_peer_id.clone())
+                    .unwrap_or_default();
+
+                info!(
+                    "Received {} wall posts for author {} from relay {} (has_more: {})",
+                    post_count, author_peer_id, peer, has_more
+                );
+
+                // Store received posts in local SQLite via content_sync_service
+                if let Some(ref content_sync_service) = self.content_sync_service {
+                    for post in &posts {
+                        match content_sync_service.store_remote_post(&RemotePostParams {
+                            post_id: &post.post_id,
+                            author_peer_id: &post.author_peer_id,
+                            content_type: &post.content_type,
+                            content_text: post.content_text.as_deref(),
+                            visibility: &post.visibility,
+                            lamport_clock: post.lamport_clock as u64,
+                            created_at: post.created_at,
+                            signature: &post.signature,
+                        }) {
+                            Ok(_) => {
+                                debug!(
+                                    "Stored wall post {} from {} via relay",
+                                    post.post_id, post.author_peer_id
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to store wall post {} from relay: {}",
+                                    post.post_id, e
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    warn!("Content sync service unavailable, cannot store wall posts from relay");
+                }
+
+                // Emit event to refresh feed
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::WallPostsReceived {
+                        relay_peer_id: relay_peer_id.clone(),
+                        author_peer_id,
+                        post_count,
+                    })
+                    .await;
+            }
+            WireBoardSyncResponse::WallPostDeleted { post_id } => {
+                info!("Wall post {} deleted on relay {}", post_id, peer);
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::WallPostDeletedOnRelay {
+                        relay_peer_id: relay_peer_id.clone(),
+                        post_id,
+                    })
+                    .await;
+            }
+            WireBoardSyncResponse::Error { error } => {
+                // If this was a community probe that failed (either RegisterPeer or
+                // ListBoards), just clean up silently. Non-community relays will return
+                // an error and that's expected.
+                let was_probe = self.pending_community_probes.remove(&peer).is_some();
+                let was_registration = self.pending_board_registrations.remove(&peer);
+                if was_probe || was_registration {
+                    debug!(
+                        "Relay {} is not a community relay (probe returned error: {})",
+                        peer, error
+                    );
+                } else {
+                    warn!("Board sync error from {}: {}", peer, error);
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::BoardSyncError {
+                            relay_peer_id,
+                            error,
+                        })
+                        .await;
+                }
             }
         }
     }
@@ -1641,35 +2068,62 @@ impl NetworkService {
                 return;
             }
 
-            // Verify the Ed25519 signature on the identity response.
+            // Step 1: Parse the Ed25519 public key from the response.
+            let public_key_bytes: [u8; 32] = match response.public_key.clone().try_into() {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    warn!(
+                        "Identity response from {} has invalid public key length (expected 32, got {})",
+                        peer,
+                        response.public_key.len()
+                    );
+                    return;
+                }
+            };
+
+            let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes) {
+                Ok(key) => key,
+                Err(error) => {
+                    warn!(
+                        "Identity response from {} has invalid Ed25519 public key: {}",
+                        peer, error
+                    );
+                    return;
+                }
+            };
+
+            // Step 2: Verify that the Ed25519 public key actually derives
+            // the claimed peer ID. Without this check, an attacker could
+            // include an arbitrary public key and sign the payload with
+            // the corresponding private key while claiming someone else's
+            // peer ID. The transport-level peer ID check (above) mitigates
+            // this for direct connections, but this provides defense-in-depth.
+            let derived_peer_id =
+                match crate::services::CryptoService::derive_peer_id_from_verifying_key(
+                    &verifying_key,
+                ) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        warn!(
+                        "Identity response from {}: failed to derive peer ID from public key: {}",
+                        peer, e
+                    );
+                        return;
+                    }
+                };
+            if derived_peer_id != response.peer_id {
+                warn!(
+                    "Identity response from {}: public key derives peer ID {} but response claims {} - rejecting identity",
+                    peer, derived_peer_id, response.peer_id
+                );
+                return;
+            }
+
+            // Step 3: Verify the Ed25519 signature on the identity response.
             // The sender signs the string "{peer_id}:{display_name}:{timestamp}"
             // using their Ed25519 signing key. We reconstruct that payload and
             // verify against the public key included in the response.
             let signature_is_valid = {
-                let public_key_bytes: [u8; 32] = match response.public_key.clone().try_into() {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        warn!(
-                            "Identity response from {} has invalid public key length (expected 32, got {})",
-                            peer,
-                            response.public_key.len()
-                        );
-                        return;
-                    }
-                };
-
-                let verifying_key = match ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)
-                {
-                    Ok(key) => key,
-                    Err(error) => {
-                        warn!(
-                            "Identity response from {} has invalid Ed25519 public key: {}",
-                            peer, error
-                        );
-                        return;
-                    }
-                };
-
                 let signed_payload = format!(
                     "{}:{}:{}",
                     response.peer_id, response.display_name, response.timestamp
@@ -1700,7 +2154,10 @@ impl NetworkService {
                 return;
             }
 
-            info!("Signature verified for identity response from {}", peer);
+            info!(
+                "Identity response from {} passed all verification: peer ID binding and signature",
+                peer
+            );
 
             match contacts_service.add_contact(
                 &response.peer_id,
@@ -1766,19 +2223,19 @@ impl NetworkService {
 
                 // Process the message if we have a messaging service
                 if let Some(ref messaging_service) = self.messaging_service {
-                    match messaging_service.process_incoming_message(
-                        &direct_msg.message_id,
-                        &direct_msg.conversation_id,
-                        &direct_msg.sender_peer_id,
-                        &direct_msg.recipient_peer_id,
-                        &direct_msg.content_encrypted,
-                        &direct_msg.content_type,
-                        direct_msg.reply_to.as_deref(),
-                        direct_msg.nonce_counter,
-                        direct_msg.lamport_clock,
-                        direct_msg.timestamp,
-                        &direct_msg.signature,
-                    ) {
+                    match messaging_service.process_incoming_message(&IncomingMessageParams {
+                        message_id: &direct_msg.message_id,
+                        conversation_id: &direct_msg.conversation_id,
+                        sender_peer_id: &direct_msg.sender_peer_id,
+                        recipient_peer_id: &direct_msg.recipient_peer_id,
+                        content_encrypted: &direct_msg.content_encrypted,
+                        content_type: &direct_msg.content_type,
+                        reply_to: direct_msg.reply_to.as_deref(),
+                        nonce_counter: direct_msg.nonce_counter,
+                        lamport_clock: direct_msg.lamport_clock,
+                        timestamp: direct_msg.timestamp,
+                        signature: &direct_msg.signature,
+                    }) {
                         Ok(_) => {
                             info!("Message {} processed successfully", direct_msg.message_id);
                             (true, Some(direct_msg.message_id.clone()), None)
@@ -1803,8 +2260,85 @@ impl NetworkService {
             }
             Ok(MessagingMessage::Ack(ack)) => {
                 info!("Received message ack for {} from {}", ack.message_id, peer);
-                // TODO: Process acknowledgment (update message status)
-                (true, Some(ack.message_id), None)
+
+                // Convert AckStatus to string for the messaging service
+                let status_str = match ack.status {
+                    super::protocols::messaging::AckStatus::Delivered => "delivered",
+                    super::protocols::messaging::AckStatus::Read => "read",
+                };
+
+                // Process acknowledgment (update message status in database)
+                if let Some(ref messaging_service) = self.messaging_service {
+                    match messaging_service.process_incoming_ack(
+                        &ack.message_id,
+                        &ack.conversation_id,
+                        &ack.peer_id,
+                        status_str,
+                        ack.timestamp,
+                        &ack.signature,
+                    ) {
+                        Ok(_) => {
+                            info!(
+                                "Message ack processed: {} is now {}",
+                                ack.message_id, status_str
+                            );
+
+                            // Emit event for the frontend to update UI
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::MessageAckReceived {
+                                    message_id: ack.message_id.clone(),
+                                    conversation_id: ack.conversation_id.clone(),
+                                    status: status_str.to_string(),
+                                    timestamp: ack.timestamp,
+                                })
+                                .await;
+
+                            (true, Some(ack.message_id), None)
+                        }
+                        Err(e) => {
+                            warn!("Failed to process ack for {}: {}", ack.message_id, e);
+                            (false, Some(ack.message_id), Some(e.to_string()))
+                        }
+                    }
+                } else {
+                    warn!("No messaging service configured, cannot process ack");
+                    (
+                        false,
+                        Some(ack.message_id),
+                        Some("Messaging service not available".to_string()),
+                    )
+                }
+            }
+            Ok(MessagingMessage::EditMessage {
+                message_id,
+                new_content,
+                edited_at,
+            }) => {
+                info!(
+                    "Received edit for message {} from {} at {}",
+                    message_id, peer, edited_at
+                );
+
+                if let Some(ref messaging_service) = self.messaging_service {
+                    match messaging_service.apply_incoming_edit(&message_id, &new_content) {
+                        Ok(()) => {
+                            info!("Successfully applied edit for message {}", message_id);
+                            (true, Some(message_id), None)
+                        }
+                        Err(e) => {
+                            warn!("Failed to apply edit for message {}: {}", message_id, e);
+                            (false, Some(message_id), Some(e.to_string()))
+                        }
+                    }
+                } else {
+                    warn!("No messaging service configured, cannot process edit");
+                    (
+                        false,
+                        Some(message_id),
+                        Some("Messaging service not available".to_string()),
+                    )
+                }
             }
             Err(e) => {
                 warn!("Failed to decode messaging payload: {}", e);
@@ -2191,7 +2725,9 @@ impl NetworkService {
                     return NetworkResponse::Error(format!("Failed to join community: {}", e));
                 }
 
-                // Register peer with relay
+                // Register peer with relay first, then ListBoards will be sent
+                // after the PeerRegistered response is received (to avoid race condition
+                // where ListBoards arrives before the relay has stored our public key).
                 match board_service.create_peer_registration() {
                     Ok(reg) => {
                         let request = WireBoardSyncRequest::RegisterPeer {
@@ -2206,18 +2742,10 @@ impl NetworkService {
                             .board_sync
                             .send_request(&relay_peer_id, request);
 
-                        // Also list boards
-                        if let Ok(list_req) = board_service.create_list_boards_request() {
-                            let request = WireBoardSyncRequest::ListBoards {
-                                requester_peer_id: list_req.requester_peer_id,
-                                timestamp: list_req.timestamp,
-                                signature: list_req.signature,
-                            };
-                            self.swarm
-                                .behaviour_mut()
-                                .board_sync
-                                .send_request(&relay_peer_id, request);
-                        }
+                        // Track that we're waiting for registration to complete
+                        // before sending ListBoards
+                        self.pending_board_registrations.insert(relay_peer_id);
+
                         NetworkResponse::Ok
                     }
                     Err(e) => {
@@ -2378,6 +2906,155 @@ impl NetworkService {
                     Err(e) => {
                         NetworkResponse::Error(format!("Failed to create sync request: {}", e))
                     }
+                }
+            }
+
+            NetworkCommand::SubmitWallPostToRelay {
+                relay_peer_id,
+                post_id,
+                content_type,
+                content_text,
+                visibility,
+                lamport_clock,
+                created_at,
+                signature,
+            } => {
+                let identity = match self.identity_service.get_identity() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        return NetworkResponse::Error("No identity available".to_string());
+                    }
+                    Err(e) => {
+                        return NetworkResponse::Error(format!("Identity error: {}", e));
+                    }
+                };
+
+                let now = chrono::Utc::now().timestamp();
+                let signable = SignableWallPostSubmit {
+                    author_peer_id: identity.peer_id.clone(),
+                    post_id: post_id.clone(),
+                    content_type: content_type.clone(),
+                    content_text: content_text.clone(),
+                    visibility: visibility.clone(),
+                    lamport_clock,
+                    created_at,
+                    signature: signature.clone(),
+                    timestamp: now,
+                };
+
+                match self.identity_service.sign(&signable) {
+                    Ok(request_signature) => {
+                        let request = WireBoardSyncRequest::SubmitWallPost {
+                            author_peer_id: identity.peer_id,
+                            post_id,
+                            content_type,
+                            content_text,
+                            visibility,
+                            lamport_clock,
+                            created_at,
+                            signature,
+                            timestamp: now,
+                            request_signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to sign wall post submission: {}",
+                        e
+                    )),
+                }
+            }
+
+            NetworkCommand::GetWallPostsFromRelay {
+                relay_peer_id,
+                author_peer_id,
+                since_lamport_clock,
+                limit,
+            } => {
+                let identity = match self.identity_service.get_identity() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        return NetworkResponse::Error("No identity available".to_string());
+                    }
+                    Err(e) => {
+                        return NetworkResponse::Error(format!("Identity error: {}", e));
+                    }
+                };
+
+                let now = chrono::Utc::now().timestamp();
+                let signable = SignableGetWallPosts {
+                    requester_peer_id: identity.peer_id.clone(),
+                    author_peer_id: author_peer_id.clone(),
+                    since_lamport_clock,
+                    limit,
+                    timestamp: now,
+                };
+
+                match self.identity_service.sign(&signable) {
+                    Ok(signature) => {
+                        let request = WireBoardSyncRequest::GetWallPosts {
+                            requester_peer_id: identity.peer_id,
+                            author_peer_id,
+                            since_lamport_clock,
+                            limit,
+                            timestamp: now,
+                            signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to sign wall posts request: {}", e))
+                    }
+                }
+            }
+
+            NetworkCommand::DeleteWallPostOnRelay {
+                relay_peer_id,
+                post_id,
+            } => {
+                let identity = match self.identity_service.get_identity() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        return NetworkResponse::Error("No identity available".to_string());
+                    }
+                    Err(e) => {
+                        return NetworkResponse::Error(format!("Identity error: {}", e));
+                    }
+                };
+
+                let now = chrono::Utc::now().timestamp();
+                let signable = SignableWallPostDelete {
+                    author_peer_id: identity.peer_id.clone(),
+                    post_id: post_id.clone(),
+                    timestamp: now,
+                };
+
+                match self.identity_service.sign(&signable) {
+                    Ok(signature) => {
+                        let request = WireBoardSyncRequest::DeleteWallPost {
+                            author_peer_id: identity.peer_id,
+                            post_id,
+                            timestamp: now,
+                            signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .board_sync
+                            .send_request(&relay_peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to sign wall post delete request: {}",
+                        e
+                    )),
                 }
             }
 

@@ -4,20 +4,7 @@ use crate::db::Database;
 use rusqlite::{params, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 
-/// Build a comma-separated string of `?` placeholders for use in SQL `IN` clauses.
-///
-/// This is safe to interpolate into a SQL query via `format!()` because the returned
-/// string contains only literal `?` characters and commas -- no user-supplied data.
-/// The actual values must be bound separately via parameterized query bindings.
-///
-/// # Panics
-///
-/// Panics if `count` is zero, since an empty `IN ()` clause is invalid SQL.
-fn build_in_clause_placeholders(count: usize) -> String {
-    assert!(count > 0, "Cannot build IN clause with zero placeholders");
-    let placeholders: Vec<&str> = (0..count).map(|_| "?").collect();
-    placeholders.join(",")
-}
+use crate::db::sql_utils::build_in_clause_placeholders;
 
 /// Represents a like on a post
 #[derive(Debug, Clone, Serialize, Deserialize)]

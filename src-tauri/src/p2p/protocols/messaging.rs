@@ -81,6 +81,15 @@ pub enum MessagingMessage {
     Message(DirectMessage),
     /// An acknowledgment
     Ack(MessageAck),
+    /// An edit to a previously sent message
+    EditMessage {
+        /// The ID of the message being edited
+        message_id: String,
+        /// The new plaintext content (will be encrypted by the receiver's local store)
+        new_content: String,
+        /// Timestamp of the edit
+        edited_at: i64,
+    },
 }
 
 /// Codec for messaging protocol

@@ -1,6 +1,6 @@
 import toast from 'react-hot-toast';
 import { useSettingsStore } from '../../stores';
-import { Toggle } from './shared';
+import { SectionHeader, SettingsCard, Toggle } from './shared';
 
 export function PrivacySection() {
   const {
@@ -12,27 +12,16 @@ export function PrivacySection() {
     setDefaultVisibility,
   } = useSettingsStore();
 
+  const handleOnlineStatusChange = (value: boolean) => {
+    setShowOnlineStatus(value);
+    toast.success(value ? 'Online status visible to contacts' : 'Online status hidden');
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h3
-          className="text-xl font-semibold mb-1"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
-          Privacy
-        </h3>
-        <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Control who can see your content
-        </p>
-      </div>
+      <SectionHeader title="Privacy" description="Control who can see your content" />
 
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Default post visibility
         </h4>
@@ -52,15 +41,9 @@ export function PrivacySection() {
           <option value="contacts">Contacts only</option>
           <option value="public">Anyone with the link</option>
         </select>
-      </div>
+      </SettingsCard>
 
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
             <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
@@ -72,15 +55,9 @@ export function PrivacySection() {
           </div>
           <Toggle enabled={showReadReceipts} onChange={setShowReadReceipts} />
         </div>
-      </div>
+      </SettingsCard>
 
-      <div
-        className="rounded-lg p-6"
-        style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-        }}
-      >
+      <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
             <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
@@ -90,15 +67,9 @@ export function PrivacySection() {
               Show when you're online to your contacts
             </p>
           </div>
-          <Toggle
-            enabled={showOnlineStatus}
-            onChange={(value) => {
-              setShowOnlineStatus(value);
-              toast.success(value ? 'Online status visible to contacts' : 'Online status hidden');
-            }}
-          />
+          <Toggle enabled={showOnlineStatus} onChange={handleOnlineStatusChange} />
         </div>
-      </div>
+      </SettingsCard>
     </div>
   );
 }

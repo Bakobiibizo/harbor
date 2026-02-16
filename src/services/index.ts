@@ -6,5 +6,7 @@ export { permissionsService } from './permissions';
 export { messagingService } from './messaging';
 export { postsService } from './posts';
 export { feedService } from './feed';
+export { mediaService } from './media';
+export { commentsService } from './comments';
 export { callingService } from './calling';
 export * as loggingService from './logging';

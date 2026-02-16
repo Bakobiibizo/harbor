@@ -6,6 +6,7 @@ pub mod content_sync_service;
 pub mod crypto_service;
 pub mod feed_service;
 pub mod identity_service;
+pub mod media_service;
 pub mod messaging_service;
 pub mod permissions_service;
 pub mod posts_service;
@@ -23,6 +24,7 @@ pub use content_sync_service::{
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
 pub use identity_service::IdentityService;
+pub use media_service::MediaStorageService;
 pub use messaging_service::{DecryptedMessage, MessagingService, OutgoingMessage};
 pub use permissions_service::{
     PermissionGrantMessage, PermissionRequestMessage, PermissionRevokeMessage, PermissionsService,
@@ -44,6 +46,8 @@ pub use signing::{
     SignableContentManifestResponse,
     // Direct messages
     SignableDirectMessage,
+    // Wall post relay sync
+    SignableGetWallPosts,
     // Identity messages
     SignableIdentityRequest,
     SignableIdentityResponse,
@@ -62,4 +66,6 @@ pub use signing::{
     SignableSignalingIce,
     // Signaling messages (voice calls)
     SignableSignalingOffer,
+    SignableWallPostDelete,
+    SignableWallPostSubmit,
 };

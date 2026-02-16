@@ -10,12 +10,6 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/api/app', () => ({
-  getVersion: vi.fn(() => Promise.resolve('0.1.0')),
-  getName: vi.fn(() => Promise.resolve('Harbor')),
-  getTauriVersion: vi.fn(() => Promise.resolve('2.0.0')),
-}));
-
 vi.mock('react-hot-toast', () => ({
   default: {
     success: vi.fn(),

@@ -95,18 +95,23 @@ pub async fn get_wall_preview(
 
     let limit = limit.unwrap_or(50);
 
-    // Get all posts from our wall
-    let posts = PostsRepository::get_by_author(&db, &identity.peer_id, limit, before_timestamp)
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+    // Filter by visibility at the SQL level so we only transfer the rows we need.
+    let visibility_filter = match perspective {
+        ViewPerspective::Guest => Some(PostVisibility::Public),
+        ViewPerspective::Contact | ViewPerspective::Owner => None,
+    };
 
-    // Filter based on perspective
+    let posts = PostsRepository::get_by_author_with_visibility(
+        &db,
+        &identity.peer_id,
+        visibility_filter,
+        limit,
+        before_timestamp,
+    )
+    .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
     let filtered_posts: Vec<_> = posts
         .into_iter()
-        .filter(|post| match perspective {
-            ViewPerspective::Guest => post.visibility == PostVisibility::Public,
-            ViewPerspective::Contact => true, // Contacts can see all posts
-            ViewPerspective::Owner => true,   // Owner can see everything
-        })
         .map(|post| FeedItemInfo {
             post_id: post.post_id,
             author_peer_id: post.author_peer_id,
@@ -134,26 +139,16 @@ pub async fn get_wall_visibility_stats(
         .get_identity()?
         .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
 
-    // Get all posts (using a large limit)
-    let posts = PostsRepository::get_by_author(&db, &identity.peer_id, 1000, None)
+    // Use a SQL COUNT/GROUP BY query so we never transfer post rows to Rust.
+    let counts = PostsRepository::count_by_visibility(&db, &identity.peer_id)
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-    let total_posts = posts.len();
-    let public_posts = posts
-        .iter()
-        .filter(|p| p.visibility == PostVisibility::Public)
-        .count();
-    let contacts_only_posts = posts
-        .iter()
-        .filter(|p| p.visibility == PostVisibility::Contacts)
-        .count();
-
     Ok(WallVisibilityStats {
-        total_posts,
-        public_posts,
-        contacts_only_posts,
-        guest_visible: public_posts,
-        contact_visible: total_posts,
+        total_posts: counts.total_posts,
+        public_posts: counts.public_posts,
+        contacts_only_posts: counts.contacts_only_posts,
+        guest_visible: counts.public_posts,
+        contact_visible: counts.total_posts,
     })
 }
 

@@ -66,40 +66,34 @@ impl FeedService {
         allowed_authors.sort();
         allowed_authors.dedup();
 
-        // Get posts from all allowed authors
-        let mut all_posts = Vec::new();
-        for author in &allowed_authors {
-            let posts = PostsRepository::get_by_author(&self.db, author, limit, before_timestamp)
+        // Get posts from all allowed authors in a single efficient query
+        // sorted by created_at DESC with proper limit applied globally
+        let all_posts =
+            PostsRepository::get_feed_posts(&self.db, &allowed_authors, limit, before_timestamp)
                 .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-            // Filter: if it's not our own post and visibility is "contacts",
-            // make sure we have permission (we already checked above)
-            for post in posts {
-                if post.author_peer_id == identity.peer_id {
-                    // Our own posts are always visible
-                    all_posts.push(post);
-                } else if post.visibility == PostVisibility::Public {
-                    // Public posts are always visible
-                    all_posts.push(post);
-                } else if post.visibility == PostVisibility::Contacts {
-                    // Contacts-only posts require WallRead permission (already verified above)
-                    all_posts.push(post);
-                }
-            }
-        }
-
-        // Sort by created_at descending
-        all_posts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-        // Apply limit
-        all_posts.truncate(limit as usize);
 
         // Build a cache of display names for authors
         let mut display_name_cache: HashMap<String, Option<String>> = HashMap::new();
 
-        // Convert to FeedItems
+        // Convert to FeedItems with visibility filtering
         let feed_items: Vec<FeedItem> = all_posts
             .into_iter()
+            .filter(|post| {
+                // Our own posts are always visible
+                if post.author_peer_id == identity.peer_id {
+                    return true;
+                }
+                // Public posts are always visible
+                if post.visibility == PostVisibility::Public {
+                    return true;
+                }
+                // Contacts-only posts require WallRead permission
+                // (already verified via allowed_authors list)
+                if post.visibility == PostVisibility::Contacts {
+                    return true;
+                }
+                false
+            })
             .map(|post| {
                 // Look up display name from cache or contacts
                 let author_display_name = display_name_cache
@@ -178,5 +172,288 @@ impl FeedService {
             .collect();
 
         Ok(feed_items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ContactData, ContactsRepository, PostData, PostsRepository};
+    use crate::models::CreateIdentityRequest;
+    use crate::services::{ContactsService, IdentityService, PermissionsService};
+    use std::sync::Arc;
+
+    fn create_test_env() -> (
+        FeedService,
+        Arc<Database>,
+        Arc<IdentityService>,
+        Arc<PermissionsService>,
+        String, // our peer_id
+    ) {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+
+        let info = identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Feed User".to_string(),
+                passphrase: "test-pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+
+        let feed_service = FeedService::new(
+            db.clone(),
+            identity_service.clone(),
+            permissions_service.clone(),
+            contacts_service.clone(),
+        );
+
+        (
+            feed_service,
+            db,
+            identity_service,
+            permissions_service,
+            info.peer_id,
+        )
+    }
+
+    /// Helper to insert a post directly into the database
+    fn insert_test_post(
+        db: &Database,
+        post_id: &str,
+        author: &str,
+        content: &str,
+        created_at: i64,
+        visibility: PostVisibility,
+    ) {
+        let post_data = PostData {
+            post_id: post_id.to_string(),
+            author_peer_id: author.to_string(),
+            content_type: "text".to_string(),
+            content_text: Some(content.to_string()),
+            visibility,
+            lamport_clock: 1,
+            created_at,
+            signature: vec![0u8; 64],
+        };
+        PostsRepository::insert_post(db, &post_data).unwrap();
+    }
+
+    #[test]
+    fn test_get_feed_own_posts() {
+        let (service, db, _identity, _perms, peer_id) = create_test_env();
+
+        // Insert our own posts
+        insert_test_post(
+            &db,
+            "post-1",
+            &peer_id,
+            "My post 1",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-2",
+            &peer_id,
+            "My post 2",
+            2000,
+            PostVisibility::Contacts,
+        );
+
+        let feed = service.get_feed(10, None).unwrap();
+        assert_eq!(feed.len(), 2);
+
+        // Most recent first
+        assert_eq!(feed[0].post.post_id, "post-2");
+        assert_eq!(feed[1].post.post_id, "post-1");
+    }
+
+    #[test]
+    fn test_get_feed_empty() {
+        let (service, _db, _identity, _perms, _peer_id) = create_test_env();
+
+        let feed = service.get_feed(10, None).unwrap();
+        assert!(feed.is_empty());
+    }
+
+    #[test]
+    fn test_get_feed_with_limit() {
+        let (service, db, _identity, _perms, peer_id) = create_test_env();
+
+        for i in 0..5 {
+            insert_test_post(
+                &db,
+                &format!("post-{}", i),
+                &peer_id,
+                &format!("Post {}", i),
+                1000 + i,
+                PostVisibility::Public,
+            );
+        }
+
+        let feed = service.get_feed(3, None).unwrap();
+        assert_eq!(feed.len(), 3);
+    }
+
+    #[test]
+    fn test_get_feed_requires_identity() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+
+        let feed_service =
+            FeedService::new(db, identity_service, permissions_service, contacts_service);
+
+        let result = feed_service.get_feed(10, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_feed_includes_display_name() {
+        let (service, db, _identity, _perms, peer_id) = create_test_env();
+
+        insert_test_post(
+            &db,
+            "post-1",
+            &peer_id,
+            "My post",
+            1000,
+            PostVisibility::Public,
+        );
+
+        let feed = service.get_feed(10, None).unwrap();
+        assert_eq!(feed.len(), 1);
+        assert_eq!(feed[0].author_display_name, Some("Feed User".to_string()));
+    }
+
+    #[test]
+    fn test_get_wall_own_posts() {
+        let (service, db, _identity, _perms, peer_id) = create_test_env();
+
+        insert_test_post(
+            &db,
+            "post-1",
+            &peer_id,
+            "Wall post 1",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-2",
+            &peer_id,
+            "Wall post 2",
+            2000,
+            PostVisibility::Contacts,
+        );
+
+        let wall = service.get_wall(&peer_id, 10, None).unwrap();
+        assert_eq!(wall.len(), 2);
+        assert_eq!(wall[0].author_display_name, Some("Feed User".to_string()));
+    }
+
+    #[test]
+    fn test_get_wall_other_user_no_permission() {
+        let (service, _db, _identity, _perms, _peer_id) = create_test_env();
+
+        let result = service.get_wall("12D3KooWOtherPeer", 10, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_wall_other_user_with_permission() {
+        let (service, db, _identity, _permissions, peer_id) = create_test_env();
+
+        let other_peer = "12D3KooWOtherPeer".to_string();
+
+        // Add the other peer as a contact
+        let contact_data = ContactData {
+            peer_id: other_peer.clone(),
+            public_key: vec![1u8; 32],
+            x25519_public: vec![2u8; 32],
+            display_name: "Other Peer".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Insert a post from the other peer
+        insert_test_post(
+            &db,
+            "other-post-1",
+            &other_peer,
+            "Other post",
+            1000,
+            PostVisibility::Public,
+        );
+
+        // Grant WallRead permission from the other peer to us
+        // We need to simulate that the other peer granted us WallRead.
+        // Use raw repo insert since we can't sign with other peer's key in this test.
+        use crate::db::{GrantData, PermissionsRepository};
+        let grant_data = GrantData {
+            grant_id: "grant-wr-1".to_string(),
+            issuer_peer_id: other_peer.clone(),
+            subject_peer_id: peer_id.clone(),
+            capability: "wall_read".to_string(),
+            scope_json: None,
+            lamport_clock: 1,
+            issued_at: 1000,
+            expires_at: None,
+            payload_cbor: vec![0],
+            signature: vec![0],
+        };
+        PermissionsRepository::upsert_grant(&db, &grant_data).unwrap();
+
+        let wall = service.get_wall(&other_peer, 10, None).unwrap();
+        assert_eq!(wall.len(), 1);
+        assert_eq!(wall[0].post.content_text, Some("Other post".to_string()));
+    }
+
+    #[test]
+    fn test_feed_sorted_chronologically() {
+        let (service, db, _identity, _perms, peer_id) = create_test_env();
+
+        insert_test_post(
+            &db,
+            "post-old",
+            &peer_id,
+            "Old post",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-mid",
+            &peer_id,
+            "Middle post",
+            2000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "post-new",
+            &peer_id,
+            "New post",
+            3000,
+            PostVisibility::Public,
+        );
+
+        let feed = service.get_feed(10, None).unwrap();
+        assert_eq!(feed.len(), 3);
+        assert_eq!(feed[0].post.post_id, "post-new");
+        assert_eq!(feed[1].post.post_id, "post-mid");
+        assert_eq!(feed[2].post.post_id, "post-old");
     }
 }

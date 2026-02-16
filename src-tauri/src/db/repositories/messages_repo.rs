@@ -56,6 +56,7 @@ pub struct Message {
     pub delivered_at: Option<i64>,
     pub read_at: Option<i64>,
     pub status: String,
+    pub edited_at: Option<i64>,
 }
 
 /// Data for inserting a new message
@@ -143,7 +144,7 @@ impl MessagesRepository {
         let mut stmt = conn.prepare(
             "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                     content_encrypted, content_type, reply_to_message_id, nonce_counter,
-                    lamport_clock, sent_at, received_at, delivered_at, read_at, status
+                    lamport_clock, sent_at, received_at, delivered_at, read_at, status, edited_at
              FROM messages WHERE message_id = ?",
         )?;
 
@@ -166,6 +167,7 @@ impl MessagesRepository {
                 delivered_at: row.get(12)?,
                 read_at: row.get(13)?,
                 status: row.get(14)?,
+                edited_at: row.get(15)?,
             }))
         } else {
             Ok(None)
@@ -185,7 +187,7 @@ impl MessagesRepository {
             let query = if before_timestamp.is_some() {
                 "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                         content_encrypted, content_type, reply_to_message_id, nonce_counter,
-                        lamport_clock, sent_at, received_at, delivered_at, read_at, status
+                        lamport_clock, sent_at, received_at, delivered_at, read_at, status, edited_at
                  FROM (
                    SELECT * FROM messages
                    WHERE conversation_id = ? AND sent_at < ?
@@ -195,7 +197,7 @@ impl MessagesRepository {
             } else {
                 "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                         content_encrypted, content_type, reply_to_message_id, nonce_counter,
-                        lamport_clock, sent_at, received_at, delivered_at, read_at, status
+                        lamport_clock, sent_at, received_at, delivered_at, read_at, status, edited_at
                  FROM (
                    SELECT * FROM messages
                    WHERE conversation_id = ?
@@ -236,6 +238,7 @@ impl MessagesRepository {
             delivered_at: row.get(12)?,
             read_at: row.get(13)?,
             status: row.get(14)?,
+            edited_at: row.get(15)?,
         })
     }
 
@@ -360,7 +363,7 @@ impl MessagesRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, message_id, conversation_id, sender_peer_id, recipient_peer_id,
                         content_encrypted, content_type, reply_to_message_id, nonce_counter,
-                        lamport_clock, sent_at, received_at, delivered_at, read_at, status
+                        lamport_clock, sent_at, received_at, delivered_at, read_at, status, edited_at
                  FROM messages
                  WHERE recipient_peer_id = ? AND status = 'pending'
                  ORDER BY sent_at ASC",
@@ -368,6 +371,22 @@ impl MessagesRepository {
 
             let rows = stmt.query_map([recipient_peer_id], Self::row_to_message)?;
             rows.collect()
+        })
+    }
+
+    /// Update message content and set edited_at timestamp
+    pub fn update_message_content(
+        db: &Database,
+        message_id: &str,
+        new_content_encrypted: &[u8],
+        edited_at: i64,
+    ) -> SqliteResult<bool> {
+        db.with_connection(|conn| {
+            let rows = conn.execute(
+                "UPDATE messages SET content_encrypted = ?, edited_at = ? WHERE message_id = ?",
+                params![new_content_encrypted, edited_at, message_id],
+            )?;
+            Ok(rows > 0)
         })
     }
 
@@ -423,6 +442,34 @@ impl MessagesRepository {
                 |row| row.get(0),
             )?;
             Ok(count > 0)
+        })
+    }
+
+    /// Delete all messages in a conversation (clear history)
+    pub fn clear_conversation_messages(db: &Database, conversation_id: &str) -> SqliteResult<i64> {
+        db.with_connection(|conn| {
+            let rows = conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ?",
+                params![conversation_id],
+            )?;
+            Ok(rows as i64)
+        })
+    }
+
+    /// Delete a conversation and all its messages
+    pub fn delete_conversation(db: &Database, conversation_id: &str) -> SqliteResult<i64> {
+        db.with_connection(|conn| {
+            // Delete message events first (referential integrity)
+            conn.execute(
+                "DELETE FROM message_events WHERE conversation_id = ?",
+                params![conversation_id],
+            )?;
+            // Delete all messages in the conversation
+            let rows = conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ?",
+                params![conversation_id],
+            )?;
+            Ok(rows as i64)
         })
     }
 }

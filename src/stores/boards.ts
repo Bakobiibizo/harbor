@@ -97,9 +97,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
 
       // Auto-load posts for the default board
       if (defaultBoard) {
-        get()
-          .loadBoardPosts()
-          .catch((err) => console.error('Failed to auto-load board posts:', err));
+        get().loadBoardPosts();
       }
     } catch (error) {
       console.error('Failed to load boards:', error);
@@ -109,9 +107,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
 
   selectBoard: async (board: BoardInfo) => {
     set({ activeBoard: board, boardPosts: [], hasMore: true });
-    get()
-      .loadBoardPosts()
-      .catch((err) => console.error('Failed to load posts for selected board:', err));
+    get().loadBoardPosts();
   },
 
   loadBoardPosts: async (limit: number = 50) => {
@@ -172,9 +168,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => ({
       );
       // Sync and reload after posting
       await boardsService.syncBoard(activeCommunity.relayPeerId, activeBoard.boardId);
-      get()
-        .loadBoardPosts()
-        .catch((err) => console.error('Failed to reload posts after submit:', err));
+      get().loadBoardPosts();
     } catch (error) {
       console.error('Failed to submit post:', error);
       set({ error: String(error) });

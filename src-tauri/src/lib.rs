@@ -11,7 +11,8 @@ use db::Database;
 use logging::{get_log_directory, LogConfig};
 use services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
-    FeedService, IdentityService, MessagingService, PermissionsService, PostsService,
+    FeedService, IdentityService, MediaStorageService, MessagingService, PermissionsService,
+    PostsService,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -121,6 +122,12 @@ pub fn run() {
                 info!("Migrated legacy account: {}", account.display_name);
             }
 
+            // Save the data directory (parent of db file) before db_path is moved
+            let data_dir = db_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| app_data_dir.clone());
+
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
 
             // Initialize services
@@ -162,6 +169,12 @@ pub fn run() {
             ));
             let board_service = Arc::new(BoardService::new(db.clone(), identity_service.clone()));
 
+            // Initialize media storage service (content-addressed file storage)
+            let media_service = Arc::new(
+                MediaStorageService::new(&data_dir, db.clone())
+                    .expect("Failed to initialize media storage"),
+            );
+
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
 
@@ -177,6 +190,7 @@ pub fn run() {
             app.manage(feed_service);
             app.manage(calling_service);
             app.manage(board_service);
+            app.manage(media_service);
             app.manage(network_state);
 
             info!("Application setup complete");
@@ -252,6 +266,9 @@ pub fn run() {
             commands::mark_conversation_read,
             commands::get_unread_count,
             commands::get_total_unread_count,
+            commands::clear_conversation_history,
+            commands::delete_conversation,
+            commands::edit_message,
             // Post commands
             commands::create_post,
             commands::update_post,
@@ -276,6 +293,11 @@ pub fn run() {
             commands::get_post_likes,
             commands::get_posts_likes_batch,
             commands::get_my_liked_posts,
+            // Comment commands
+            commands::add_comment,
+            commands::get_comments,
+            commands::delete_comment,
+            commands::get_comment_counts,
             // Calling commands
             commands::start_call,
             commands::answer_call,
@@ -304,8 +326,20 @@ pub fn run() {
             commands::submit_board_post,
             commands::delete_board_post,
             commands::sync_board,
+            // Media commands (content-addressed storage)
+            commands::store_media,
+            commands::store_media_bytes,
+            commands::get_media_url,
+            commands::has_media,
+            // Wall sync commands (relay-based wall post sync)
+            commands::sync_wall_to_relay,
+            commands::fetch_contact_wall_from_relay,
+            commands::sync_feed_from_relay,
+            commands::delete_wall_post_on_relay,
             // File commands
             commands::save_to_downloads,
+            // Link preview commands
+            commands::fetch_link_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

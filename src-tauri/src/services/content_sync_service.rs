@@ -64,6 +64,18 @@ pub struct OutgoingFetchResponse {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for storing a remote post received from a peer
+pub struct RemotePostParams<'a> {
+    pub post_id: &'a str,
+    pub author_peer_id: &'a str,
+    pub content_type: &'a str,
+    pub content_text: Option<&'a str>,
+    pub visibility: &'a str,
+    pub lamport_clock: u64,
+    pub created_at: i64,
+    pub signature: &'a [u8],
+}
+
 impl ContentSyncService {
     /// Create a new content sync service
     pub fn new(
@@ -398,18 +410,15 @@ impl ContentSyncService {
     }
 
     /// Store a post received from a peer
-    #[allow(clippy::too_many_arguments)]
-    pub fn store_remote_post(
-        &self,
-        post_id: &str,
-        author_peer_id: &str,
-        content_type: &str,
-        content_text: Option<&str>,
-        visibility: &str,
-        lamport_clock: u64,
-        created_at: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn store_remote_post(&self, params: &RemotePostParams<'_>) -> Result<()> {
+        let post_id = params.post_id;
+        let author_peer_id = params.author_peer_id;
+        let content_type = params.content_type;
+        let content_text = params.content_text;
+        let visibility = params.visibility;
+        let lamport_clock = params.lamport_clock;
+        let created_at = params.created_at;
+        let signature = params.signature;
         // Verify the signature
         let author_public_key = self
             .contacts_service
@@ -529,5 +538,385 @@ impl ContentSyncService {
         self.db
             .get_sync_cursor(peer_id, "posts")
             .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ContactData, ContactsRepository};
+    use crate::models::CreateIdentityRequest;
+    use crate::services::{ContactsService, IdentityService, PermissionsService};
+    use std::sync::Arc;
+
+    fn create_test_env() -> (
+        ContentSyncService,
+        Arc<Database>,
+        Arc<IdentityService>,
+        String, // our peer_id
+    ) {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+
+        let info = identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Sync User".to_string(),
+                passphrase: "test-pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+
+        let service = ContentSyncService::new(
+            db.clone(),
+            identity_service.clone(),
+            contacts_service,
+            permissions_service,
+        );
+
+        (service, db, identity_service, info.peer_id)
+    }
+
+    #[test]
+    fn test_create_manifest_request() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let mut cursor = HashMap::new();
+        cursor.insert("12D3KooWPeer1".to_string(), 5u64);
+
+        let request = service.create_manifest_request(cursor.clone(), 50).unwrap();
+
+        assert_eq!(request.requester_peer_id, peer_id);
+        assert_eq!(request.cursor, cursor);
+        assert_eq!(request.limit, 50);
+        assert!(!request.signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_manifest_request_empty_cursor() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let request = service
+            .create_manifest_request(HashMap::new(), 100)
+            .unwrap();
+
+        assert_eq!(request.requester_peer_id, peer_id);
+        assert!(request.cursor.is_empty());
+    }
+
+    #[test]
+    fn test_create_manifest_request_requires_identity() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+
+        let service =
+            ContentSyncService::new(db, identity_service, contacts_service, permissions_service);
+
+        let result = service.create_manifest_request(HashMap::new(), 50);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_fetch_request() {
+        let (service, _db, _identity, peer_id) = create_test_env();
+
+        let request = service
+            .create_fetch_request("post-123".to_string(), true)
+            .unwrap();
+
+        assert_eq!(request.requester_peer_id, peer_id);
+        assert_eq!(request.post_id, "post-123");
+        assert!(request.include_media);
+        assert!(!request.signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_fetch_request_no_media() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        let request = service
+            .create_fetch_request("post-456".to_string(), false)
+            .unwrap();
+
+        assert!(!request.include_media);
+    }
+
+    #[test]
+    fn test_get_sync_cursor_empty() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        let cursor = service.get_sync_cursor("12D3KooWPeer1").unwrap();
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn test_store_remote_post_new() {
+        let (service, db, _identity_service, _peer_id) = create_test_env();
+
+        // Create a peer with a real signing key so we can create a valid signature
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+
+        // Add the peer as a contact with their real public key
+        let contact_data = ContactData {
+            peer_id: peer_peer_id.clone(),
+            public_key: peer_verifying.to_bytes().to_vec(),
+            x25519_public: vec![0u8; 32],
+            display_name: "Remote Peer".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Create a properly signed post
+        let signable = crate::services::SignablePost {
+            post_id: "remote-post-1".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Remote post content".to_string()),
+            media_hashes: vec![],
+            visibility: "public".to_string(),
+            lamport_clock: 1,
+            created_at: 1000,
+        };
+        let signature = crate::services::sign(&peer_signing, &signable).unwrap();
+
+        service
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Remote post content"),
+                visibility: "public",
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: &signature,
+            })
+            .unwrap();
+
+        // Verify post was stored
+        let post = PostsRepository::get_by_post_id(&db, "remote-post-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(post.content_text, Some("Remote post content".to_string()));
+    }
+
+    #[test]
+    fn test_store_remote_post_invalid_signature() {
+        let (service, db, _identity, _peer_id) = create_test_env();
+
+        // Add a contact
+        let (_peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+        let contact_data = ContactData {
+            peer_id: peer_peer_id.clone(),
+            public_key: peer_verifying.to_bytes().to_vec(),
+            x25519_public: vec![0u8; 32],
+            display_name: "Remote Peer".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Try to store with an invalid signature
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-post-bad",
+            author_peer_id: &peer_peer_id,
+            content_type: "text",
+            content_text: Some("Bad post"),
+            visibility: "public",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &vec![0u8; 64], // Invalid signature
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_store_remote_post_unknown_contact() {
+        let (service, _db, _identity, _peer_id) = create_test_env();
+
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-post",
+            author_peer_id: "12D3KooWUnknownPeer",
+            content_type: "text",
+            content_text: Some("Post"),
+            visibility: "public",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &vec![0u8; 64],
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_store_remote_post_update_existing() {
+        let (service, db, _identity, _peer_id) = create_test_env();
+
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+
+        let contact_data = ContactData {
+            peer_id: peer_peer_id.clone(),
+            public_key: peer_verifying.to_bytes().to_vec(),
+            x25519_public: vec![0u8; 32],
+            display_name: "Remote Peer".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Store first version
+        let signable1 = crate::services::SignablePost {
+            post_id: "remote-post-1".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Version 1".to_string()),
+            media_hashes: vec![],
+            visibility: "public".to_string(),
+            lamport_clock: 1,
+            created_at: 1000,
+        };
+        let sig1 = crate::services::sign(&peer_signing, &signable1).unwrap();
+
+        service
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Version 1"),
+                visibility: "public",
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: &sig1,
+            })
+            .unwrap();
+
+        // Store updated version with higher lamport clock
+        let signable2 = crate::services::SignablePost {
+            post_id: "remote-post-1".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Version 2".to_string()),
+            media_hashes: vec![],
+            visibility: "public".to_string(),
+            lamport_clock: 2,
+            created_at: 1000,
+        };
+        let sig2 = crate::services::sign(&peer_signing, &signable2).unwrap();
+
+        service
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Version 2"),
+                visibility: "public",
+                lamport_clock: 2,
+                created_at: 1000,
+                signature: &sig2,
+            })
+            .unwrap();
+
+        // Should have the updated content
+        let post = PostsRepository::get_by_post_id(&db, "remote-post-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(post.content_text, Some("Version 2".to_string()));
+        assert_eq!(post.lamport_clock, 2);
+    }
+
+    #[test]
+    fn test_store_remote_post_skip_older_version() {
+        let (service, db, _identity, _peer_id) = create_test_env();
+
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+
+        let contact_data = ContactData {
+            peer_id: peer_peer_id.clone(),
+            public_key: peer_verifying.to_bytes().to_vec(),
+            x25519_public: vec![0u8; 32],
+            display_name: "Remote Peer".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Store version with lamport_clock=5
+        let signable1 = crate::services::SignablePost {
+            post_id: "remote-post-1".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Newer version".to_string()),
+            media_hashes: vec![],
+            visibility: "public".to_string(),
+            lamport_clock: 5,
+            created_at: 1000,
+        };
+        let sig1 = crate::services::sign(&peer_signing, &signable1).unwrap();
+
+        service
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Newer version"),
+                visibility: "public",
+                lamport_clock: 5,
+                created_at: 1000,
+                signature: &sig1,
+            })
+            .unwrap();
+
+        // Try to store older version with lamport_clock=3
+        let signable2 = crate::services::SignablePost {
+            post_id: "remote-post-1".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Older version".to_string()),
+            media_hashes: vec![],
+            visibility: "public".to_string(),
+            lamport_clock: 3,
+            created_at: 1000,
+        };
+        let sig2 = crate::services::sign(&peer_signing, &signable2).unwrap();
+
+        // This should succeed but not update (older version is skipped)
+        service
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Older version"),
+                visibility: "public",
+                lamport_clock: 3,
+                created_at: 1000,
+                signature: &sig2,
+            })
+            .unwrap();
+
+        // Content should still be the newer version
+        let post = PostsRepository::get_by_post_id(&db, "remote-post-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(post.content_text, Some("Newer version".to_string()));
+        assert_eq!(post.lamport_clock, 5);
     }
 }

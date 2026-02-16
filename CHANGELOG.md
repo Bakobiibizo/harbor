@@ -147,3 +147,9 @@
 - style: fix pre-existing Rust formatting issues
 - feat: enable Tauri v2 updater with 1Password signing secrets
 
+## 2026-02-15 - v1.0.0
+
+- added audio project and updated cargo.toml
+- test: add comprehensive test coverage — 180 backend, 293 frontend tests
+- feat: implement 12 feature enhancements for v1 release
+

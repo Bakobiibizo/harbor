@@ -29,6 +29,7 @@ pub struct MessageInfo {
     pub read_at: Option<i64>,
     pub status: String,
     pub is_outgoing: bool,
+    pub edited_at: Option<i64>,
 }
 
 impl From<DecryptedMessage> for MessageInfo {
@@ -46,6 +47,7 @@ impl From<DecryptedMessage> for MessageInfo {
             read_at: msg.read_at,
             status: msg.status,
             is_outgoing: msg.is_outgoing,
+            edited_at: msg.edited_at,
         }
     }
 }
@@ -192,4 +194,63 @@ pub async fn get_total_unread_count(
     let conversations = messaging_service.get_conversations()?;
     let total: i64 = conversations.iter().map(|c| c.unread_count).sum();
     Ok(total)
+}
+
+/// Clear all messages in a conversation (keeps the conversation available)
+#[tauri::command]
+pub async fn clear_conversation_history(
+    messaging_service: State<'_, Arc<MessagingService>>,
+    peer_id: String,
+) -> Result<i64, AppError> {
+    info!("Clearing conversation history with peer {}", peer_id);
+    messaging_service.clear_conversation_history(&peer_id)
+}
+
+/// Delete a conversation and all its messages
+#[tauri::command]
+pub async fn delete_conversation(
+    messaging_service: State<'_, Arc<MessagingService>>,
+    peer_id: String,
+) -> Result<i64, AppError> {
+    info!("Deleting conversation with peer {}", peer_id);
+    messaging_service.delete_conversation(&peer_id)
+}
+
+/// Edit a sent message's content
+#[tauri::command]
+pub async fn edit_message(
+    messaging_service: State<'_, Arc<MessagingService>>,
+    network: State<'_, NetworkState>,
+    message_id: String,
+    new_content: String,
+    peer_id: String,
+) -> Result<(), AppError> {
+    info!("Editing message {}", message_id);
+
+    // Update locally
+    messaging_service.edit_message(&message_id, &new_content)?;
+
+    // Best-effort sync to peer: send an EditMessage over the network
+    let edit_msg = MessagingMessage::EditMessage {
+        message_id: message_id.clone(),
+        new_content: new_content.clone(),
+        edited_at: chrono::Utc::now().timestamp(),
+    };
+
+    if let Ok(payload) = MessagingCodec::encode(&edit_msg) {
+        let libp2p_peer_id = PeerId::from_str(&peer_id)
+            .map_err(|e| AppError::Validation(format!("Invalid peer ID: {}", e)))?;
+
+        if let Ok(handle) = network.get_handle().await {
+            let _ = handle
+                .send_message(libp2p_peer_id, "message".to_string(), payload)
+                .await;
+            info!(
+                "Edit for message {} sent to peer {} (best effort)",
+                message_id, peer_id
+            );
+        }
+    }
+
+    Ok(())
 }

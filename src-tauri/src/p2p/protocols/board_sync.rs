@@ -49,6 +49,35 @@ pub enum BoardSyncRequest {
         timestamp: i64,
         signature: Vec<u8>,
     },
+    /// Submit a wall post to the relay for offline availability
+    SubmitWallPost {
+        author_peer_id: String,
+        post_id: String,
+        content_type: String,
+        content_text: Option<String>,
+        visibility: String,
+        lamport_clock: i64,
+        created_at: i64,
+        signature: Vec<u8>,
+        timestamp: i64,
+        request_signature: Vec<u8>,
+    },
+    /// Get wall posts for a specific author
+    GetWallPosts {
+        requester_peer_id: String,
+        author_peer_id: String,
+        since_lamport_clock: i64,
+        limit: u32,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
+    /// Delete a wall post from the relay
+    DeleteWallPost {
+        author_peer_id: String,
+        post_id: String,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
 }
 
 /// Board info in responses
@@ -75,6 +104,20 @@ pub struct BoardPostInfo {
     pub signature: Vec<u8>,
 }
 
+/// Wall post data in responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WallPostData {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub visibility: String,
+    pub lamport_clock: i64,
+    pub created_at: i64,
+    pub signature: Vec<u8>,
+    pub stored_at: i64,
+}
+
 /// Board sync response (wire protocol)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -96,6 +139,15 @@ pub enum BoardSyncResponse {
     PeerRegistered { peer_id: String },
     /// Post was deleted
     PostDeleted { post_id: String },
+    /// Wall posts for a specific author
+    WallPosts {
+        posts: Vec<WallPostData>,
+        has_more: bool,
+    },
+    /// Wall post was stored on the relay
+    WallPostStored { post_id: String },
+    /// Wall post was deleted from the relay
+    WallPostDeleted { post_id: String },
     /// Error response
     Error { error: String },
 }

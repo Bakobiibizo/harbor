@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Harbor Relay Server - Lightweight NAT traversal relay (no community boards)"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Configuration"
+        Parameters:
+          - InstanceType
+          - KeyPairName
+      - Label:
+          default: "Relay Configuration"
+        Parameters:
+          - RelayPort
+          - MaxReservations
+          - MaxCircuits
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t2.small
+      - t3.small
+    Description: "EC2 instance type. t2.micro and t3.micro are free tier eligible (750 hours/month)"
+
+  KeyPairName:
+    Type: String
+    Default: ""
+    Description: "(Optional) EC2 key pair name for SSH access. Leave empty to disable SSH."
+
+  RelayPort:
+    Type: Number
+    Default: 4001
+    MinValue: 1024
+    MaxValue: 65535
+    Description: "Port for the libp2p relay server"
+
+  MaxReservations:
+    Type: Number
+    Default: 128
+    Description: "Maximum number of relay reservations (peers that can use this relay)"
+
+  MaxCircuits:
+    Type: Number
+    Default: 16
+    Description: "Maximum number of active relay circuits per peer"
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+
+Resources:
+  # VPC for the relay server
+  RelayVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref RelayVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref RelayVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet"
+
+  # Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RelayVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-rt"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group
+  RelaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Security group for ${AWS::StackName} Harbor relay server"
+      VpcId: !Ref RelayVPC
+      SecurityGroupIngress:
+        # libp2p relay port (TCP)
+        - IpProtocol: tcp
+          FromPort: !Ref RelayPort
+          ToPort: !Ref RelayPort
+          CidrIp: 0.0.0.0/0
+          Description: libp2p relay TCP
+        # libp2p relay port (UDP for QUIC)
+        - IpProtocol: udp
+          FromPort: !Ref RelayPort
+          ToPort: !Ref RelayPort
+          CidrIp: 0.0.0.0/0
+          Description: libp2p relay UDP/QUIC
+        # SSH access (only if key pair provided)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-sg"
+
+  # SSM Parameter to store the relay address
+  RelayAddressParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/harbor/${AWS::StackName}/relay-address"
+      Type: String
+      Value: "Starting up... check back in 2 minutes"
+      Description: !Sub "Full relay address for Harbor (${AWS::StackName}) - copy this into the app"
+      Tags:
+        Application: harbor-chat
+
+  # IAM Role for EC2
+  RelayInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: WriteRelayAddress
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/harbor/${AWS::StackName}/relay-address"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-role"
+
+  RelayInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref RelayInstanceRole
+
+  # Elastic IP for stable address
+  RelayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-eip"
+
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref RelayInstance
+      AllocationId: !GetAtt RelayEIP.AllocationId
+
+  # EC2 Instance
+  RelayInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
+      IamInstanceProfile: !Ref RelayInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref RelaySecurityGroup
+          SubnetId: !Ref PublicSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            Encrypted: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+          echo "=== Starting Harbor Relay Setup ==="
+          echo "Region: ${AWS::Region}"
+          echo "Stack: ${AWS::StackName}"
+          echo "RelayPort: ${RelayPort}"
+
+          SERVICE_NAME="${AWS::StackName}-relay"
+          BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
+          EXPECTED_SHA256="ec1bd2bbc523cafb64d34bb65d3715f3d99fb32358ebe310a32242fd4f2d8db7"
+
+          # Download pre-compiled binary
+          echo "Downloading pre-compiled relay binary..."
+          curl -L --retry 3 --retry-delay 5 -o /usr/local/bin/harbor-relay "$BINARY_URL"
+
+          if [ ! -s /usr/local/bin/harbor-relay ]; then
+            echo "ERROR: Binary download failed or file is empty"
+            exit 1
+          fi
+
+          # Verify SHA256 hash
+          echo "Verifying binary integrity..."
+          ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: SHA256 mismatch!"
+            echo "  Expected: $EXPECTED_SHA256"
+            echo "  Got:      $ACTUAL_SHA256"
+            exit 1
+          fi
+          echo "SHA256 verified OK"
+
+          chmod +x /usr/local/bin/harbor-relay
+
+          # Create config directory
+          # The relay binary generates a unique identity key on first start
+          mkdir -p /root/.config/harbor-relay
+
+          # Get public IP using IMDSv2
+          echo "Getting public IP..."
+          IMDS_TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+          PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null)
+
+          if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -q "<?xml"; then
+            echo "IMDSv2 failed, trying external IP service..."
+            PUBLIC_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\n')
+          fi
+
+          if [ -z "$PUBLIC_IP" ]; then
+            echo "ERROR: Could not determine public IP"
+            exit 1
+          fi
+          echo "Public IP: $PUBLIC_IP"
+
+          # Create systemd service (relay only, no community boards)
+          echo "Creating systemd service: $SERVICE_NAME"
+          cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
+          [Unit]
+          Description=Harbor Relay Server (${AWS::StackName})
+          After=network.target
+
+          [Service]
+          Type=simple
+          Restart=always
+          RestartSec=10
+          Environment=RUST_LOG=info
+          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --max-reservations ${MaxReservations} --max-circuits-per-peer ${MaxCircuits}
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICEEOF
+
+          # Start the relay service
+          echo "Starting relay service..."
+          systemctl daemon-reload
+          systemctl enable $SERVICE_NAME
+          systemctl start $SERVICE_NAME
+
+          # Wait for startup and extract the dynamically generated peer ID
+          echo "Waiting for relay to generate identity and start..."
+          RELAY_PEER_ID=""
+          for i in $(seq 1 30); do
+            sleep 2
+            RELAY_PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>/dev/null | grep 'Local Peer ID:' | head -1 | sed 's/.*Local Peer ID: //')
+            if [ -n "$RELAY_PEER_ID" ]; then
+              echo "Peer ID found: $RELAY_PEER_ID"
+              break
+            fi
+            echo "Waiting for peer ID (attempt $i/30)..."
+          done
+
+          if [ -z "$RELAY_PEER_ID" ]; then
+            echo "ERROR: Could not extract peer ID from relay logs after 60 seconds"
+            echo "--- Recent service logs ---"
+            journalctl -u $SERVICE_NAME --no-pager -n 50
+            exit 1
+          fi
+
+          # Verify port is listening
+          for i in $(seq 1 10); do
+            if ss -tlnp | grep -q ":${RelayPort}"; then
+              echo "Port ${RelayPort} is listening"
+              break
+            fi
+            echo "Waiting for port ${RelayPort} (attempt $i/10)..."
+            sleep 2
+          done
+
+          systemctl status $SERVICE_NAME --no-pager || true
+
+          # Write relay address to SSM Parameter Store
+          SSM_PARAM_NAME="/harbor/${AWS::StackName}/relay-address"
+          RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/${RelayPort}/p2p/$RELAY_PEER_ID"
+
+          echo "Relay address: $RELAY_ADDRESS"
+
+          aws ssm put-parameter \
+            --name "$SSM_PARAM_NAME" \
+            --value "$RELAY_ADDRESS" \
+            --type String \
+            --overwrite \
+            --region ${AWS::Region}
+
+          echo "=== SUCCESS ==="
+          echo "YOUR RELAY ADDRESS (copy this to Harbor):"
+          echo "$RELAY_ADDRESS"
+          echo "Service: $SERVICE_NAME"
+          echo ""
+          echo "To retrieve this address later:"
+          echo "  aws ssm get-parameter --name '$SSM_PARAM_NAME' --query 'Parameter.Value' --output text --region ${AWS::Region}"
+          echo "=== Setup Complete ==="
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-server"
+        - Key: Application
+          Value: harbor-chat
+
+Outputs:
+  RelayPublicIP:
+    Description: "Relay server public IP"
+    Value: !Ref RelayEIP
+
+  GetRelayAddress:
+    Description: "STEP 1: Run this command to get your full relay address (includes unique peer ID)"
+    Value: !Sub "aws ssm get-parameter --name '/harbor/${AWS::StackName}/relay-address' --query 'Parameter.Value' --output text --region ${AWS::Region}"
+
+  SSMConsoleLink:
+    Description: "STEP 1 (alternative): View relay address in the AWS console"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/systems-manager/parameters/harbor/${AWS::StackName}/relay-address/description?region=${AWS::Region}"
+
+  Step2Instructions:
+    Description: "STEP 2: Paste the relay address into Harbor"
+    Value: "Open Harbor > Network > Advanced > Add Relay Address"
+
+  ServiceName:
+    Description: "Systemd service name (for SSH troubleshooting)"
+    Value: !Sub "${AWS::StackName}-relay"
+
+  EstimatedMonthlyCost:
+    Description: "Cost: FREE for 12 months, then ~$9/month"
+    Value: "AWS Free Tier: 750 hours/month for first year"

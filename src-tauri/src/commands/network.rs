@@ -1,8 +1,8 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::{
-    ContactsService, ContentSyncService, IdentityService, MessagingService, PermissionsService,
-    PostsService,
+    BoardService, ContactsService, ContentSyncService, IdentityService, MessagingService,
+    PermissionsService, PostsService,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -72,7 +72,22 @@ pub async fn bootstrap_network(network: State<'_, NetworkState>) -> Result<(), A
     handle.bootstrap().await
 }
 
+/// Services needed to start the P2P network
+pub struct StartNetworkServices {
+    pub identity_service: Arc<IdentityService>,
+    pub messaging_service: Arc<MessagingService>,
+    pub contacts_service: Arc<ContactsService>,
+    pub permissions_service: Arc<PermissionsService>,
+    pub posts_service: Arc<PostsService>,
+    pub content_sync_service: Arc<ContentSyncService>,
+    pub board_service: Arc<BoardService>,
+}
+
 /// Start the P2P network (called after identity is unlocked)
+///
+/// Note: Tauri State<> parameters are auto-injected by the framework and cannot be
+/// grouped into a struct. The actual logic is delegated to start_network_with_services
+/// which uses a StartNetworkServices parameter struct.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_network(
@@ -84,7 +99,27 @@ pub async fn start_network(
     permissions_service: State<'_, Arc<PermissionsService>>,
     posts_service: State<'_, Arc<PostsService>>,
     content_sync_service: State<'_, Arc<ContentSyncService>>,
+    board_service: State<'_, Arc<BoardService>>,
 ) -> Result<(), AppError> {
+    let services = StartNetworkServices {
+        identity_service: (*identity_service).clone(),
+        messaging_service: (*messaging_service).clone(),
+        contacts_service: (*contacts_service).clone(),
+        permissions_service: (*permissions_service).clone(),
+        posts_service: (*posts_service).clone(),
+        content_sync_service: (*content_sync_service).clone(),
+        board_service: (*board_service).clone(),
+    };
+    start_network_with_services(app, network, services).await
+}
+
+/// Internal implementation for starting the P2P network
+async fn start_network_with_services(
+    app: AppHandle,
+    network: State<'_, NetworkState>,
+    services: StartNetworkServices,
+) -> Result<(), AppError> {
+    let identity_service = &services.identity_service;
     // Check if identity is unlocked
     if !identity_service.is_unlocked() {
         return Err(AppError::IdentityLocked(
@@ -129,15 +164,16 @@ pub async fn start_network(
     let config = NetworkConfig::default();
 
     // Create network service - clone the Arc to pass to the service
-    let identity_arc: Arc<IdentityService> = (*identity_service).clone();
+    let identity_arc: Arc<IdentityService> = services.identity_service.clone();
     let (mut service, handle, mut event_rx) = NetworkService::new(config, identity_arc, keypair)?;
 
-    // Inject services for message processing, contact storage, permissions, and content sync
-    service.set_messaging_service((*messaging_service).clone());
-    service.set_contacts_service((*contacts_service).clone());
-    service.set_permissions_service((*permissions_service).clone());
-    service.set_posts_service((*posts_service).clone());
-    service.set_content_sync_service((*content_sync_service).clone());
+    // Inject services for message processing, contact storage, permissions, content sync, and boards
+    service.set_messaging_service(services.messaging_service.clone());
+    service.set_contacts_service(services.contacts_service.clone());
+    service.set_permissions_service(services.permissions_service.clone());
+    service.set_posts_service(services.posts_service.clone());
+    service.set_content_sync_service(services.content_sync_service.clone());
+    service.set_board_service(services.board_service.clone());
 
     // Store the handle
     network.set_handle(handle).await;

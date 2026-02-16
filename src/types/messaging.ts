@@ -12,6 +12,7 @@ export interface Message {
   readAt: number | null;
   status: MessageStatus;
   isOutgoing: boolean;
+  editedAt: number | null;
 }
 
 /** Message delivery status */

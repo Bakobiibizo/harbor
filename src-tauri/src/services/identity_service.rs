@@ -91,7 +91,7 @@ impl IdentityService {
         let (x25519_secret, x25519_public) = CryptoService::generate_x25519_keypair();
 
         // Derive peer ID using libp2p's format for network compatibility
-        let peer_id = CryptoService::derive_peer_id_from_signing_key(&ed25519_signing);
+        let peer_id = CryptoService::derive_peer_id_from_signing_key(&ed25519_signing)?;
         info!(
             "Derived peer ID from signing key: {} (length: {})",
             peer_id,

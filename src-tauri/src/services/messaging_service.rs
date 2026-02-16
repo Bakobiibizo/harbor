@@ -39,6 +39,7 @@ pub struct DecryptedMessage {
     pub read_at: Option<i64>,
     pub status: String,
     pub is_outgoing: bool,
+    pub edited_at: Option<i64>,
 }
 
 /// A message ready to be sent over the network
@@ -55,6 +56,21 @@ pub struct OutgoingMessage {
     pub lamport_clock: u64,
     pub timestamp: i64,
     pub signature: Vec<u8>,
+}
+
+/// Parameters for processing an incoming message from the network
+pub struct IncomingMessageParams<'a> {
+    pub message_id: &'a str,
+    pub conversation_id: &'a str,
+    pub sender_peer_id: &'a str,
+    pub recipient_peer_id: &'a str,
+    pub content_encrypted: &'a [u8],
+    pub content_type: &'a str,
+    pub reply_to: Option<&'a str>,
+    pub nonce_counter: u64,
+    pub lamport_clock: u64,
+    pub timestamp: i64,
+    pub signature: &'a [u8],
 }
 
 impl MessagingService {
@@ -219,21 +235,18 @@ impl MessagingService {
     }
 
     /// Process an incoming message from the network
-    #[allow(clippy::too_many_arguments)]
-    pub fn process_incoming_message(
-        &self,
-        message_id: &str,
-        conversation_id: &str,
-        sender_peer_id: &str,
-        recipient_peer_id: &str,
-        content_encrypted: &[u8],
-        content_type: &str,
-        reply_to: Option<&str>,
-        nonce_counter: u64,
-        lamport_clock: u64,
-        timestamp: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn process_incoming_message(&self, params: &IncomingMessageParams<'_>) -> Result<()> {
+        let message_id = params.message_id;
+        let conversation_id = params.conversation_id;
+        let sender_peer_id = params.sender_peer_id;
+        let recipient_peer_id = params.recipient_peer_id;
+        let content_encrypted = params.content_encrypted;
+        let content_type = params.content_type;
+        let reply_to = params.reply_to;
+        let nonce_counter = params.nonce_counter;
+        let lamport_clock = params.lamport_clock;
+        let timestamp = params.timestamp;
+        let signature = params.signature;
         // Verify we are the recipient
         let identity = self
             .identity_service
@@ -543,6 +556,7 @@ impl MessagingService {
                 read_at: msg.read_at,
                 status: msg.status,
                 is_outgoing: msg.sender_peer_id == identity.peer_id,
+                edited_at: msg.edited_at,
             });
         }
 
@@ -596,5 +610,425 @@ impl MessagingService {
     pub fn update_message_status(&self, message_id: &str, status: MessageStatus) -> Result<bool> {
         MessagesRepository::update_status(&self.db, message_id, status)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+
+    /// Clear all messages in a conversation (keeps the conversation visible if new messages arrive)
+    pub fn clear_conversation_history(&self, peer_id: &str) -> Result<i64> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
+
+        MessagesRepository::clear_conversation_messages(&self.db, &conversation_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+
+    /// Edit a sent message's content (re-encrypts and updates the DB)
+    pub fn edit_message(&self, message_id: &str, new_content: &str) -> Result<()> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        // Get the original message
+        let original = MessagesRepository::get_by_message_id(&self.db, message_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+            .ok_or_else(|| AppError::NotFound("Message not found".to_string()))?;
+
+        // Verify we are the sender
+        if original.sender_peer_id != identity.peer_id {
+            return Err(AppError::PermissionDenied(
+                "Can only edit your own messages".to_string(),
+            ));
+        }
+
+        // Determine the peer (the other party)
+        let peer_id = &original.recipient_peer_id;
+
+        // Get peer's X25519 key for encryption
+        let x25519_public = self
+            .contacts_service
+            .get_x25519_public(peer_id)?
+            .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;
+
+        let our_keys = self.identity_service.get_unlocked_keys()?;
+
+        // Derive conversation key
+        let their_public = X25519Public::from(
+            <[u8; 32]>::try_from(x25519_public.as_slice())
+                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?,
+        );
+        let shared_secret = CryptoService::x25519_dh(&our_keys.x25519_secret, &their_public);
+        let conv_key = CryptoService::derive_conversation_key(
+            &shared_secret,
+            &original.conversation_id,
+            &identity.peer_id,
+            peer_id,
+        );
+
+        // Re-encrypt with the same nonce counter (content replacement)
+        let new_content_encrypted = CryptoService::encrypt_message_with_counter(
+            &conv_key,
+            new_content.as_bytes(),
+            original.nonce_counter,
+        )?;
+
+        let edited_at = chrono::Utc::now().timestamp();
+
+        // Update in database
+        MessagesRepository::update_message_content(
+            &self.db,
+            message_id,
+            &new_content_encrypted,
+            edited_at,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Apply an incoming edit from a peer (re-encrypts and stores)
+    pub fn apply_incoming_edit(&self, message_id: &str, new_content: &str) -> Result<()> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        // Get the original message
+        let original = MessagesRepository::get_by_message_id(&self.db, message_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+            .ok_or_else(|| AppError::NotFound("Message not found".to_string()))?;
+
+        // Verify the message was sent by the peer (not by us)
+        if original.sender_peer_id == identity.peer_id {
+            return Err(AppError::Validation(
+                "Cannot apply incoming edit to our own message".to_string(),
+            ));
+        }
+
+        let peer_id = &original.sender_peer_id;
+
+        // Get peer's X25519 key for encryption
+        let x25519_public = self
+            .contacts_service
+            .get_x25519_public(peer_id)?
+            .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;
+
+        let our_keys = self.identity_service.get_unlocked_keys()?;
+
+        // Derive conversation key
+        let their_public = X25519Public::from(
+            <[u8; 32]>::try_from(x25519_public.as_slice())
+                .map_err(|_| AppError::Crypto("Invalid X25519 key".to_string()))?,
+        );
+        let shared_secret = CryptoService::x25519_dh(&our_keys.x25519_secret, &their_public);
+        let conv_key = CryptoService::derive_conversation_key(
+            &shared_secret,
+            &original.conversation_id,
+            &identity.peer_id,
+            peer_id,
+        );
+
+        // Re-encrypt with the same nonce counter
+        let new_content_encrypted = CryptoService::encrypt_message_with_counter(
+            &conv_key,
+            new_content.as_bytes(),
+            original.nonce_counter,
+        )?;
+
+        let edited_at = chrono::Utc::now().timestamp();
+
+        // Update in database
+        MessagesRepository::update_message_content(
+            &self.db,
+            message_id,
+            &new_content_encrypted,
+            edited_at,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Get the database reference (for testing)
+    #[cfg(test)]
+    pub fn db(&self) -> &Database {
+        &self.db
+    }
+
+    /// Delete a conversation and all its messages entirely
+    pub fn delete_conversation(&self, peer_id: &str) -> Result<i64> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+
+        let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
+
+        MessagesRepository::delete_conversation(&self.db, &conversation_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{Capability, ContactData, ContactsRepository};
+    use crate::models::CreateIdentityRequest;
+    use crate::services::{ContactsService, CryptoService, PermissionsService};
+    use std::sync::Arc;
+
+    /// Set up two identities (ours and a peer) and return the service plus metadata.
+    /// The peer is added as a contact with chat permission granted.
+    fn create_test_env() -> (
+        MessagingService,
+        Arc<IdentityService>,
+        String, // our peer_id
+        String, // peer's peer_id
+    ) {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+
+        // Create our identity
+        let info = identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Our User".to_string(),
+                passphrase: "test-pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let our_peer_id = info.peer_id;
+
+        // Create a fake peer with X25519 keys
+        let (_peer_ed25519, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let (_peer_x25519_secret, peer_x25519_public) = CryptoService::generate_x25519_keypair();
+
+        let peer_peer_id = "12D3KooWPeerTest123456789".to_string();
+
+        // Add the peer as a contact
+        let contact_data = ContactData {
+            peer_id: peer_peer_id.clone(),
+            public_key: peer_verifying.to_bytes().to_vec(),
+            x25519_public: peer_x25519_public.to_bytes().to_vec(),
+            display_name: "Peer User".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(&db, &contact_data).unwrap();
+
+        // Grant chat permission to the peer
+        permissions_service
+            .create_permission_grant(&peer_peer_id, Capability::Chat, None)
+            .unwrap();
+
+        let messaging_service = MessagingService::new(
+            db,
+            identity_service.clone(),
+            contacts_service,
+            permissions_service,
+        );
+
+        (
+            messaging_service,
+            identity_service,
+            our_peer_id,
+            peer_peer_id,
+        )
+    }
+
+    #[test]
+    fn test_send_message_success() {
+        let (service, _identity, our_peer_id, peer_peer_id) = create_test_env();
+
+        let msg = service
+            .send_message(&peer_peer_id, "Hello!", "text", None)
+            .unwrap();
+
+        assert!(!msg.message_id.is_empty());
+        assert_eq!(msg.sender_peer_id, our_peer_id);
+        assert_eq!(msg.recipient_peer_id, peer_peer_id);
+        assert!(!msg.content_encrypted.is_empty());
+        assert!(!msg.signature.is_empty());
+        assert_eq!(msg.content_type, "text");
+    }
+
+    #[test]
+    fn test_send_message_requires_identity() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+        let service =
+            MessagingService::new(db, identity_service, contacts_service, permissions_service);
+
+        let result = service.send_message("12D3KooWPeer", "Hello!", "text", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_message_no_permission_fails() {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity_service = Arc::new(IdentityService::new(db.clone()));
+        let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let permissions_service = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test".to_string(),
+                passphrase: "pass".to_string(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+
+        let service =
+            MessagingService::new(db, identity_service, contacts_service, permissions_service);
+
+        // No permission granted to this peer
+        let result = service.send_message("12D3KooWUnknownPeer", "Hello!", "text", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_multiple_messages_increment_counters() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        let msg1 = service
+            .send_message(&peer_peer_id, "First", "text", None)
+            .unwrap();
+        let msg2 = service
+            .send_message(&peer_peer_id, "Second", "text", None)
+            .unwrap();
+
+        assert!(msg2.nonce_counter > msg1.nonce_counter);
+        assert!(msg2.lamport_clock > msg1.lamport_clock);
+    }
+
+    #[test]
+    fn test_get_conversations() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        // Send a message to create a conversation
+        service
+            .send_message(&peer_peer_id, "Hello!", "text", None)
+            .unwrap();
+
+        let conversations = service.get_conversations().unwrap();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].peer_id, peer_peer_id);
+    }
+
+    #[test]
+    fn test_get_conversations_empty() {
+        let (service, _identity, _our_peer_id, _peer_peer_id) = create_test_env();
+
+        let conversations = service.get_conversations().unwrap();
+        assert!(conversations.is_empty());
+    }
+
+    #[test]
+    fn test_update_message_status() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        let msg = service
+            .send_message(&peer_peer_id, "Hello!", "text", None)
+            .unwrap();
+
+        let updated = service
+            .update_message_status(&msg.message_id, MessageStatus::Sent)
+            .unwrap();
+        assert!(updated);
+    }
+
+    #[test]
+    fn test_update_message_status_nonexistent() {
+        let (service, _identity, _our_peer_id, _peer_peer_id) = create_test_env();
+
+        let updated = service
+            .update_message_status("nonexistent-msg", MessageStatus::Sent)
+            .unwrap();
+        assert!(!updated);
+    }
+
+    #[test]
+    fn test_clear_conversation_history() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        // Send some messages
+        service
+            .send_message(&peer_peer_id, "Msg 1", "text", None)
+            .unwrap();
+        service
+            .send_message(&peer_peer_id, "Msg 2", "text", None)
+            .unwrap();
+
+        let cleared = service.clear_conversation_history(&peer_peer_id).unwrap();
+        assert_eq!(cleared, 2);
+    }
+
+    #[test]
+    fn test_clear_empty_conversation() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        let cleared = service.clear_conversation_history(&peer_peer_id).unwrap();
+        assert_eq!(cleared, 0);
+    }
+
+    #[test]
+    fn test_delete_conversation() {
+        let (service, _identity, _our_peer_id, peer_peer_id) = create_test_env();
+
+        service
+            .send_message(&peer_peer_id, "Msg 1", "text", None)
+            .unwrap();
+        service
+            .send_message(&peer_peer_id, "Msg 2", "text", None)
+            .unwrap();
+
+        let deleted = service.delete_conversation(&peer_peer_id).unwrap();
+        assert_eq!(deleted, 2);
+
+        // Conversations should be empty now
+        let conversations = service.get_conversations().unwrap();
+        assert!(conversations.is_empty());
+    }
+
+    #[test]
+    fn test_send_message_locked_identity_fails() {
+        let (service, identity_service, _our_peer_id, peer_peer_id) = create_test_env();
+
+        identity_service.lock();
+
+        let result = service.send_message(&peer_peer_id, "Hello!", "text", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_conversation_id_is_deterministic() {
+        // Conversation IDs should be the same regardless of direction
+        let id1 = derive_conversation_id("peer-a", "peer-b");
+        let id2 = derive_conversation_id("peer-b", "peer-a");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_conversation_id_different_peers() {
+        let id1 = derive_conversation_id("peer-a", "peer-b");
+        let id2 = derive_conversation_id("peer-a", "peer-c");
+        assert_ne!(id1, id2);
     }
 }
