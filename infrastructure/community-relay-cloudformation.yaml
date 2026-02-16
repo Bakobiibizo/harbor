@@ -244,7 +244,7 @@ Resources:
 
           SERVICE_NAME="${AWS::StackName}-community-relay"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
-          EXPECTED_SHA256="d4ec24a760ac450cf20c263ba3d81f00bb5cf59aef903145a4fac6ee1f129dc3"
+          EXPECTED_SHA256="51c4391f8bccfcb5f5d224b357c07e3927ba6c2541f80e36ac9c99478e4c7fe1"
           IDENTITY_SSM_PARAM="/harbor/${AWS::StackName}/identity-key"
           EIP_SSM_PARAM="/harbor/${AWS::StackName}/eip-allocation-id"
           REGION="${AWS::Region}"
