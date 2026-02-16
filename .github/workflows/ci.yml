@@ -37,8 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install dev and system dependencies
-        run: .dev/bin/dev language set rust && .dev/bin/dev setup run system_packages && .dev/bin/dev install
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: install dev
+        run: .dev/bin/dev language set rust && .dev/bin/dev install
 
       - name: run ci
         run: .dev/bin/dev ci
