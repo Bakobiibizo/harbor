@@ -148,3 +148,15 @@ test = ["rust_test"]
 fix = ["rust_fix"]
 check = ["rust_ci"]
 ci = ["rust_ci"]
+
+# ===================== Setup ========================
+
+[setup]
+extra_packages = [
+  "libglib2.0-dev",
+  "libgtk-3-dev",
+  "libwebkit2gtk-4.1-dev",
+  "libappindicator3-dev",
+  "librsvg2-dev",
+  "patchelf"
+]
