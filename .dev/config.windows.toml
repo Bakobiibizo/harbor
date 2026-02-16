@@ -114,7 +114,7 @@ commands = [
 [tasks.check_all]
 commands = [
   "ts_check",
-  "rust_check"
+  "rust_lint_check"
 ]
 
 [tasks.tauri_dev]

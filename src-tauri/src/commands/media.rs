@@ -82,7 +82,7 @@ pub async fn get_media_url(
     #[cfg(not(target_os = "windows"))]
     let url = format!(
         "https://asset.localhost{}",
-        urlencoding::encode(&*path_str).replace("%2F", "/")
+        urlencoding::encode(&path_str).replace("%2F", "/")
     );
 
     Ok(url)
