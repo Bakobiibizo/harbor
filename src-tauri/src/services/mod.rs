@@ -23,8 +23,8 @@ pub use content_sync_service::{
 };
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
-pub use media_service::MediaStorageService;
 pub use identity_service::IdentityService;
+pub use media_service::MediaStorageService;
 pub use messaging_service::{DecryptedMessage, MessagingService, OutgoingMessage};
 pub use permissions_service::{
     PermissionGrantMessage, PermissionRequestMessage, PermissionRevokeMessage, PermissionsService,
@@ -46,6 +46,8 @@ pub use signing::{
     SignableContentManifestResponse,
     // Direct messages
     SignableDirectMessage,
+    // Wall post relay sync
+    SignableGetWallPosts,
     // Identity messages
     SignableIdentityRequest,
     SignableIdentityResponse,
@@ -64,8 +66,6 @@ pub use signing::{
     SignableSignalingIce,
     // Signaling messages (voice calls)
     SignableSignalingOffer,
-    // Wall post relay sync
-    SignableGetWallPosts,
     SignableWallPostDelete,
     SignableWallPostSubmit,
 };

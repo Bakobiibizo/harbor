@@ -7,6 +7,7 @@ use x25519_dalek::PublicKey as X25519Public;
 
 use crate::db::{
     Capability, Conversation, Database, MessageData, MessageStatus, MessagesRepository,
+    RecordMessageEventParams,
 };
 use crate::error::{AppError, Result};
 use crate::p2p::protocols::messaging::derive_conversation_id;
@@ -57,6 +58,21 @@ pub struct OutgoingMessage {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for processing an incoming message from the network
+pub struct IncomingMessageParams<'a> {
+    pub message_id: &'a str,
+    pub conversation_id: &'a str,
+    pub sender_peer_id: &'a str,
+    pub recipient_peer_id: &'a str,
+    pub content_encrypted: &'a [u8],
+    pub content_type: &'a str,
+    pub reply_to: Option<&'a str>,
+    pub nonce_counter: u64,
+    pub lamport_clock: u64,
+    pub timestamp: i64,
+    pub signature: &'a [u8],
+}
+
 impl MessagingService {
     /// Create a new messaging service
     pub fn new(
@@ -85,7 +101,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Check we have chat permission with this peer
         if !self
@@ -188,16 +204,18 @@ impl MessagingService {
         let payload_cbor = signable.signable_bytes()?;
         MessagesRepository::record_message_event(
             &self.db,
-            &event_id,
-            "sent",
-            &message_id,
-            &conversation_id,
-            &identity.peer_id,
-            recipient_peer_id,
-            lamport_clock as i64,
-            timestamp,
-            &payload_cbor,
-            &signature,
+            &RecordMessageEventParams {
+                event_id: &event_id,
+                event_type: "sent",
+                message_id: &message_id,
+                conversation_id: &conversation_id,
+                sender_peer_id: &identity.peer_id,
+                recipient_peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp,
+                payload_cbor: &payload_cbor,
+                signature: &signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -217,26 +235,23 @@ impl MessagingService {
     }
 
     /// Process an incoming message from the network
-    #[allow(clippy::too_many_arguments)]
-    pub fn process_incoming_message(
-        &self,
-        message_id: &str,
-        conversation_id: &str,
-        sender_peer_id: &str,
-        recipient_peer_id: &str,
-        content_encrypted: &[u8],
-        content_type: &str,
-        reply_to: Option<&str>,
-        nonce_counter: u64,
-        lamport_clock: u64,
-        timestamp: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn process_incoming_message(&self, params: &IncomingMessageParams<'_>) -> Result<()> {
+        let message_id = params.message_id;
+        let conversation_id = params.conversation_id;
+        let sender_peer_id = params.sender_peer_id;
+        let recipient_peer_id = params.recipient_peer_id;
+        let content_encrypted = params.content_encrypted;
+        let content_type = params.content_type;
+        let reply_to = params.reply_to;
+        let nonce_counter = params.nonce_counter;
+        let lamport_clock = params.lamport_clock;
+        let timestamp = params.timestamp;
+        let signature = params.signature;
         // Verify we are the recipient
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         tracing::info!(
             "MESSAGE RECEIVE - recipient in msg: {} (len={}) vs our identity: {} (len={})",
@@ -340,16 +355,18 @@ impl MessagingService {
         let payload_cbor = signable.signable_bytes()?;
         MessagesRepository::record_message_event(
             &self.db,
-            &event_id,
-            "received",
-            message_id,
-            conversation_id,
-            sender_peer_id,
-            recipient_peer_id,
-            lamport_clock as i64,
-            timestamp,
-            &payload_cbor,
-            signature,
+            &RecordMessageEventParams {
+                event_id: &event_id,
+                event_type: "received",
+                message_id,
+                conversation_id,
+                sender_peer_id,
+                recipient_peer_id,
+                lamport_clock: lamport_clock as i64,
+                timestamp,
+                payload_cbor: &payload_cbor,
+                signature,
+            },
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -361,7 +378,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let message = MessagesRepository::get_by_message_id(&self.db, message_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
@@ -387,7 +404,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let message = MessagesRepository::get_by_message_id(&self.db, message_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
@@ -480,7 +497,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
 
@@ -551,7 +568,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         MessagesRepository::get_conversations(&self.db, &identity.peer_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
@@ -562,7 +579,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
         let timestamp = chrono::Utc::now().timestamp();
@@ -581,7 +598,7 @@ impl MessagingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let conversation_id = derive_conversation_id(&identity.peer_id, peer_id);
 

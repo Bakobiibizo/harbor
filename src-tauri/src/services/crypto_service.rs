@@ -36,8 +36,8 @@ impl CryptoService {
         let secret =
             libp2p::identity::ed25519::SecretKey::try_from_bytes(signing_key.to_bytes().to_vec())
                 .map_err(|e| {
-                    AppError::Crypto(format!("Failed to convert Ed25519 signing key: {}", e))
-                })?;
+                AppError::Crypto(format!("Failed to convert Ed25519 signing key: {}", e))
+            })?;
         let libp2p_keypair = libp2p::identity::ed25519::Keypair::from(secret);
         let libp2p_keypair = libp2p::identity::Keypair::from(libp2p_keypair);
         let peer_id = libp2p::PeerId::from(libp2p_keypair.public());
@@ -50,12 +50,11 @@ impl CryptoService {
     /// included in an identity response actually derives the claimed peer ID.
     /// Uses libp2p's actual PeerId derivation for network compatibility.
     pub fn derive_peer_id_from_verifying_key(verifying_key: &VerifyingKey) -> Result<String> {
-        let libp2p_public_key = libp2p::identity::ed25519::PublicKey::try_from_bytes(
-            verifying_key.to_bytes().as_ref(),
-        )
-        .map_err(|e| {
-            AppError::Crypto(format!("Failed to convert Ed25519 public key: {}", e))
-        })?;
+        let libp2p_public_key =
+            libp2p::identity::ed25519::PublicKey::try_from_bytes(verifying_key.to_bytes().as_ref())
+                .map_err(|e| {
+                    AppError::Crypto(format!("Failed to convert Ed25519 public key: {}", e))
+                })?;
         let libp2p_public = libp2p::identity::PublicKey::from(libp2p_public_key);
         let peer_id = libp2p::PeerId::from(libp2p_public);
         Ok(peer_id.to_string())
@@ -485,8 +484,7 @@ mod tests {
         // This is critical for the identity exchange signature verification.
         let (signing_key, verifying_key) = CryptoService::generate_ed25519_keypair();
 
-        let from_signing =
-            CryptoService::derive_peer_id_from_signing_key(&signing_key).unwrap();
+        let from_signing = CryptoService::derive_peer_id_from_signing_key(&signing_key).unwrap();
         let from_verifying =
             CryptoService::derive_peer_id_from_verifying_key(&verifying_key).unwrap();
 

@@ -1,15 +1,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { FeedIcon, EllipsisIcon } from '../components/icons';
-import { PostMedia } from '../components/common/PostMedia';
 import type { PostMediaItem } from '../components/common/PostMedia';
 import { useFeedStore, useContactsStore, useWallStore } from '../stores';
 import { postsService } from '../services/posts';
 import { createLogger } from '../utils/logger';
 import type { FeedItem } from '../types';
 import type { SharedFrom, Comment } from '../stores';
-import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
-import { extractFirstUrl } from '../utils/urlDetection';
 import { useIdentityStore } from '../stores';
 
 const log = createLogger('Feed');
@@ -492,7 +489,8 @@ export function FeedPage() {
     toggleComments,
     addComment,
     deleteComment,
- , syncFromRelay, isSyncingRelay
+    syncFromRelay,
+    isSyncingRelay,
 } = useFeedStore();
 const { contacts, loadContacts } = useContactsStore();
 const { shareToWall } = useWallStore();

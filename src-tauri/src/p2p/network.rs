@@ -379,6 +379,7 @@ impl NetworkHandle {
     }
 
     /// Submit a wall post to a relay for offline availability
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_wall_post_to_relay(
         &self,
         relay_peer_id: PeerId,
@@ -1210,62 +1211,54 @@ impl NetworkService {
 
     /// Handle libp2p Identify protocol events
     async fn handle_identify_event(&mut self, event: identify::Event) {
-        match event {
-            identify::Event::Received { peer_id, info, .. } => {
-                debug!("Identified peer: {} - {}", peer_id, info.agent_version);
-                if let Some(peer_info) = self.connected_peers.get_mut(&peer_id) {
-                    peer_info.protocol_version = Some(info.protocol_version);
-                    peer_info.agent_version = Some(info.agent_version);
-                }
+        if let identify::Event::Received { peer_id, info, .. } = event {
+            debug!("Identified peer: {} - {}", peer_id, info.agent_version);
+            if let Some(peer_info) = self.connected_peers.get_mut(&peer_id) {
+                peer_info.protocol_version = Some(info.protocol_version);
+                peer_info.agent_version = Some(info.agent_version);
+            }
 
-                // Add addresses to Kademlia
-                for addr in info.listen_addrs {
-                    self.swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, addr);
-                }
+            // Add addresses to Kademlia
+            for addr in info.listen_addrs {
+                self.swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, addr);
+            }
 
-                // If this peer is a relay we're waiting on, request the reservation NOW.
-                // This is the correct timing — the connection is fully negotiated and
-                // the relay client transport knows about it.
-                if let Some(relay_addr) = self.pending_relay_reservations.remove(&peer_id) {
-                    let circuit_listen_addr: Multiaddr = relay_addr
-                        .clone()
-                        .with(libp2p::multiaddr::Protocol::P2pCircuit);
-                    info!(
-                        "Requesting relay reservation on {} (post-identify)",
-                        circuit_listen_addr
-                    );
-                    match self.swarm.listen_on(circuit_listen_addr.clone()) {
-                        Ok(id) => {
-                            info!(
-                                "Relay listener registered: {:?} on {}",
-                                id, circuit_listen_addr
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to request relay reservation {}: {}",
-                                circuit_listen_addr, e
-                            );
-                        }
+            // If this peer is a relay we're waiting on, request the reservation NOW.
+            // This is the correct timing — the connection is fully negotiated and
+            // the relay client transport knows about it.
+            if let Some(relay_addr) = self.pending_relay_reservations.remove(&peer_id) {
+                let circuit_listen_addr: Multiaddr = relay_addr
+                    .clone()
+                    .with(libp2p::multiaddr::Protocol::P2pCircuit);
+                info!(
+                    "Requesting relay reservation on {} (post-identify)",
+                    circuit_listen_addr
+                );
+                match self.swarm.listen_on(circuit_listen_addr.clone()) {
+                    Ok(id) => {
+                        info!(
+                            "Relay listener registered: {:?} on {}",
+                            id, circuit_listen_addr
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to request relay reservation {}: {}",
+                            circuit_listen_addr, e
+                        );
                     }
                 }
             }
-
-            _ => {}
         }
     }
 
     /// Handle Kademlia DHT events
     async fn handle_kademlia_event(&mut self, event: kad::Event) {
-        match event {
-            kad::Event::RoutingUpdated { peer, .. } => {
-                debug!("Kademlia routing updated for peer: {}", peer);
-            }
-
-            _ => {}
+        if let kad::Event::RoutingUpdated { peer, .. } = event {
+            debug!("Kademlia routing updated for peer: {}", peer);
         }
     }
 
@@ -1281,12 +1274,8 @@ impl NetworkService {
         &mut self,
         event: request_response::Event<IdentityExchangeRequest, IdentityExchangeResponse>,
     ) {
-        match event {
-            request_response::Event::Message {
-                peer,
-                message,
-                ..
-            } => match message {
+        if let request_response::Event::Message { peer, message, .. } = event {
+            match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1304,9 +1293,7 @@ impl NetworkService {
                     self.handle_identity_response(peer, request_id, response)
                         .await;
                 }
-            },
-
-            _ => {}
+            }
         }
     }
 
@@ -1315,33 +1302,25 @@ impl NetworkService {
         &mut self,
         event: request_response::Event<MessagingRequest, MessagingResponse>,
     ) {
-        match event {
-            request_response::Event::Message {
-                peer,
-                message,
-                ..
-            } => {
-                match message {
-                    request_response::Message::Request {
-                        request_id,
-                        request,
-                        channel,
-                    } => {
-                        debug!("Received message request from {}", peer);
-                        self.handle_messaging_request(peer, request_id, request, channel)
-                            .await;
-                    }
-                    request_response::Message::Response {
-                        request_id: _,
-                        response: _,
-                    } => {
-                        debug!("Received message response from {}", peer);
-                        // Handle response (e.g., update message delivery status)
-                    }
+        if let request_response::Event::Message { peer, message, .. } = event {
+            match message {
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                } => {
+                    debug!("Received message request from {}", peer);
+                    self.handle_messaging_request(peer, request_id, request, channel)
+                        .await;
+                }
+                request_response::Message::Response {
+                    request_id: _,
+                    response: _,
+                } => {
+                    debug!("Received message response from {}", peer);
+                    // Handle response (e.g., update message delivery status)
                 }
             }
-
-            _ => {}
         }
     }
 
@@ -1350,12 +1329,8 @@ impl NetworkService {
         &mut self,
         event: request_response::Event<ContentSyncRequest, ContentSyncResponse>,
     ) {
-        match event {
-            request_response::Event::Message {
-                peer,
-                message,
-                ..
-            } => match message {
+        if let request_response::Event::Message { peer, message, .. } = event {
+            match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1373,9 +1348,7 @@ impl NetworkService {
                     self.handle_content_sync_response(peer, request_id, response)
                         .await;
                 }
-            },
-
-            _ => {}
+            }
         }
     }
 
@@ -1385,11 +1358,7 @@ impl NetworkService {
         event: request_response::Event<WireBoardSyncRequest, WireBoardSyncResponse>,
     ) {
         match event {
-            request_response::Event::Message {
-                peer,
-                message,
-                ..
-            } => match message {
+            request_response::Event::Message { peer, message, .. } => match message {
                 request_response::Message::Request { channel, .. } => {
                     // Client doesn't serve board requests; send error
                     let _ = self.swarm.behaviour_mut().board_sync.send_response(
@@ -1404,11 +1373,7 @@ impl NetworkService {
                 }
             },
 
-            request_response::Event::OutboundFailure {
-                peer,
-                error,
-                ..
-            } => {
+            request_response::Event::OutboundFailure { peer, error, .. } => {
                 // Clean up any pending community probe / registration state.
                 // This happens when the relay doesn't support the board sync protocol.
                 let was_probe = self.pending_community_probes.remove(&peer).is_some();
@@ -1419,10 +1384,7 @@ impl NetworkService {
                         peer, error
                     );
                 } else {
-                    warn!(
-                        "Board sync outbound failure to peer {}: {}",
-                        peer, error
-                    );
+                    warn!("Board sync outbound failure to peer {}: {}", peer, error);
                     let _ = self
                         .event_tx
                         .send(NetworkEvent::BoardSyncError {
@@ -1495,10 +1457,8 @@ impl NetworkService {
                 let relay_circuit_addr = if let Some(addr) = relay_circuit_addr {
                     addr
                 } else {
-                    let fallback_str = format!(
-                        "/p2p/{}/p2p-circuit/p2p/{}",
-                        relay_peer_id, local_peer_id
-                    );
+                    let fallback_str =
+                        format!("/p2p/{}/p2p-circuit/p2p/{}", relay_peer_id, local_peer_id);
                     match fallback_str.parse() {
                         Ok(addr) => addr,
                         Err(e) => {
@@ -1551,13 +1511,12 @@ impl NetworkService {
                 if !self.community_relays.contains_key(&relay_peer_id) {
                     if let Some(ref board_service) = self.board_service {
                         // Reconstruct the relay's original multiaddr for storing later
-                        let relay_addr_str = if let Some(peer_info) =
-                            self.connected_peers.get(&relay_peer_id)
-                        {
-                            peer_info.addresses.first().cloned().unwrap_or_default()
-                        } else {
-                            relay_peer_id.to_string()
-                        };
+                        let relay_addr_str =
+                            if let Some(peer_info) = self.connected_peers.get(&relay_peer_id) {
+                                peer_info.addresses.first().cloned().unwrap_or_default()
+                            } else {
+                                relay_peer_id.to_string()
+                            };
 
                         // Store relay addr for later use when community is confirmed
                         self.pending_community_probes
@@ -1782,12 +1741,10 @@ impl NetworkService {
                     );
 
                     // Mark as community relay
-                    self.community_relays
-                        .insert(peer, relay_addr.clone());
+                    self.community_relays.insert(peer, relay_addr.clone());
 
                     // Auto-join: store community locally
-                    if let Err(e) =
-                        board_service.join_community(&relay_peer_id, &relay_addr, None)
+                    if let Err(e) = board_service.join_community(&relay_peer_id, &relay_addr, None)
                     {
                         warn!("Failed to auto-join community on {}: {}", peer, e);
                     }
@@ -1888,7 +1845,10 @@ impl NetworkService {
                 // If we were waiting for registration to complete before listing boards,
                 // send the ListBoards request now.
                 if self.pending_board_registrations.remove(&peer) {
-                    info!("Registration complete for {}, now requesting board list", peer);
+                    info!(
+                        "Registration complete for {}, now requesting board list",
+                        peer
+                    );
                     if let Some(ref board_service) = self.board_service {
                         match board_service.create_list_boards_request() {
                             Ok(list_req) => {
@@ -1903,7 +1863,10 @@ impl NetworkService {
                                     .send_request(&peer, request);
                             }
                             Err(e) => {
-                                warn!("Failed to create list boards request after registration: {}", e);
+                                warn!(
+                                    "Failed to create list boards request after registration: {}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -2135,16 +2098,19 @@ impl NetworkService {
             // the corresponding private key while claiming someone else's
             // peer ID. The transport-level peer ID check (above) mitigates
             // this for direct connections, but this provides defense-in-depth.
-            let derived_peer_id = match crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key) {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!(
+            let derived_peer_id =
+                match crate::services::CryptoService::derive_peer_id_from_verifying_key(
+                    &verifying_key,
+                ) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        warn!(
                         "Identity response from {}: failed to derive peer ID from public key: {}",
                         peer, e
                     );
-                    return;
-                }
-            };
+                        return;
+                    }
+                };
             if derived_peer_id != response.peer_id {
                 warn!(
                     "Identity response from {}: public key derives peer ID {} but response claims {} - rejecting identity",
@@ -2331,10 +2297,7 @@ impl NetworkService {
                             (true, Some(ack.message_id), None)
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to process ack for {}: {}",
-                                ack.message_id, e
-                            );
+                            warn!("Failed to process ack for {}: {}", ack.message_id, e);
                             (false, Some(ack.message_id), Some(e.to_string()))
                         }
                     }
@@ -3047,10 +3010,9 @@ impl NetworkService {
                             .send_request(&relay_peer_id, request);
                         NetworkResponse::Ok
                     }
-                    Err(e) => NetworkResponse::Error(format!(
-                        "Failed to sign wall posts request: {}",
-                        e
-                    )),
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to sign wall posts request: {}", e))
+                    }
                 }
             }
 

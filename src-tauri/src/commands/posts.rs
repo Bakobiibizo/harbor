@@ -131,11 +131,7 @@ pub async fn create_post(
                         )
                         .await
                     {
-                        tracing::warn!(
-                            "Failed to auto-sync wall post {} to relay: {}",
-                            post_id,
-                            e
-                        );
+                        tracing::warn!("Failed to auto-sync wall post {} to relay: {}", post_id, e);
                     }
                 });
             }
@@ -176,13 +172,11 @@ pub async fn delete_post(
             {
                 let pid = post_id.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle.delete_wall_post_on_relay(relay_peer_id, pid.clone()).await
+                    if let Err(e) = handle
+                        .delete_wall_post_on_relay(relay_peer_id, pid.clone())
+                        .await
                     {
-                        tracing::warn!(
-                            "Failed to auto-delete wall post {} on relay: {}",
-                            pid,
-                            e
-                        );
+                        tracing::warn!("Failed to auto-delete wall post {} on relay: {}", pid, e);
                     }
                 });
             }

@@ -81,6 +81,9 @@ interface SettingsState {
   localDiscovery: boolean;
   bootstrapNodes: string[];
 
+  // Notification settings
+  soundEnabled: boolean;
+
   // Privacy settings
   showReadReceipts: boolean;
   showOnlineStatus: boolean;
@@ -95,6 +98,7 @@ interface SettingsState {
   fontSize: FontSize;
 
   // Actions
+  setSoundEnabled: (value: boolean) => void;
   setAutoStartNetwork: (value: boolean) => void;
   setLocalDiscovery: (value: boolean) => void;
   addBootstrapNode: (address: string) => void;
@@ -146,6 +150,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       // Initial values
+      soundEnabled: true,
       autoStartNetwork: true,
       localDiscovery: true,
       bootstrapNodes: [],
@@ -158,6 +163,7 @@ export const useSettingsStore = create<SettingsState>()(
       fontSize: 'medium',
 
       // Actions
+      setSoundEnabled: (value) => set({ soundEnabled: value }),
       setAutoStartNetwork: (value) => set({ autoStartNetwork: value }),
       setLocalDiscovery: (value) => set({ localDiscovery: value }),
       addBootstrapNode: (address) =>

@@ -3,9 +3,7 @@ import toast from 'react-hot-toast';
 import { useIdentityStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
 import { WallIcon, EllipsisIcon } from '../components/icons';
-import { PostMedia } from '../components/common/PostMedia';
 import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
-import { getInitials, formatDate } from '../utils/formatting';
 import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
 

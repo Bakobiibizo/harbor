@@ -3,6 +3,7 @@ import { feedService } from '../services/feed';
 import { commentsService } from '../services/comments';
 import type { Comment } from '../services/comments';
 import * as networkService from '../services/network';
+import { createLogger } from '../utils/logger';
 import type { FeedItem } from '../types';
 
 const log = createLogger('FeedStore');
@@ -13,6 +14,7 @@ interface FeedState {
   // State
   feedItems: FeedItem[];
   isLoading: boolean;
+  isSyncingRelay: boolean;
   error: string | null;
   hasMore: boolean;
 
@@ -40,6 +42,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
   // Initial state
   feedItems: [],
   isLoading: false,
+  isSyncingRelay: false,
   error: null,
   hasMore: true,
 
@@ -66,7 +69,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         get().loadCommentCounts(postIds);
       }
     } catch (error) {
-      console.error('Failed to load feed:', error);
+      log.error('Failed to load feed', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -94,7 +97,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         get().loadCommentCounts(postIds);
       }
     } catch (error) {
-      console.error('Failed to load more feed items:', error);
+      log.error('Failed to load more feed items', error);
       set({ error: String(error), isLoading: false });
     }
   },
@@ -117,7 +120,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         get().loadCommentCounts(postIds);
       }
     } catch (error) {
-      console.error('Failed to refresh feed:', error);
+      log.error('Failed to refresh feed', error);
       set({ error: String(error), isLoading: false });
     }
   },

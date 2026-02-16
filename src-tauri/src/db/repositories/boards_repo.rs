@@ -164,7 +164,10 @@ impl BoardsRepository {
     }
 
     /// Insert or update a board post
-    pub fn upsert_board_post(db: &Database, params: &UpsertBoardPostParams<'_>) -> SqliteResult<()> {
+    pub fn upsert_board_post(
+        db: &Database,
+        params: &UpsertBoardPostParams<'_>,
+    ) -> SqliteResult<()> {
         let post_id = params.post_id;
         let board_id = params.board_id;
         let relay_peer_id = params.relay_peer_id;

@@ -64,6 +64,18 @@ pub struct OutgoingFetchResponse {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for storing a remote post received from a peer
+pub struct RemotePostParams<'a> {
+    pub post_id: &'a str,
+    pub author_peer_id: &'a str,
+    pub content_type: &'a str,
+    pub content_text: Option<&'a str>,
+    pub visibility: &'a str,
+    pub lamport_clock: u64,
+    pub created_at: i64,
+    pub signature: &'a [u8],
+}
+
 impl ContentSyncService {
     /// Create a new content sync service
     pub fn new(
@@ -89,7 +101,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -120,7 +132,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -152,7 +164,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Validate timestamp is within acceptable window (5 minutes)
         let now = chrono::Utc::now().timestamp();
@@ -243,7 +255,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify the requester's signature
         let requester_public_key = self
@@ -398,18 +410,15 @@ impl ContentSyncService {
     }
 
     /// Store a post received from a peer
-    #[allow(clippy::too_many_arguments)]
-    pub fn store_remote_post(
-        &self,
-        post_id: &str,
-        author_peer_id: &str,
-        content_type: &str,
-        content_text: Option<&str>,
-        visibility: &str,
-        lamport_clock: u64,
-        created_at: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn store_remote_post(&self, params: &RemotePostParams<'_>) -> Result<()> {
+        let post_id = params.post_id;
+        let author_peer_id = params.author_peer_id;
+        let content_type = params.content_type;
+        let content_text = params.content_text;
+        let visibility = params.visibility;
+        let lamport_clock = params.lamport_clock;
+        let created_at = params.created_at;
+        let signature = params.signature;
         // Verify the signature
         let author_public_key = self
             .contacts_service
@@ -489,18 +498,15 @@ impl ContentSyncService {
         cursor: u64,
         limit: u32,
     ) -> Result<Vec<crate::db::Post>> {
-        // For now, just get posts and filter by lamport clock
-        // TODO: Add a more efficient query
-        let posts = PostsRepository::get_by_author(&self.db, author_peer_id, 1000, None)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let posts = PostsRepository::get_by_author_after_cursor(
+            &self.db,
+            author_peer_id,
+            cursor as i64,
+            limit as i64,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        let filtered: Vec<_> = posts
-            .into_iter()
-            .filter(|p| p.lamport_clock as u64 > cursor)
-            .take(limit as usize)
-            .collect();
-
-        Ok(filtered)
+        Ok(posts)
     }
 
     /// Store sync cursor for a peer
@@ -508,7 +514,7 @@ impl ContentSyncService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // We are syncing *from* peer_id, so the cursor is keyed by (source_peer_id=peer_id)
         // for our local identity.
@@ -687,16 +693,16 @@ mod tests {
         let signature = crate::services::sign(&peer_signing, &signable).unwrap();
 
         service
-            .store_remote_post(
-                "remote-post-1",
-                &peer_peer_id,
-                "text",
-                Some("Remote post content"),
-                "public",
-                1,
-                1000,
-                &signature,
-            )
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Remote post content"),
+                visibility: "public",
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: &signature,
+            })
             .unwrap();
 
         // Verify post was stored
@@ -725,16 +731,16 @@ mod tests {
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
 
         // Try to store with an invalid signature
-        let result = service.store_remote_post(
-            "remote-post-bad",
-            &peer_peer_id,
-            "text",
-            Some("Bad post"),
-            "public",
-            1,
-            1000,
-            &vec![0u8; 64], // Invalid signature
-        );
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-post-bad",
+            author_peer_id: &peer_peer_id,
+            content_type: "text",
+            content_text: Some("Bad post"),
+            visibility: "public",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &vec![0u8; 64], // Invalid signature
+        });
 
         assert!(result.is_err());
     }
@@ -743,16 +749,16 @@ mod tests {
     fn test_store_remote_post_unknown_contact() {
         let (service, _db, _identity, _peer_id) = create_test_env();
 
-        let result = service.store_remote_post(
-            "remote-post",
-            "12D3KooWUnknownPeer",
-            "text",
-            Some("Post"),
-            "public",
-            1,
-            1000,
-            &vec![0u8; 64],
-        );
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-post",
+            author_peer_id: "12D3KooWUnknownPeer",
+            content_type: "text",
+            content_text: Some("Post"),
+            visibility: "public",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &vec![0u8; 64],
+        });
 
         assert!(result.is_err());
     }
@@ -789,16 +795,16 @@ mod tests {
         let sig1 = crate::services::sign(&peer_signing, &signable1).unwrap();
 
         service
-            .store_remote_post(
-                "remote-post-1",
-                &peer_peer_id,
-                "text",
-                Some("Version 1"),
-                "public",
-                1,
-                1000,
-                &sig1,
-            )
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Version 1"),
+                visibility: "public",
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: &sig1,
+            })
             .unwrap();
 
         // Store updated version with higher lamport clock
@@ -815,16 +821,16 @@ mod tests {
         let sig2 = crate::services::sign(&peer_signing, &signable2).unwrap();
 
         service
-            .store_remote_post(
-                "remote-post-1",
-                &peer_peer_id,
-                "text",
-                Some("Version 2"),
-                "public",
-                2,
-                1000,
-                &sig2,
-            )
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Version 2"),
+                visibility: "public",
+                lamport_clock: 2,
+                created_at: 1000,
+                signature: &sig2,
+            })
             .unwrap();
 
         // Should have the updated content
@@ -867,16 +873,16 @@ mod tests {
         let sig1 = crate::services::sign(&peer_signing, &signable1).unwrap();
 
         service
-            .store_remote_post(
-                "remote-post-1",
-                &peer_peer_id,
-                "text",
-                Some("Newer version"),
-                "public",
-                5,
-                1000,
-                &sig1,
-            )
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Newer version"),
+                visibility: "public",
+                lamport_clock: 5,
+                created_at: 1000,
+                signature: &sig1,
+            })
             .unwrap();
 
         // Try to store older version with lamport_clock=3
@@ -894,16 +900,16 @@ mod tests {
 
         // This should succeed but not update (older version is skipped)
         service
-            .store_remote_post(
-                "remote-post-1",
-                &peer_peer_id,
-                "text",
-                Some("Older version"),
-                "public",
-                3,
-                1000,
-                &sig2,
-            )
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-1",
+                author_peer_id: &peer_peer_id,
+                content_type: "text",
+                content_text: Some("Older version"),
+                visibility: "public",
+                lamport_clock: 3,
+                created_at: 1000,
+                signature: &sig2,
+            })
             .unwrap();
 
         // Content should still be the newer version

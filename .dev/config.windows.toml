@@ -19,10 +19,10 @@ commands = [["npx.cmd", "eslint", "src"]]
 commands = [["npx.cmd", "tsc", "--noEmit"]]
 
 [tasks.ts_test]
-commands = [["npm", "run", "test"]]
+commands = [["npm.cmd", "run", "test"]]
 
 [tasks.ts_build]
-commands = [["npm", "run", "build"]]
+commands = [["npm.cmd", "run", "build"]]
 
 [tasks.ts_fix]
 commands = [
@@ -118,15 +118,15 @@ commands = [
 ]
 
 [tasks.tauri_dev]
-commands = [["npm", "run", "tauri", "dev"]]
+commands = [["npm.cmd", "run", "tauri", "dev"]]
 
 [tasks.tauri_build]
-commands = [["npm", "run", "tauri", "build"]]
+commands = [["npm.cmd", "run", "tauri", "build"]]
 
 # ===================== Language Pipelines ========================
 
 [languages.typescript]
-install = [["npm", "install"]]
+install = [["npm.cmd", "install"]]
 
 [languages.typescript.pipelines]
 fmt = ["ts_fmt"]

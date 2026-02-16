@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { createLogger } from '../utils/logger';
 import {
   ChatIcon,
   SearchIcon,
@@ -691,8 +692,8 @@ export function ChatPage() {
 
   // Load real contacts and conversations on mount
   useEffect(() => {
-    loadContacts();
-    loadConversations();
+    loadContacts().catch((err) => log.error('Failed to load contacts', err));
+    loadConversations().catch((err) => log.error('Failed to load conversations', err));
   }, [loadContacts, loadConversations]);
 
   // Focus search input when search is shown
@@ -729,23 +730,25 @@ export function ChatPage() {
   }, [selectedConversation, showMessageSearch]);
 
   // Build conversation list from real contacts
-  const unifiedConversations: UnifiedConversation[] = contacts.map(
-    (contact): UnifiedConversation => {
-      const realConv = realConversations.find((c) => c.peerId === contact.peerId);
-      return {
-        id: `real-${contact.peerId}`,
-        peerId: contact.peerId,
-        name: contact.displayName,
-        online: true, // Assume online for now - would need presence tracking
-        avatarGradient: getContactColor(contact.peerId),
-        lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
-        timestamp: realConv
-          ? new Date(realConv.lastMessageAt * 1000)
-          : new Date(contact.addedAt * 1000),
-        unread: realConv?.unreadCount || 0,
-        isReal: true,
-      };
-    },
+  const unifiedConversations = useMemo<UnifiedConversation[]>(
+    () =>
+      contacts.map((contact): UnifiedConversation => {
+        const realConv = realConversations.find((c) => c.peerId === contact.peerId);
+        return {
+          id: `real-${contact.peerId}`,
+          peerId: contact.peerId,
+          name: contact.displayName,
+          online: true, // Assume online for now - would need presence tracking
+          avatarGradient: getContactColor(contact.peerId),
+          lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
+          timestamp: realConv
+            ? new Date(realConv.lastMessageAt * 1000)
+            : new Date(contact.addedAt * 1000),
+          unread: realConv?.unreadCount || 0,
+          isReal: true,
+        };
+      }),
+    [contacts, realConversations],
   );
 
   // Separate active and archived conversations
@@ -757,10 +760,16 @@ export function ChatPage() {
   };
 
   // Get selected conversation from unified list
-  const selectedConv = unifiedConversations.find((c) => c.id === selectedConversation);
+  const selectedConv = useMemo(
+    () => unifiedConversations.find((c) => c.id === selectedConversation),
+    [unifiedConversations, selectedConversation],
+  );
 
   // Get messages for current conversation
-  const currentMessages = selectedConv ? realMessages[selectedConv.peerId] || [] : [];
+  const currentMessages = useMemo(
+    () => (selectedConv ? realMessages[selectedConv.peerId] || [] : []),
+    [selectedConv, realMessages],
+  );
 
   // Calculate search results
   const searchResults = useMemo(
@@ -870,7 +879,7 @@ export function ChatPage() {
   // Load messages when selecting a conversation
   useEffect(() => {
     if (selectedConv) {
-      loadMessages(selectedConv.peerId);
+      loadMessages(selectedConv.peerId).catch((err) => log.error('Failed to load messages', err));
     }
   }, [selectedConv?.peerId, loadMessages]);
 
@@ -911,7 +920,7 @@ export function ChatPage() {
       await sendRealMessage(selectedConv.peerId, content, contentType);
       loadMessages(selectedConv.peerId).catch((err) => log.error('Failed to reload messages after send', err));
     } catch (error) {
-      console.error('Failed to send message:', error);
+      log.error('Failed to send message', error);
       toast.error('Failed to send message');
     }
   };
@@ -1252,7 +1261,7 @@ export function ChatPage() {
                           className="text-xs flex-shrink-0 ml-2"
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                         >
-                          {formatTime(conversation.timestamp)}
+                          {formatRelativeTime(conversation.timestamp)}
                         </span>
                       </div>
                       <div className="flex items-center justify-between">

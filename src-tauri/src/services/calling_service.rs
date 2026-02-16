@@ -4,7 +4,7 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::{Capability, Database};
+use crate::db::Capability;
 use crate::error::{AppError, Result};
 use crate::services::{
     verify, ContactsService, IdentityService, PermissionsService, SignableSignalingAnswer,
@@ -49,8 +49,6 @@ pub struct Call {
 
 /// Service for managing voice calls
 pub struct CallingService {
-    #[allow(dead_code)]
-    db: Arc<Database>, // Reserved for future call history storage
     identity_service: Arc<IdentityService>,
     contacts_service: Arc<ContactsService>,
     permissions_service: Arc<PermissionsService>,
@@ -100,16 +98,25 @@ pub struct OutgoingHangup {
     pub signature: Vec<u8>,
 }
 
+/// Parameters for processing an incoming ICE candidate
+pub struct IncomingIceParams<'a> {
+    pub call_id: &'a str,
+    pub sender_peer_id: &'a str,
+    pub candidate: &'a str,
+    pub sdp_mid: Option<&'a str>,
+    pub sdp_mline_index: Option<u32>,
+    pub timestamp: i64,
+    pub signature: &'a [u8],
+}
+
 impl CallingService {
     /// Create a new calling service
     pub fn new(
-        db: Arc<Database>,
         identity_service: Arc<IdentityService>,
         contacts_service: Arc<ContactsService>,
         permissions_service: Arc<PermissionsService>,
     ) -> Self {
         Self {
-            db,
             identity_service,
             contacts_service,
             permissions_service,
@@ -121,7 +128,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Check we have call permission with this peer
         if !self
@@ -169,7 +176,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we are the callee
         if callee_peer_id != identity.peer_id {
@@ -225,7 +232,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -262,7 +269,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         // Verify we are the caller
         if caller_peer_id != identity.peer_id {
@@ -309,7 +316,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -336,17 +343,14 @@ impl CallingService {
     }
 
     /// Process an incoming ICE candidate
-    #[allow(clippy::too_many_arguments)]
-    pub fn process_incoming_ice(
-        &self,
-        call_id: &str,
-        sender_peer_id: &str,
-        candidate: &str,
-        sdp_mid: Option<&str>,
-        sdp_mline_index: Option<u32>,
-        timestamp: i64,
-        signature: &[u8],
-    ) -> Result<()> {
+    pub fn process_incoming_ice(&self, params: &IncomingIceParams<'_>) -> Result<()> {
+        let call_id = params.call_id;
+        let sender_peer_id = params.sender_peer_id;
+        let candidate = params.candidate;
+        let sdp_mid = params.sdp_mid;
+        let sdp_mline_index = params.sdp_mline_index;
+        let timestamp = params.timestamp;
+        let signature = params.signature;
         // Verify signature
         let sender_public_key = self
             .contacts_service
@@ -384,7 +388,7 @@ impl CallingService {
         let identity = self
             .identity_service
             .get_identity()?
-            .ok_or_else(|| AppError::NotFound("No identity".to_string()))?;
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -452,6 +456,7 @@ mod tests {
     };
     use crate::models::CreateIdentityRequest;
     use crate::services::{ContactsService, CryptoService, IdentityService, PermissionsService};
+    use crate::Database;
     use std::sync::Arc;
 
     fn create_test_env() -> (
@@ -479,7 +484,6 @@ mod tests {
             .unwrap();
 
         let service = CallingService::new(
-            db.clone(),
             identity_service.clone(),
             contacts_service,
             permissions_service.clone(),
@@ -562,8 +566,7 @@ mod tests {
             db.clone(),
             identity_service.clone(),
         ));
-        let service =
-            CallingService::new(db, identity_service, contacts_service, permissions_service);
+        let service = CallingService::new(identity_service, contacts_service, permissions_service);
 
         let result = service.create_offer("12D3KooWCallee", "sdp-data");
         assert!(result.is_err());
@@ -776,15 +779,15 @@ mod tests {
         };
         let sig = crate::services::sign(&sender_signing, &signable).unwrap();
 
-        let result = service.process_incoming_ice(
-            "call-1",
-            sender_id,
-            "candidate:0 1 UDP",
-            Some("audio"),
-            Some(0),
-            signable.timestamp,
-            &sig,
-        );
+        let result = service.process_incoming_ice(&IncomingIceParams {
+            call_id: "call-1",
+            sender_peer_id: sender_id,
+            candidate: "candidate:0 1 UDP",
+            sdp_mid: Some("audio"),
+            sdp_mline_index: Some(0),
+            timestamp: signable.timestamp,
+            signature: &sig,
+        });
 
         assert!(result.is_ok());
     }

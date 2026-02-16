@@ -87,6 +87,20 @@ pub struct Conversation {
 }
 
 /// Repository for message operations
+/// Parameters for recording a message event
+pub struct RecordMessageEventParams<'a> {
+    pub event_id: &'a str,
+    pub event_type: &'a str,
+    pub message_id: &'a str,
+    pub conversation_id: &'a str,
+    pub sender_peer_id: &'a str,
+    pub recipient_peer_id: &'a str,
+    pub lamport_clock: i64,
+    pub timestamp: i64,
+    pub payload_cbor: &'a [u8],
+    pub signature: &'a [u8],
+}
+
 pub struct MessagesRepository;
 
 impl MessagesRepository {
@@ -389,19 +403,9 @@ impl MessagesRepository {
     }
 
     /// Record a message event (for event sourcing)
-    #[allow(clippy::too_many_arguments)]
     pub fn record_message_event(
         db: &Database,
-        event_id: &str,
-        event_type: &str,
-        message_id: &str,
-        conversation_id: &str,
-        sender_peer_id: &str,
-        recipient_peer_id: &str,
-        lamport_clock: i64,
-        timestamp: i64,
-        payload_cbor: &[u8],
-        signature: &[u8],
+        params: &RecordMessageEventParams<'_>,
     ) -> SqliteResult<i64> {
         db.with_connection(|conn| {
             let received_at = chrono::Utc::now().timestamp();
@@ -412,16 +416,16 @@ impl MessagesRepository {
                     timestamp, payload_cbor, signature, received_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
-                    event_id,
-                    event_type,
-                    message_id,
-                    conversation_id,
-                    sender_peer_id,
-                    recipient_peer_id,
-                    lamport_clock,
-                    timestamp,
-                    payload_cbor,
-                    signature,
+                    params.event_id,
+                    params.event_type,
+                    params.message_id,
+                    params.conversation_id,
+                    params.sender_peer_id,
+                    params.recipient_peer_id,
+                    params.lamport_clock,
+                    params.timestamp,
+                    params.payload_cbor,
+                    params.signature,
                     received_at,
                 ],
             )?;

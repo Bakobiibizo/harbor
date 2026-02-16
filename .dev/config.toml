@@ -1,4 +1,4 @@
-# Dev configuration
+# Windows devkit configuration
 # Frontend: TypeScript/npm at project root
 # Backend: Rust at src-tauri/
 
@@ -7,22 +7,22 @@ default_language = "typescript"
 # ===================== TypeScript/Frontend ========================
 
 [tasks.ts_fmt]
-commands = [["npx", "prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
+commands = [["npx.cmd", "prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
 
 [tasks.ts_lint]
-commands = [["npx", "eslint", "src", "--fix"]]
+commands = [["npx.cmd", "eslint", "src", "--fix"]]
 
 [tasks.ts_lint_check]
-commands = [["npx", "eslint", "src"]]
+commands = [["npx.cmd", "eslint", "src"]]
 
 [tasks.ts_type]
-commands = [["npx", "tsc", "--noEmit"]]
+commands = [["npx.cmd", "tsc", "--noEmit"]]
 
 [tasks.ts_test]
-commands = [["npm", "run", "test"]]
+commands = [["npm.cmd", "run", "test"]]
 
 [tasks.ts_build]
-commands = [["npm", "run", "build"]]
+commands = [["npm.cmd", "run", "build"]]
 
 [tasks.ts_fix]
 commands = [
@@ -83,7 +83,7 @@ commands = [
 # ===================== Relay Server ========================
 
 [tasks.relay_build]
-commands = [["cargo", "build", "--manifest-path", "relay-server/Cargo.toml", "--release"]]
+commands = [["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/build-relay.ps1"]]
 
 [tasks.relay_check]
 commands = [["cargo", "check", "--manifest-path", "relay-server/Cargo.toml"]]
@@ -118,15 +118,15 @@ commands = [
 ]
 
 [tasks.tauri_dev]
-commands = [["npm", "run", "tauri", "dev"]]
+commands = [["npm.cmd", "run", "tauri", "dev"]]
 
 [tasks.tauri_build]
-commands = [["npm", "run", "tauri", "build"]]
+commands = [["npm.cmd", "run", "tauri", "build"]]
 
 # ===================== Language Pipelines ========================
 
 [languages.typescript]
-install = [["npm", "install"]]
+install = [["npm.cmd", "install"]]
 
 [languages.typescript.pipelines]
 fmt = ["ts_fmt"]
