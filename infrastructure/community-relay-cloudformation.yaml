@@ -155,7 +155,7 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-sg"
 
-  # SSM Parameter to store the relay address
+  # SSM Parameter to store the relay address (managed by CloudFormation)
   RelayAddressParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -180,14 +180,27 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: WriteRelayAddress
+        - PolicyName: RelaySSMAccess
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # Read/write relay address, identity key, and EIP allocation ID in SSM
               - Effect: Allow
                 Action:
+                  - ssm:GetParameter
                   - ssm:PutParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/harbor/${AWS::StackName}/relay-address"
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/harbor/${AWS::StackName}/relay-address"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/harbor/${AWS::StackName}/identity-key"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/harbor/${AWS::StackName}/eip-allocation-id"
+              # Manage Elastic IP (allocate, associate, describe, tag)
+              - Effect: Allow
+                Action:
+                  - ec2:AllocateAddress
+                  - ec2:AssociateAddress
+                  - ec2:DescribeAddresses
+                  - ec2:CreateTags
+                Resource: "*"
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-role"
@@ -197,21 +210,6 @@ Resources:
     Properties:
       Roles:
         - !Ref RelayInstanceRole
-
-  # Elastic IP for stable address
-  RelayEIP:
-    Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-eip"
-
-  EIPAssociation:
-    Type: AWS::EC2::EIPAssociation
-    Properties:
-      InstanceId: !Ref RelayInstance
-      AllocationId: !GetAtt RelayEIP.AllocationId
 
   # EC2 Instance
   RelayInstance:
@@ -246,9 +244,19 @@ Resources:
 
           SERVICE_NAME="${AWS::StackName}-community-relay"
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
-          EXPECTED_SHA256="ec1bd2bbc523cafb64d34bb65d3715f3d99fb32358ebe310a32242fd4f2d8db7"
+          EXPECTED_SHA256="51c4391f8bccfcb5f5d224b357c07e3927ba6c2541f80e36ac9c99478e4c7fe1"
+          IDENTITY_SSM_PARAM="/harbor/${AWS::StackName}/identity-key"
+          EIP_SSM_PARAM="/harbor/${AWS::StackName}/eip-allocation-id"
+          REGION="${AWS::Region}"
 
-          # Download pre-compiled binary
+          # Get IMDS token (valid for 6 hours, reused throughout script)
+          IMDS_TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+          INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null)
+          echo "Instance ID: $INSTANCE_ID"
+
+          # ---------------------------------------------------------------
+          # 1. Download and verify binary
+          # ---------------------------------------------------------------
           echo "Downloading pre-compiled relay binary..."
           curl -L --retry 3 --retry-delay 5 -o /usr/local/bin/harbor-relay "$BINARY_URL"
 
@@ -257,7 +265,6 @@ Resources:
             exit 1
           fi
 
-          # Verify SHA256 hash
           echo "Verifying binary integrity..."
           ACTUAL_SHA256=$(sha256sum /usr/local/bin/harbor-relay | awk '{print $1}')
           if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
@@ -267,31 +274,99 @@ Resources:
             exit 1
           fi
           echo "SHA256 verified OK"
-
           chmod +x /usr/local/bin/harbor-relay
 
-          # Create config and data directories
-          # The relay binary generates a unique identity key on first start
+          # ---------------------------------------------------------------
+          # 2. Restore identity key from SSM (or generate on first boot)
+          # ---------------------------------------------------------------
           mkdir -p /root/.config/harbor-relay
           mkdir -p /var/lib/harbor-relay/data
 
-          # Get public IP using IMDSv2
-          echo "Getting public IP..."
-          IMDS_TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
-          PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null)
+          echo "Checking SSM for existing identity key..."
+          EXISTING_KEY=$(aws ssm get-parameter \
+            --name "$IDENTITY_SSM_PARAM" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text \
+            --region $REGION 2>/dev/null || true)
 
-          if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -q "<?xml"; then
-            echo "IMDSv2 failed, trying external IP service..."
-            PUBLIC_IP=$(curl -s https://checkip.amazonaws.com 2>/dev/null | tr -d '\n')
+          if [ -n "$EXISTING_KEY" ] && [ "$EXISTING_KEY" != "None" ]; then
+            echo "Found existing identity key in SSM — restoring for consistent peer ID"
+            echo "$EXISTING_KEY" | base64 -d > /root/.config/harbor-relay/id.key
+            KEY_IS_NEW=false
+          else
+            echo "No existing identity key — relay will generate a new one on first start"
+            KEY_IS_NEW=true
           fi
 
-          if [ -z "$PUBLIC_IP" ]; then
-            echo "ERROR: Could not determine public IP"
-            exit 1
-          fi
-          echo "Public IP: $PUBLIC_IP"
+          # ---------------------------------------------------------------
+          # 3. Restore or allocate Elastic IP
+          # ---------------------------------------------------------------
+          echo "Checking SSM for existing Elastic IP..."
+          EIP_ALLOC_ID=$(aws ssm get-parameter \
+            --name "$EIP_SSM_PARAM" \
+            --query 'Parameter.Value' \
+            --output text \
+            --region $REGION 2>/dev/null || true)
 
-          # Create systemd service (community mode)
+          PUBLIC_IP=""
+
+          if [ -n "$EIP_ALLOC_ID" ] && [ "$EIP_ALLOC_ID" != "None" ]; then
+            # Verify the EIP still exists (may have been manually released)
+            PUBLIC_IP=$(aws ec2 describe-addresses \
+              --allocation-ids "$EIP_ALLOC_ID" \
+              --query 'Addresses[0].PublicIp' \
+              --output text \
+              --region $REGION 2>/dev/null || true)
+
+            if [ -n "$PUBLIC_IP" ] && [ "$PUBLIC_IP" != "None" ]; then
+              echo "Reusing existing Elastic IP: $PUBLIC_IP ($EIP_ALLOC_ID)"
+            else
+              echo "Previous EIP $EIP_ALLOC_ID no longer exists — allocating new one"
+              EIP_ALLOC_ID=""
+              PUBLIC_IP=""
+            fi
+          fi
+
+          if [ -z "$EIP_ALLOC_ID" ] || [ "$EIP_ALLOC_ID" = "None" ]; then
+            echo "Allocating new Elastic IP..."
+            EIP_ALLOC_ID=$(aws ec2 allocate-address \
+              --domain vpc \
+              --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=${AWS::StackName}-eip},{Key=Application,Value=harbor-chat}]" \
+              --query 'AllocationId' \
+              --output text \
+              --region $REGION)
+
+            PUBLIC_IP=$(aws ec2 describe-addresses \
+              --allocation-ids "$EIP_ALLOC_ID" \
+              --query 'Addresses[0].PublicIp' \
+              --output text \
+              --region $REGION)
+
+            echo "Allocated new Elastic IP: $PUBLIC_IP ($EIP_ALLOC_ID)"
+
+            # Save to SSM so it survives stack rebuilds
+            aws ssm put-parameter \
+              --name "$EIP_SSM_PARAM" \
+              --value "$EIP_ALLOC_ID" \
+              --type String \
+              --overwrite \
+              --region $REGION
+            echo "Saved EIP allocation ID to SSM"
+          fi
+
+          # Associate EIP with this instance
+          echo "Associating Elastic IP $PUBLIC_IP with instance $INSTANCE_ID..."
+          aws ec2 associate-address \
+            --instance-id "$INSTANCE_ID" \
+            --allocation-id "$EIP_ALLOC_ID" \
+            --allow-reassociation \
+            --region $REGION
+          echo "Elastic IP associated"
+
+          # ---------------------------------------------------------------
+          # 4. Create and start systemd service
+          # ---------------------------------------------------------------
           echo "Creating systemd service: $SERVICE_NAME"
           cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
           [Unit]
@@ -311,28 +386,28 @@ Resources:
           WantedBy=multi-user.target
           SERVICEEOF
 
-          # Start the relay service
           echo "Starting relay service..."
           systemctl daemon-reload
           systemctl enable $SERVICE_NAME
           systemctl start $SERVICE_NAME
 
-          # Wait for startup and extract the dynamically generated peer ID
-          echo "Waiting for relay to generate identity and start..."
+          # ---------------------------------------------------------------
+          # 5. Wait for startup, extract peer ID
+          # ---------------------------------------------------------------
+          echo "Waiting for relay to start..."
           RELAY_PEER_ID=""
           for i in $(seq 1 30); do
             sleep 2
             RELAY_PEER_ID=$(journalctl -u $SERVICE_NAME --no-pager 2>/dev/null | grep 'Local Peer ID:' | head -1 | sed 's/.*Local Peer ID: //')
             if [ -n "$RELAY_PEER_ID" ]; then
-              echo "Peer ID found: $RELAY_PEER_ID"
+              echo "Peer ID: $RELAY_PEER_ID"
               break
             fi
             echo "Waiting for peer ID (attempt $i/30)..."
           done
 
           if [ -z "$RELAY_PEER_ID" ]; then
-            echo "ERROR: Could not extract peer ID from relay logs after 60 seconds"
-            echo "--- Recent service logs ---"
+            echo "ERROR: Could not extract peer ID after 60 seconds"
             journalctl -u $SERVICE_NAME --no-pager -n 50
             exit 1
           fi
@@ -349,18 +424,29 @@ Resources:
 
           systemctl status $SERVICE_NAME --no-pager || true
 
-          # Write relay address to SSM Parameter Store
-          SSM_PARAM_NAME="/harbor/${AWS::StackName}/relay-address"
+          # ---------------------------------------------------------------
+          # 6. Persist identity key and relay address to SSM
+          # ---------------------------------------------------------------
+          if [ "$KEY_IS_NEW" = "true" ]; then
+            echo "Saving new identity key to SSM..."
+            IDENTITY_KEY_B64=$(base64 -w0 /root/.config/harbor-relay/id.key)
+            aws ssm put-parameter \
+              --name "$IDENTITY_SSM_PARAM" \
+              --value "$IDENTITY_KEY_B64" \
+              --type SecureString \
+              --overwrite \
+              --region $REGION
+            echo "Identity key saved to SSM"
+          fi
+
           RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/${RelayPort}/p2p/$RELAY_PEER_ID"
 
-          echo "Relay address: $RELAY_ADDRESS"
-
           aws ssm put-parameter \
-            --name "$SSM_PARAM_NAME" \
+            --name "/harbor/${AWS::StackName}/relay-address" \
             --value "$RELAY_ADDRESS" \
             --type String \
             --overwrite \
-            --region ${AWS::Region}
+            --region $REGION
 
           echo "=== SUCCESS ==="
           echo "YOUR RELAY ADDRESS (copy this to Harbor):"
@@ -368,8 +454,7 @@ Resources:
           echo "Community: ${CommunityName}"
           echo "Service: $SERVICE_NAME"
           echo ""
-          echo "To retrieve this address later:"
-          echo "  aws ssm get-parameter --name '$SSM_PARAM_NAME' --query 'Parameter.Value' --output text --region ${AWS::Region}"
+          echo "This address is stable across rebuilds (same stack name = same IP + peer ID)"
           echo "=== Setup Complete ==="
 
       Tags:
@@ -379,12 +464,8 @@ Resources:
           Value: harbor-chat
 
 Outputs:
-  RelayPublicIP:
-    Description: "Relay server public IP"
-    Value: !Ref RelayEIP
-
   GetRelayAddress:
-    Description: "STEP 1: Run this command to get your full relay address (includes unique peer ID)"
+    Description: "STEP 1: Run this command to get your full relay address"
     Value: !Sub "aws ssm get-parameter --name '/harbor/${AWS::StackName}/relay-address' --query 'Parameter.Value' --output text --region ${AWS::Region}"
 
   SSMConsoleLink:
@@ -396,12 +477,16 @@ Outputs:
     Value: "Open Harbor > Network > Advanced > Add Relay Address"
 
   ServiceName:
-    Description: "Systemd service name (for SSH troubleshooting)"
+    Description: "Systemd service name (for troubleshooting)"
     Value: !Sub "${AWS::StackName}-community-relay"
 
   CommunityNameOutput:
     Description: "Community name"
     Value: !Ref CommunityName
+
+  IdentityNote:
+    Description: "Identity persistence"
+    Value: !Sub "IP and peer ID are stored in SSM under /harbor/${AWS::StackName}/. Redeploying with the same stack name reuses both."
 
   EstimatedMonthlyCost:
     Description: "Cost: FREE for 12 months, then ~$9/month"
