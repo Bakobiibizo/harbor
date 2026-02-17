@@ -2123,9 +2123,10 @@ impl NetworkService {
                     .map(|p| p.author_peer_id.clone())
                     .unwrap_or_default();
 
+                let total_media_items: usize = posts.iter().map(|p| p.media_items.len()).sum();
                 info!(
-                    "Received {} wall posts for author {} from relay {} (has_more: {})",
-                    post_count, author_peer_id, peer, has_more
+                    "Received {} wall posts for author {} from relay {} (has_more: {}, media_items: {})",
+                    post_count, author_peer_id, peer, has_more, total_media_items
                 );
 
                 // Store received posts in local SQLite via content_sync_service
