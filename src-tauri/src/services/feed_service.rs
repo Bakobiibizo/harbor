@@ -51,7 +51,7 @@ impl FeedService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        // Get all peer IDs who granted us WallRead
+        // Get all peer IDs who granted us WallRead (excludes our own posts)
         let permissions = self.permissions_service.get_received_permissions()?;
         let mut allowed_authors: Vec<String> = permissions
             .iter()
@@ -59,10 +59,16 @@ impl FeedService {
             .map(|p| p.issuer_peer_id.clone())
             .collect();
 
-        // Always include our own posts
-        allowed_authors.push(identity.peer_id.clone());
+        // Also include all contacts (so we see their posts even before
+        // explicit permission grants — wall posts synced from relay)
+        if let Ok(contacts) = self.contacts_service.get_active_contacts() {
+            for contact in contacts {
+                allowed_authors.push(contact.peer_id);
+            }
+        }
 
-        // Deduplicate
+        // Deduplicate (do NOT include our own peer_id — feed is for others' posts)
+        allowed_authors.retain(|id| id != &identity.peer_id);
         allowed_authors.sort();
         allowed_authors.dedup();
 

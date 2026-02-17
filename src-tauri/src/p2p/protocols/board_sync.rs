@@ -4,6 +4,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Media metadata attached to a wall post.
+///
+/// Synced through the relay so that the receiving client knows which
+/// media hashes to fetch via the P2P media protocol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WallPostMediaItem {
+    pub media_hash: String,
+    pub media_type: String,  // "image"
+    pub mime_type: String,   // "image/jpeg"
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub sort_order: i32,
+}
+
 /// Board sync request (wire protocol)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -61,6 +77,8 @@ pub enum BoardSyncRequest {
         signature: Vec<u8>,
         timestamp: i64,
         request_signature: Vec<u8>,
+        #[serde(default)]
+        media_items: Vec<WallPostMediaItem>,
     },
     /// Get wall posts for a specific author
     GetWallPosts {
@@ -116,6 +134,8 @@ pub struct WallPostData {
     pub created_at: i64,
     pub signature: Vec<u8>,
     pub stored_at: i64,
+    #[serde(default)]
+    pub media_items: Vec<WallPostMediaItem>,
 }
 
 /// Board sync response (wire protocol)

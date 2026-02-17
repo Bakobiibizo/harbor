@@ -63,16 +63,18 @@ export const postsService = {
     sortOrder?: number,
   ): Promise<void> {
     return invoke<void>('add_post_media', {
-      postId,
-      mediaHash,
-      mediaType,
-      mimeType,
-      fileName,
-      fileSize,
-      width,
-      height,
-      durationSeconds,
-      sortOrder,
+      params: {
+        postId,
+        mediaHash,
+        mediaType,
+        mimeType,
+        fileName,
+        fileSize,
+        width,
+        height,
+        durationSeconds,
+        sortOrder,
+      },
     });
   },
 

@@ -329,6 +329,20 @@ pub struct SignableWallPostDelete {
 impl Signable for SignableWallPostDelete {}
 
 // ============================================================
+// MEDIA FETCH (P2P image transfer)
+// ============================================================
+
+/// Signable version of a media fetch request (excludes signature)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableMediaFetchRequest {
+    pub media_hash: String,
+    pub requester_peer_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableMediaFetchRequest {}
+
+// ============================================================
 // SIGNALING (Voice Calls)
 // ============================================================
 

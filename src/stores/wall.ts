@@ -171,61 +171,14 @@ export const useWallStore = create<WallState>((set) => ({
       const backendContentType = contentType === 'post' ? 'text' : contentType;
       const result = await postsService.createPost(backendContentType, content, 'contacts');
 
-      // Store media files and record metadata
-      const storedMedia: { type: 'image' | 'video'; url: string; name?: string }[] = [];
-
-      if (media && media.length > 0) {
-        for (let i = 0; i < media.length; i++) {
-          const m = media[i];
-          let mediaHash: string;
-          let fileSize = 0;
-          const mimeType = m.type === 'image' ? 'image/jpeg' : 'video/mp4';
-
-          if (m.file) {
-            // Store the actual file data via content-addressed storage
-            const bytes = await readFileAsBytes(m.file);
-            fileSize = bytes.length;
-            mediaHash = await mediaService.storeMediaBytes(bytes, m.file.type || mimeType);
-          } else {
-            // Fallback: fetch blob URL and store the bytes
-            try {
-              const response = await fetch(m.url);
-              const blob = await response.blob();
-              const bytes = new Uint8Array(await blob.arrayBuffer());
-              fileSize = bytes.length;
-              const detectedMime = blob.type || mimeType;
-              mediaHash = await mediaService.storeMediaBytes(bytes, detectedMime);
-            } catch (fetchErr) {
-              log.warn('Could not fetch blob URL, using URL as hash fallback', fetchErr);
-              mediaHash = m.url;
-            }
-          }
-
-          // Record the media metadata in the database
-          await postsService.addPostMedia(
-            result.postId,
-            mediaHash,
-            m.type,
-            m.file?.type || mimeType,
-            m.name || `media-${i}`,
-            fileSize,
-            undefined,
-            undefined,
-            undefined,
-            i,
-          );
-
-          // Resolve the hash to a displayable URL for the UI
-          const displayUrl = await resolveMediaUrl(mediaHash);
-          storedMedia.push({
-            type: m.type,
-            url: displayUrl || m.url, // Fall back to blob URL for immediate display
-            name: m.name,
-          });
-        }
-      }
-
       // Add to local state immediately for instant UI feedback
+      // (media URLs use blob URLs for preview until resolved)
+      const previewMedia = media?.map((m) => ({
+        type: m.type,
+        url: m.url,
+        name: m.name,
+      }));
+
       const newPost: WallPost = {
         postId: result.postId,
         content,
@@ -234,7 +187,7 @@ export const useWallStore = create<WallState>((set) => ({
         likes: 0,
         comments: 0,
         liked: false,
-        media: storedMedia.length > 0 ? storedMedia : undefined,
+        media: previewMedia && previewMedia.length > 0 ? previewMedia : undefined,
         authorPeerId: '', // Will be set properly on reload
         visibility: 'contacts',
         lamportClock: 0,
@@ -244,12 +197,52 @@ export const useWallStore = create<WallState>((set) => ({
         posts: [newPost, ...state.posts],
       }));
 
+      // Store media files and record metadata (best-effort, post already visible)
+      if (media && media.length > 0) {
+        for (let i = 0; i < media.length; i++) {
+          const m = media[i];
+          try {
+            let mediaHash: string;
+            let fileSize = 0;
+            const mimeType = m.type === 'image' ? 'image/jpeg' : 'video/mp4';
+
+            if (m.file) {
+              // Store the actual file data via content-addressed storage
+              const bytes = await readFileAsBytes(m.file);
+              fileSize = bytes.length;
+              mediaHash = await mediaService.storeMediaBytes(bytes, m.file.type || mimeType);
+            } else {
+              // Fallback: fetch blob URL and store the bytes
+              const response = await fetch(m.url);
+              const blob = await response.blob();
+              const bytes = new Uint8Array(await blob.arrayBuffer());
+              fileSize = bytes.length;
+              const detectedMime = blob.type || mimeType;
+              mediaHash = await mediaService.storeMediaBytes(bytes, detectedMime);
+            }
+
+            // Record the media metadata in the database
+            await postsService.addPostMedia(
+              result.postId,
+              mediaHash,
+              m.type,
+              m.file?.type || mimeType,
+              m.name || `media-${i}`,
+              fileSize,
+              undefined,
+              undefined,
+              undefined,
+              i,
+            );
+          } catch (mediaErr) {
+            log.warn(`Failed to store media ${i} for post ${result.postId}`, mediaErr);
+          }
+        }
+      }
+
       // Best-effort sync to relay -- post is already saved locally
       feedService
         .syncWallToRelay()
-        .then(() => {
-          toast.success('Post synced to relay');
-        })
         .catch((err) => {
           log.warn('Failed to sync post to relay (saved locally)', err);
         });

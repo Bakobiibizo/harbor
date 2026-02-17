@@ -35,4 +35,12 @@ export const mediaService = {
   async hasMedia(hash: string): Promise<boolean> {
     return invoke<boolean>('has_media', { hash });
   },
+
+  /**
+   * Scan for missing media and send P2P fetch requests to connected authors.
+   * Returns the number of fetch requests sent.
+   */
+  async preloadMissingMedia(): Promise<number> {
+    return invoke<number>('preload_missing_media');
+  },
 };

@@ -3,6 +3,7 @@ import { feedService } from '../services/feed';
 import { commentsService } from '../services/comments';
 import type { Comment } from '../services/comments';
 import * as networkService from '../services/network';
+import { mediaService } from '../services/media';
 import { createLogger } from '../utils/logger';
 import type { FeedItem } from '../types';
 
@@ -68,6 +69,9 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         const postIds = feedItems.map((item) => item.postId);
         get().loadCommentCounts(postIds);
       }
+
+      // Trigger background media preloader for any missing images
+      mediaService.preloadMissingMedia().catch(() => {});
     } catch (error) {
       log.error('Failed to load feed', error);
       set({ error: String(error), isLoading: false });
@@ -140,6 +144,8 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         isSyncingRelay: false,
         hasMore: feedItems.length === 50,
       });
+      // Trigger background media preloader (best-effort, no error handling)
+      mediaService.preloadMissingMedia().catch(() => {});
     } catch (error) {
       log.warn('Failed to sync feed from relay', error);
       set({ isSyncingRelay: false });

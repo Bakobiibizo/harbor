@@ -1,11 +1,13 @@
 pub mod board_sync;
 pub mod content_sync;
 pub mod identity_exchange;
+pub mod media_sync;
 pub mod messaging;
 
 pub use board_sync::*;
 pub use content_sync::*;
 pub use identity_exchange::*;
+pub use media_sync::*;
 pub use messaging::*;
 
 /// Protocol version string for identity exchange
@@ -22,3 +24,5 @@ pub const SIGNALING_PROTOCOL: &str = "/harbor/signaling/1.0.0";
 
 /// Protocol version string for board sync (community boards)
 pub const BOARD_SYNC_PROTOCOL: &str = "/harbor/board/1.0.0";
+
+// MEDIA_SYNC_PROTOCOL is defined in media_sync.rs and re-exported via pub use

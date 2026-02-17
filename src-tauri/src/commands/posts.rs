@@ -117,6 +117,8 @@ pub async fn create_post(
                 let ca = outgoing.created_at;
                 let sig = outgoing.signature.clone();
                 // Fire and forget -- don't block post creation on relay submission
+                // Media is added separately via add_post_media, so pass empty vec here.
+                // The full wall sync (sync_wall_to_relay) will include media metadata.
                 tokio::spawn(async move {
                     if let Err(e) = handle
                         .submit_wall_post_to_relay(
@@ -128,6 +130,7 @@ pub async fn create_post(
                             lc,
                             ca,
                             sig,
+                            Vec::new(),
                         )
                         .await
                     {

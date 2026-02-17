@@ -168,6 +168,8 @@ pub enum BoardSyncRequest {
         signature: Vec<u8>,
         timestamp: i64,
         request_signature: Vec<u8>,
+        #[serde(default)]
+        media_items: Vec<WallPostMediaItemProto>,
     },
     GetWallPosts {
         requester_peer_id: String,
@@ -209,6 +211,19 @@ pub struct BoardPostInfoProto {
     pub signature: Vec<u8>,
 }
 
+/// Media metadata attached to a wall post
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WallPostMediaItemProto {
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub sort_order: i32,
+}
+
 /// Wall post data in responses
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WallPostData {
@@ -221,6 +236,8 @@ pub struct WallPostData {
     pub created_at: i64,
     pub signature: Vec<u8>,
     pub stored_at: i64,
+    #[serde(default)]
+    pub media_items: Vec<WallPostMediaItemProto>,
 }
 
 /// Board sync response (wire protocol)
@@ -717,6 +734,7 @@ fn handle_board_request(
             signature,
             timestamp,
             request_signature,
+            media_items,
         } => {
             if author_peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
@@ -734,6 +752,7 @@ fn handle_board_request(
                 &signature,
                 timestamp,
                 &request_signature,
+                &media_items,
             ) {
                 Ok(()) => BoardSyncResponse::WallPostStored { post_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
@@ -755,22 +774,53 @@ fn handle_board_request(
                 timestamp,
                 &signature,
             ) {
-                Ok((posts, has_more)) => BoardSyncResponse::WallPosts {
-                    posts: posts
-                        .into_iter()
-                        .map(|p| WallPostData {
-                            post_id: p.post_id,
-                            author_peer_id: p.author_peer_id,
-                            content_type: p.content_type,
-                            content_text: p.content_text,
-                            visibility: p.visibility,
-                            lamport_clock: p.lamport_clock,
-                            created_at: p.created_at,
-                            signature: p.signature,
-                            stored_at: p.stored_at,
-                        })
-                        .collect(),
-                    has_more,
+                Ok((posts, has_more, media_map)) => {
+                    // Build a lookup from post_id -> media items
+                    let media_lookup: std::collections::HashMap<String, Vec<WallPostMediaItemProto>> =
+                        media_map
+                            .into_iter()
+                            .map(|(post_id, items)| {
+                                let protos = items
+                                    .into_iter()
+                                    .map(|m| WallPostMediaItemProto {
+                                        media_hash: m.media_hash,
+                                        media_type: m.media_type,
+                                        mime_type: m.mime_type,
+                                        file_name: m.file_name,
+                                        file_size: m.file_size,
+                                        width: m.width,
+                                        height: m.height,
+                                        sort_order: m.sort_order,
+                                    })
+                                    .collect();
+                                (post_id, protos)
+                            })
+                            .collect();
+
+                    BoardSyncResponse::WallPosts {
+                        posts: posts
+                            .into_iter()
+                            .map(|p| {
+                                let media_items = media_lookup
+                                    .get(&p.post_id)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                WallPostData {
+                                    post_id: p.post_id,
+                                    author_peer_id: p.author_peer_id,
+                                    content_type: p.content_type,
+                                    content_text: p.content_text,
+                                    visibility: p.visibility,
+                                    lamport_clock: p.lamport_clock,
+                                    created_at: p.created_at,
+                                    signature: p.signature,
+                                    stored_at: p.stored_at,
+                                    media_items,
+                                }
+                            })
+                            .collect(),
+                        has_more,
+                    }
                 },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }

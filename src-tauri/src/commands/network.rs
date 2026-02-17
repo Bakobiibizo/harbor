@@ -1,8 +1,8 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::{
-    BoardService, ContactsService, ContentSyncService, IdentityService, MessagingService,
-    PermissionsService, PostsService,
+    BoardService, ContactsService, ContentSyncService, IdentityService, MediaStorageService,
+    MessagingService, PermissionsService, PostsService,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -81,6 +81,7 @@ pub struct StartNetworkServices {
     pub posts_service: Arc<PostsService>,
     pub content_sync_service: Arc<ContentSyncService>,
     pub board_service: Arc<BoardService>,
+    pub media_service: Arc<MediaStorageService>,
 }
 
 /// Start the P2P network (called after identity is unlocked)
@@ -100,6 +101,7 @@ pub async fn start_network(
     posts_service: State<'_, Arc<PostsService>>,
     content_sync_service: State<'_, Arc<ContentSyncService>>,
     board_service: State<'_, Arc<BoardService>>,
+    media_service: State<'_, Arc<MediaStorageService>>,
 ) -> Result<(), AppError> {
     let services = StartNetworkServices {
         identity_service: (*identity_service).clone(),
@@ -109,6 +111,7 @@ pub async fn start_network(
         posts_service: (*posts_service).clone(),
         content_sync_service: (*content_sync_service).clone(),
         board_service: (*board_service).clone(),
+        media_service: (*media_service).clone(),
     };
     start_network_with_services(app, network, services).await
 }
@@ -174,6 +177,7 @@ async fn start_network_with_services(
     service.set_posts_service(services.posts_service.clone());
     service.set_content_sync_service(services.content_sync_service.clone());
     service.set_board_service(services.board_service.clone());
+    service.set_media_service(services.media_service.clone());
 
     // Store the handle
     network.set_handle(handle).await;

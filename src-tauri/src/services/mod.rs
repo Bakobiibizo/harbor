@@ -68,4 +68,6 @@ pub use signing::{
     SignableSignalingOffer,
     SignableWallPostDelete,
     SignableWallPostSubmit,
+    // Media fetch
+    SignableMediaFetchRequest,
 };

@@ -5,10 +5,12 @@ use tauri::State;
 
 use crate::commands::NetworkState;
 use crate::error::AppError;
+use crate::p2p::protocols::board_sync::WallPostMediaItem;
 use crate::services::{ContactsService, PostsService};
 
 /// Submit all local wall posts to the relay for offline availability.
 /// This finds the connected community relay and sends each unsynced post.
+/// Media metadata (images only) is included so receiving clients know what to fetch.
 #[tauri::command]
 pub async fn sync_wall_to_relay(
     network_state: State<'_, NetworkState>,
@@ -29,6 +31,27 @@ pub async fn sync_wall_to_relay(
             continue;
         }
 
+        // Collect image-only media metadata for this post
+        let media_items: Vec<WallPostMediaItem> = match posts_service
+            .get_post_media(&post.post_id)
+        {
+            Ok(media_list) => media_list
+                .into_iter()
+                .filter(|m| m.media_type == "image")
+                .map(|m| WallPostMediaItem {
+                    media_hash: m.media_hash,
+                    media_type: m.media_type,
+                    mime_type: m.mime_type,
+                    file_name: m.file_name,
+                    file_size: m.file_size,
+                    width: m.width,
+                    height: m.height,
+                    sort_order: m.sort_order,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
         handle
             .submit_wall_post_to_relay(
                 relay_peer_id,
@@ -39,6 +62,7 @@ pub async fn sync_wall_to_relay(
                 post.lamport_clock,
                 post.created_at,
                 post.signature,
+                media_items,
             )
             .await?;
         submitted += 1;

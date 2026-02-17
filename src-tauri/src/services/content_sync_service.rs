@@ -92,6 +92,11 @@ impl ContentSyncService {
         }
     }
 
+    /// Get a reference to the underlying database (used for direct post_media writes)
+    pub fn db(&self) -> &Database {
+        &self.db
+    }
+
     /// Create a manifest request to send to a peer
     pub fn create_manifest_request(
         &self,
