@@ -457,6 +457,7 @@ impl BoardService {
         signature: &[u8],
         timestamp: i64,
         request_signature: &[u8],
+        media_items: &[crate::WallPostMediaItemProto],
     ) -> Result<(), String> {
         // Check peer is known
         if !self.db.is_peer_known(author_peer_id).unwrap_or(false) {
@@ -517,9 +518,29 @@ impl BoardService {
             )
             .map_err(|db_error| format!("Failed to store wall post: {}", db_error))?;
 
+        // Store media metadata alongside the wall post
+        for item in media_items {
+            if let Err(e) = self.db.insert_wall_post_media(
+                post_id,
+                &item.media_hash,
+                &item.media_type,
+                &item.mime_type,
+                &item.file_name,
+                item.file_size,
+                item.width,
+                item.height,
+                item.sort_order,
+            ) {
+                warn!(
+                    "Failed to store media metadata for post {}: {}",
+                    post_id, e
+                );
+            }
+        }
+
         info!(
-            "Wall post {} stored for {} (visibility={}, lamport_clock={})",
-            post_id, author_peer_id, visibility, lamport_clock
+            "Wall post {} stored for {} (visibility={}, lamport_clock={}, media={})",
+            post_id, author_peer_id, visibility, lamport_clock, media_items.len()
         );
         Ok(())
     }
@@ -536,7 +557,7 @@ impl BoardService {
         limit: u32,
         timestamp: i64,
         signature: &[u8],
-    ) -> Result<(Vec<crate::db::WallPostRow>, bool), String> {
+    ) -> Result<(Vec<crate::db::WallPostRow>, bool, Vec<(String, Vec<crate::db::WallPostMediaRow>)>), String> {
         // Verify the requester's signature
         let signable_request = SignableGetWallPosts {
             requester_peer_id: requester_peer_id.to_string(),
@@ -573,7 +594,18 @@ impl BoardService {
             posts
         };
 
-        Ok((posts, has_more))
+        // Fetch media metadata for each post
+        let mut media_map = Vec::new();
+        for post in &posts {
+            match self.db.get_wall_post_media(&post.post_id) {
+                Ok(media_items) if !media_items.is_empty() => {
+                    media_map.push((post.post_id.clone(), media_items));
+                }
+                _ => {}
+            }
+        }
+
+        Ok((posts, has_more, media_map))
     }
 
     /// Delete a wall post (author-only).

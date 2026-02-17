@@ -579,7 +579,7 @@ const allPosts: UnifiedPost[] = useMemo(() => {
       };
     })
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-}, [feedItems, contacts]);
+}, [feedItems, contacts, commentCounts, postMediaMap]);
 
 // Select posts based on active tab (saved tab placeholder for future)
 const posts: UnifiedPost[] = activeTab === 'saved' ? [] : allPosts;

@@ -331,6 +331,7 @@ pub fn run() {
             commands::store_media_bytes,
             commands::get_media_url,
             commands::has_media,
+            commands::preload_missing_media,
             // Wall sync commands (relay-based wall post sync)
             commands::sync_wall_to_relay,
             commands::fetch_contact_wall_from_relay,

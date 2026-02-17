@@ -3,6 +3,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import toast from 'react-hot-toast';
 import type { NetworkEvent } from '../types';
 import { useNetworkStore, useContactsStore, useMessagingStore, useFeedStore } from '../stores';
+import { mediaService } from '../services/media';
 
 /**
  * Hook to listen to Tauri events from the Rust backend.
@@ -33,30 +34,33 @@ export function useTauriEvents() {
     function handleNetworkEvent(event: NetworkEvent) {
       switch (event.type) {
         case 'peer_connected':
-          console.log(`[Network] Peer connected: ${event.peerId}`);
+          console.log(`[Network] Peer connected: ${event.peer_id}`);
           // Refresh the full peer list to get updated info
           refreshPeers();
           refreshStats();
+          // Trigger media preloader — a newly connected peer may be an author
+          // whose images we need to fetch (e.g. after relay circuit dial)
+          mediaService.preloadMissingMedia().catch(() => {});
           break;
 
         case 'peer_disconnected':
-          console.log(`[Network] Peer disconnected: ${event.peerId}`);
+          console.log(`[Network] Peer disconnected: ${event.peer_id}`);
           refreshPeers();
           refreshStats();
           break;
 
         case 'peer_discovered':
-          console.log(`[Network] Peer discovered: ${event.peerId}`);
+          console.log(`[Network] Peer discovered: ${event.peer_id}`);
           refreshPeers();
           break;
 
         case 'peer_expired':
-          console.log(`[Network] Peer expired: ${event.peerId}`);
+          console.log(`[Network] Peer expired: ${event.peer_id}`);
           refreshPeers();
           break;
 
         case 'message_received':
-          console.log(`[Network] Message received from ${event.peerId} via ${event.protocol}`);
+          console.log(`[Network] Message received from ${event.peer_id} via ${event.protocol}`);
           // Use getState() to avoid stale closures - call functions directly from the store
           const messagingState = useMessagingStore.getState();
           // Always refresh conversations to update previews and unread counts
@@ -64,9 +68,9 @@ export function useTauriEvents() {
           // Reload messages if we're viewing the sender's conversation
           const activeConv = messagingState.activeConversation;
           console.log(
-            `[Network] Active conversation: ${activeConv}, message from: ${event.peerId}`,
+            `[Network] Active conversation: ${activeConv}, message from: ${event.peer_id}`,
           );
-          if (activeConv === event.peerId) {
+          if (activeConv === event.peer_id) {
             console.log(`[Network] Reloading messages for active conversation: ${activeConv}`);
             messagingState.loadMessages(activeConv);
           }
@@ -87,9 +91,9 @@ export function useTauriEvents() {
           break;
 
         case 'contact_added':
-          console.log(`[Network] Contact added: ${event.displayName} (${event.peerId})`);
+          console.log(`[Network] Contact added: ${event.display_name} (${event.peer_id})`);
           refreshContacts();
-          toast.success(`Added ${event.displayName} to contacts!`);
+          toast.success(`Added ${event.display_name} to contacts!`);
           break;
 
         case 'nat_status_changed':
@@ -105,11 +109,11 @@ export function useTauriEvents() {
           break;
 
         case 'relay_connected':
-          console.log(`[Network] Relay connected: ${event.relayAddress}`);
+          console.log(`[Network] Relay connected: ${event.relay_address}`);
           // Dismiss any pending timeout/warning toasts
           toast.dismiss();
           // Add relay address to store
-          useNetworkStore.getState().addRelayAddress(event.relayAddress);
+          useNetworkStore.getState().addRelayAddress(event.relay_address);
           // Update relay status
           useNetworkStore.getState().setRelayStatus('connected');
           // Refresh addresses to update the UI
@@ -119,24 +123,46 @@ export function useTauriEvents() {
           break;
 
         case 'hole_punch_succeeded':
-          console.log(`[Network] Hole punch succeeded with: ${event.peerId}`);
+          console.log(`[Network] Hole punch succeeded with: ${event.peer_id}`);
           toast.success('Direct connection established!');
           break;
 
         case 'content_manifest_received':
           console.log(
-            `[Network] Content manifest received from ${event.peerId}: ${event.postCount} posts, hasMore: ${event.hasMore}`,
+            `[Network] Content manifest received from ${event.peer_id}: ${event.post_count} posts, hasMore: ${event.has_more}`,
           );
           break;
 
         case 'content_fetched':
-          console.log(`[Network] Content fetched from ${event.peerId}: post ${event.postId}`);
+          console.log(`[Network] Content fetched from ${event.peer_id}: post ${event.post_id}`);
           // Refresh the feed to show new posts
           useFeedStore.getState().loadFeed();
           break;
 
         case 'content_sync_error':
-          console.warn(`[Network] Content sync error from ${event.peerId}: ${event.error}`);
+          console.warn(`[Network] Content sync error from ${event.peer_id}: ${event.error}`);
+          break;
+
+        case 'wall_post_synced':
+          console.log(`[Network] Wall post synced to relay: ${event.post_id}`);
+          break;
+
+        case 'wall_posts_received':
+          console.log(`[Network] Wall posts received from relay (author: ${event.author_peer_id}, count: ${event.post_count})`);
+          // Reload feed to show newly received posts
+          useFeedStore.getState().loadFeed();
+          // Trigger background media preloader (fire-and-forget)
+          mediaService.preloadMissingMedia().catch(() => {});
+          break;
+
+        case 'media_fetched':
+          console.log(`[Network] Media fetched from ${event.peer_id}: ${event.media_hash}`);
+          // Refresh feed to display newly available images
+          useFeedStore.getState().loadFeed();
+          break;
+
+        case 'wall_post_deleted_on_relay':
+          console.log(`[Network] Wall post deleted on relay: ${event.post_id}`);
           break;
       }
     }

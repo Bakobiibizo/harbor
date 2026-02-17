@@ -2,6 +2,8 @@ use libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::protocols::board_sync::WallPostMediaItem;
+
 /// Network connection status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -150,6 +152,11 @@ pub enum NetworkEvent {
         relay_peer_id: String,
         post_id: String,
     },
+    /// Media was fetched from a peer and stored locally
+    MediaFetched {
+        peer_id: String,
+        media_hash: String,
+    },
 }
 
 /// Commands that can be sent to the network service
@@ -238,6 +245,12 @@ pub enum NetworkCommand {
         lamport_clock: i64,
         created_at: i64,
         signature: Vec<u8>,
+        media_items: Vec<WallPostMediaItem>,
+    },
+    /// Fetch media by hash from a peer
+    FetchMedia {
+        peer_id: PeerId,
+        media_hash: String,
     },
     /// Get wall posts for a specific author from a relay
     GetWallPostsFromRelay {

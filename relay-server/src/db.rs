@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS wall_posts (
 
 CREATE INDEX IF NOT EXISTS idx_wall_posts_author
     ON wall_posts(author_peer_id, lamport_clock DESC);
+
+CREATE TABLE IF NOT EXISTS wall_post_media (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id TEXT NOT NULL,
+    media_hash TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    sort_order INTEGER DEFAULT 0,
+    FOREIGN KEY (post_id) REFERENCES wall_posts(post_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_wall_post_media_post
+    ON wall_post_media(post_id);
 "#;
 
 /// Relay server database
@@ -508,6 +525,57 @@ impl RelayDatabase {
         Ok(posts)
     }
 
+    /// Insert media metadata for a wall post.
+    /// Uses INSERT OR IGNORE so re-submitting the same post_id+media_hash is idempotent.
+    pub fn insert_wall_post_media(
+        &self,
+        post_id: &str,
+        media_hash: &str,
+        media_type: &str,
+        mime_type: &str,
+        file_name: &str,
+        file_size: i64,
+        width: Option<i32>,
+        height: Option<i32>,
+        sort_order: i32,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO wall_post_media
+                (post_id, media_hash, media_type, mime_type, file_name, file_size, width, height, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![post_id, media_hash, media_type, mime_type, file_name, file_size, width, height, sort_order],
+        )?;
+        Ok(())
+    }
+
+    /// Get media metadata for a wall post.
+    pub fn get_wall_post_media(&self, post_id: &str) -> SqliteResult<Vec<WallPostMediaRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT media_hash, media_type, mime_type, file_name, file_size, width, height, sort_order
+             FROM wall_post_media
+             WHERE post_id = ?
+             ORDER BY sort_order ASC",
+        )?;
+
+        let mut items = Vec::new();
+        let mut rows = stmt.query([post_id])?;
+        while let Some(row) = rows.next()? {
+            items.push(WallPostMediaRow {
+                media_hash: row.get(0)?,
+                media_type: row.get(1)?,
+                mime_type: row.get(2)?,
+                file_name: row.get(3)?,
+                file_size: row.get(4)?,
+                width: row.get(5)?,
+                height: row.get(6)?,
+                sort_order: row.get(7)?,
+            });
+        }
+        Ok(items)
+    }
+
     /// Delete a wall post. Returns true if a row was actually removed.
     pub fn delete_wall_post(&self, post_id: &str, author_peer_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap();
@@ -555,4 +623,17 @@ pub struct WallPostRow {
     pub created_at: i64,
     pub signature: Vec<u8>,
     pub stored_at: i64,
+}
+
+/// A wall post media metadata row from the database
+#[derive(Debug, Clone)]
+pub struct WallPostMediaRow {
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub sort_order: i32,
 }

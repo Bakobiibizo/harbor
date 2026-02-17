@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use super::protocols::board_sync::{BoardSyncRequest, BoardSyncResponse};
+use super::protocols::media_sync::{MediaFetchRequest, MediaFetchResponse, MEDIA_SYNC_PROTOCOL};
 use super::protocols::{
     BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL,
 };
@@ -41,6 +42,8 @@ pub struct ChatBehaviour {
     pub content_sync: request_response::cbor::Behaviour<ContentSyncRequest, ContentSyncResponse>,
     /// Request-response for board sync (community boards)
     pub board_sync: request_response::cbor::Behaviour<BoardSyncRequest, BoardSyncResponse>,
+    /// Request-response for media sync (P2P image transfer)
+    pub media_sync: request_response::cbor::Behaviour<MediaFetchRequest, MediaFetchResponse>,
 }
 
 /// Identity exchange request (simplified for request-response)
@@ -212,6 +215,16 @@ impl ChatBehaviour {
             request_response::Config::default(),
         );
 
+        // Media sync protocol (with larger response size for image transfers)
+        let media_sync = request_response::cbor::Behaviour::new(
+            [(
+                StreamProtocol::new(MEDIA_SYNC_PROTOCOL),
+                ProtocolSupport::Full,
+            )],
+            request_response::Config::default()
+                .with_request_timeout(Duration::from_secs(60)),
+        );
+
         Self {
             ping,
             identify,
@@ -224,6 +237,7 @@ impl ChatBehaviour {
             messaging,
             content_sync,
             board_sync,
+            media_sync,
         }
     }
 }

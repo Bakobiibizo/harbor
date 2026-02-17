@@ -37,9 +37,9 @@ use crate::services::board_service::StorableBoardPost;
 use crate::services::content_sync_service::RemotePostParams;
 use crate::services::messaging_service::IncomingMessageParams;
 use crate::services::{
-    BoardService, ContactsService, ContentSyncService, IdentityService, MessagingService,
-    PermissionsService, PostsService, SignableGetWallPosts, SignableWallPostDelete,
-    SignableWallPostSubmit,
+    BoardService, ContactsService, ContentSyncService, IdentityService, MediaStorageService,
+    MessagingService, PermissionsService, PostsService, SignableGetWallPosts,
+    SignableWallPostDelete, SignableWallPostSubmit,
 };
 use std::sync::Arc;
 
@@ -390,6 +390,7 @@ impl NetworkHandle {
         lamport_clock: i64,
         created_at: i64,
         signature: Vec<u8>,
+        media_items: Vec<super::protocols::board_sync::WallPostMediaItem>,
     ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
@@ -403,6 +404,30 @@ impl NetworkHandle {
                     lamport_clock,
                     created_at,
                     signature,
+                    media_items,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Fetch media by hash from a specific peer
+    pub async fn fetch_media(&self, peer_id: PeerId, media_hash: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::FetchMedia {
+                    peer_id,
+                    media_hash,
                 },
                 Some(tx),
             ))
@@ -553,6 +578,7 @@ pub struct NetworkService {
     posts_service: Option<Arc<PostsService>>,
     content_sync_service: Option<Arc<ContentSyncService>>,
     board_service: Option<Arc<BoardService>>,
+    media_service: Option<Arc<MediaStorageService>>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
     event_tx: mpsc::Sender<NetworkEvent>,
     connected_peers: HashMap<PeerId, PeerInfo>,
@@ -610,6 +636,7 @@ impl NetworkService {
             posts_service: None,
             content_sync_service: None,
             board_service: None,
+            media_service: None,
             command_rx,
             event_tx,
             connected_peers: HashMap::new(),
@@ -658,6 +685,11 @@ impl NetworkService {
     /// Set board service for community board operations
     pub fn set_board_service(&mut self, service: Arc<BoardService>) {
         self.board_service = Some(service);
+    }
+
+    /// Set media storage service for P2P media transfer
+    pub fn set_media_service(&mut self, service: Arc<MediaStorageService>) {
+        self.media_service = Some(service);
     }
 
     /// Get the local peer ID
@@ -1149,6 +1181,10 @@ impl NetworkService {
                 self.handle_board_sync_event(event).await;
             }
 
+            ChatBehaviourEvent::MediaSync(event) => {
+                self.handle_media_sync_event(event).await;
+            }
+
             ChatBehaviourEvent::RelayClient(event) => {
                 self.handle_relay_client_event(event).await;
             }
@@ -1396,6 +1432,200 @@ impl NetworkService {
             }
 
             _ => {}
+        }
+    }
+
+    /// Handle media sync events (P2P image transfer)
+    async fn handle_media_sync_event(
+        &mut self,
+        event: request_response::Event<
+            super::protocols::media_sync::MediaFetchRequest,
+            super::protocols::media_sync::MediaFetchResponse,
+        >,
+    ) {
+        match event {
+            request_response::Event::Message { peer, message, .. } => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    // Inbound: a peer is requesting media from us
+                    let response = self.handle_media_fetch_request(peer, &request);
+                    if let Err(e) = self
+                        .swarm
+                        .behaviour_mut()
+                        .media_sync
+                        .send_response(channel, response)
+                    {
+                        warn!("Failed to send media sync response: {:?}", e);
+                    }
+                }
+                request_response::Message::Response { response, .. } => {
+                    // Outbound: we received media bytes from a peer
+                    self.handle_media_fetch_response(peer, response).await;
+                }
+            },
+            request_response::Event::OutboundFailure { peer, error, .. } => {
+                warn!("Media fetch outbound failure to peer {}: {}", peer, error);
+            }
+            request_response::Event::InboundFailure { peer, error, .. } => {
+                warn!("Media fetch inbound failure from peer {}: {}", peer, error);
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle an inbound media fetch request (serve media to a peer)
+    fn handle_media_fetch_request(
+        &self,
+        peer: PeerId,
+        request: &super::protocols::media_sync::MediaFetchRequest,
+    ) -> super::protocols::media_sync::MediaFetchResponse {
+        use super::protocols::media_sync::MediaFetchResponse;
+
+        // Verify requester is in contacts
+        if let Some(ref contacts_service) = self.contacts_service {
+            match contacts_service.is_contact(&request.requester_peer_id) {
+                Ok(true) => {}
+                Ok(false) => {
+                    info!(
+                        "Media fetch denied: {} is not a contact",
+                        request.requester_peer_id
+                    );
+                    return MediaFetchResponse::Error {
+                        error: "Not a contact".to_string(),
+                    };
+                }
+                Err(e) => {
+                    warn!("Error checking contact status: {}", e);
+                    return MediaFetchResponse::Error {
+                        error: "Internal error".to_string(),
+                    };
+                }
+            }
+        }
+
+        // Verify the requester_peer_id matches the actual peer
+        if request.requester_peer_id != peer.to_string() {
+            return MediaFetchResponse::Error {
+                error: "peer_id mismatch".to_string(),
+            };
+        }
+
+        // Read media from storage
+        let media_service = match &self.media_service {
+            Some(s) => s,
+            None => {
+                return MediaFetchResponse::Error {
+                    error: "Media service unavailable".to_string(),
+                };
+            }
+        };
+
+        if !media_service.has_media(&request.media_hash) {
+            return MediaFetchResponse::Error {
+                error: "Media not found".to_string(),
+            };
+        }
+
+        match media_service.get_media(&request.media_hash) {
+            Ok(data) => {
+                // Determine mime type from stored file
+                let mime_type = media_service
+                    .get_media_path(&request.media_hash)
+                    .ok()
+                    .and_then(|p| {
+                        p.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|ext| match ext {
+                                "jpg" | "jpeg" => "image/jpeg",
+                                "png" => "image/png",
+                                "gif" => "image/gif",
+                                "webp" => "image/webp",
+                                _ => "application/octet-stream",
+                            })
+                    })
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+
+                info!(
+                    "Serving media {} ({} bytes, {}) to peer {}",
+                    request.media_hash,
+                    data.len(),
+                    mime_type,
+                    peer
+                );
+
+                MediaFetchResponse::MediaData {
+                    media_hash: request.media_hash.clone(),
+                    mime_type,
+                    data,
+                }
+            }
+            Err(e) => MediaFetchResponse::Error {
+                error: format!("Failed to read media: {}", e),
+            },
+        }
+    }
+
+    /// Handle an outbound media fetch response (store received media)
+    async fn handle_media_fetch_response(
+        &mut self,
+        peer: PeerId,
+        response: super::protocols::media_sync::MediaFetchResponse,
+    ) {
+        use super::protocols::media_sync::MediaFetchResponse;
+        use sha2::{Digest, Sha256};
+
+        match response {
+            MediaFetchResponse::MediaData {
+                media_hash,
+                mime_type,
+                data,
+            } => {
+                // Verify hash matches actual SHA256 of received bytes
+                let mut hasher = Sha256::new();
+                hasher.update(&data);
+                let actual_hash = hex::encode(hasher.finalize());
+
+                if actual_hash != media_hash {
+                    warn!(
+                        "Media hash mismatch from {}: expected {} got {}",
+                        peer, media_hash, actual_hash
+                    );
+                    return;
+                }
+
+                // Store via MediaStorageService
+                if let Some(ref media_service) = self.media_service {
+                    match media_service.store_media(&data, &mime_type) {
+                        Ok(hash) => {
+                            info!(
+                                "Stored media {} ({} bytes) from peer {}",
+                                hash,
+                                data.len(),
+                                peer
+                            );
+
+                            // Emit event to frontend
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::MediaFetched {
+                                    peer_id: peer.to_string(),
+                                    media_hash,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            warn!("Failed to store media from {}: {}", peer, e);
+                        }
+                    }
+                } else {
+                    warn!("Media service unavailable, cannot store received media");
+                }
+            }
+            MediaFetchResponse::Error { error } => {
+                warn!("Media fetch error from {}: {}", peer, error);
+            }
         }
     }
 
@@ -1922,6 +2152,57 @@ impl NetworkService {
                                     "Failed to store wall post {} from relay: {}",
                                     post.post_id, e
                                 );
+                            }
+                        }
+
+                        // Store media metadata from the relay response
+                        // Use PostsRepository directly since add_media_to_post checks ownership
+                        if !post.media_items.is_empty() {
+                            if let Some(ref content_sync_svc) = self.content_sync_service {
+                                for media_item in &post.media_items {
+                                    use crate::db::{PostMediaData, PostsRepository};
+                                    // Check if this media entry already exists (idempotent)
+                                    let existing = PostsRepository::get_post_media(
+                                        content_sync_svc.db(),
+                                        &post.post_id,
+                                    );
+                                    let already_exists = existing
+                                        .as_ref()
+                                        .map(|list| list.iter().any(|m| m.media_hash == media_item.media_hash))
+                                        .unwrap_or(false);
+
+                                    if !already_exists {
+                                        let media_data = PostMediaData {
+                                            post_id: post.post_id.clone(),
+                                            media_hash: media_item.media_hash.clone(),
+                                            media_type: media_item.media_type.clone(),
+                                            mime_type: media_item.mime_type.clone(),
+                                            file_name: media_item.file_name.clone(),
+                                            file_size: media_item.file_size,
+                                            width: media_item.width,
+                                            height: media_item.height,
+                                            duration_seconds: None,
+                                            sort_order: media_item.sort_order,
+                                        };
+                                        match PostsRepository::add_media(
+                                            content_sync_svc.db(),
+                                            &media_data,
+                                        ) {
+                                            Ok(_) => {
+                                                debug!(
+                                                    "Stored media metadata {} for post {} from relay",
+                                                    media_item.media_hash, post.post_id
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "Failed to store media metadata for post {}: {}",
+                                                    post.post_id, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2918,6 +3199,7 @@ impl NetworkService {
                 lamport_clock,
                 created_at,
                 signature,
+                media_items,
             } => {
                 let identity = match self.identity_service.get_identity() {
                     Ok(Some(id)) => id,
@@ -2955,6 +3237,7 @@ impl NetworkService {
                             signature,
                             timestamp: now,
                             request_signature,
+                            media_items,
                         };
                         self.swarm
                             .behaviour_mut()
@@ -2964,6 +3247,50 @@ impl NetworkService {
                     }
                     Err(e) => NetworkResponse::Error(format!(
                         "Failed to sign wall post submission: {}",
+                        e
+                    )),
+                }
+            }
+
+            NetworkCommand::FetchMedia {
+                peer_id,
+                media_hash,
+            } => {
+                use super::protocols::media_sync::MediaFetchRequest;
+
+                let identity = match self.identity_service.get_identity() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        return NetworkResponse::Error("No identity available".to_string());
+                    }
+                    Err(e) => {
+                        return NetworkResponse::Error(format!("Identity error: {}", e));
+                    }
+                };
+
+                let now = chrono::Utc::now().timestamp();
+                let signable = crate::services::SignableMediaFetchRequest {
+                    media_hash: media_hash.clone(),
+                    requester_peer_id: identity.peer_id.clone(),
+                    timestamp: now,
+                };
+
+                match self.identity_service.sign(&signable) {
+                    Ok(signature) => {
+                        let request = MediaFetchRequest {
+                            media_hash,
+                            requester_peer_id: identity.peer_id,
+                            timestamp: now,
+                            signature,
+                        };
+                        self.swarm
+                            .behaviour_mut()
+                            .media_sync
+                            .send_request(&peer_id, request);
+                        NetworkResponse::Ok
+                    }
+                    Err(e) => NetworkResponse::Error(format!(
+                        "Failed to sign media fetch request: {}",
                         e
                     )),
                 }
