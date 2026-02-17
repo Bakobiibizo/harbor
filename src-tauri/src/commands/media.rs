@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::commands::NetworkState;
 use crate::db::Database;
-use crate::services::MediaStorageService;
+use crate::services::{IdentityService, MediaStorageService};
 
 /// Store a media file from a filesystem path, returning its SHA256 hash.
 ///
@@ -117,9 +117,17 @@ pub async fn has_media(
 pub async fn preload_missing_media(
     db: State<'_, Arc<Database>>,
     media_service: State<'_, Arc<MediaStorageService>>,
+    identity_service: State<'_, Arc<IdentityService>>,
     network_state: State<'_, NetworkState>,
 ) -> Result<u32, String> {
-    // Query all image-type media entries with their author
+    // Get local peer ID to exclude own posts (our media is already local)
+    let local_peer_id = identity_service
+        .get_identity()
+        .ok()
+        .flatten()
+        .map(|id| id.peer_id);
+
+    // Query all image-type media entries with their author (excluding own posts)
     let all_media = db
         .with_connection(|conn| {
             let mut stmt = conn.prepare(
@@ -140,6 +148,16 @@ pub async fn preload_missing_media(
             Ok(results)
         })
         .map_err(|e| format!("Failed to query post_media: {}", e))?;
+
+    // Filter out own posts — our media files should already exist locally
+    let all_media: Vec<(String, String)> = if let Some(ref local_id) = local_peer_id {
+        all_media
+            .into_iter()
+            .filter(|(_, author)| author != local_id)
+            .collect()
+    } else {
+        all_media
+    };
 
     // Filter to missing media only
     let missing: Vec<(String, String)> = all_media
