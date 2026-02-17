@@ -177,3 +177,29 @@
 - test: add comprehensive test coverage — 180 backend, 293 frontend tests
 - feat: implement 12 feature enhancements for v1 release
 
+## 2026-02-17 - v1.2.0
+
+- fixing media posts
+- chore: release v1.1.0
+- updated templates
+- updated relay binary
+- ci and templates
+- updated dev
+- updated dev
+- reconfiguring install and re-re-redoing ci to run dev
+- fixing ci drift
+- updating dev config for ci runner
+- merged main into release-candidate, huge refactor
+- Revert "merge main into release-candidate (prefer release-candidate)"
+- fix: resolve CI failures in frontend and backend pipelines
+- ci
+- ci
+- ci
+- updated ci
+- dev ci and relay binary
+- fix: correct mock data types in frontend test files
+- chore: release v1.0.0
+- added audio project and updated cargo.toml
+- test: add comprehensive test coverage — 180 backend, 293 frontend tests
+- feat: implement 12 feature enhancements for v1 release
+
