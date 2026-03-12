@@ -15,11 +15,17 @@ use services::{
     PostsService,
 };
 use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::Manager;
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tracing::info;
 
 pub struct LogDirectory(pub PathBuf);
+
+/// Holds deep-link contact strings received while the identity was locked.
+/// Multiple links can arrive before the user unlocks (e.g. clicking two share links
+/// in quick succession). All are queued here and drained after a successful unlock.
+pub struct PendingDeepLink(pub Mutex<Vec<String>>);
 
 /// Get the profile name from environment variable (for multi-instance support)
 fn get_profile_name() -> Option<String> {
@@ -69,6 +75,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
             // Get app data directory first so we can set up logging properly
             let app_data_dir = app
@@ -192,6 +199,34 @@ pub fn run() {
             app.manage(board_service);
             app.manage(media_service);
             app.manage(network_state);
+            app.manage(PendingDeepLink(Mutex::new(Vec::new())));
+
+            // Deep-link handler: receives harbor:// URLs from the OS
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    let url_str = url.to_string();
+
+                    // Normalize harbor://add-friend/<base64> → harbor://<base64>
+                    // so the existing add_contact_from_string command can parse it unchanged.
+                    let contact_string =
+                        if let Some(rest) = url_str.strip_prefix("harbor://add-friend/") {
+                            format!("harbor://{}", rest)
+                        } else {
+                            url_str
+                        };
+
+                    let identity_service = handle.state::<Arc<IdentityService>>();
+                    if identity_service.is_unlocked() {
+                        let _ = handle.emit("deep_link_contact", &contact_string);
+                    } else {
+                        // Queue for replay — multiple links may arrive before unlock
+                        if let Ok(mut queue) = handle.state::<PendingDeepLink>().0.lock() {
+                            queue.push(contact_string);
+                        }
+                    }
+                }
+            });
 
             info!("Application setup complete");
             Ok(())

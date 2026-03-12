@@ -1,9 +1,20 @@
 use crate::error::AppError;
 use crate::models::{CreateIdentityRequest, IdentityInfo};
 use crate::services::{AccountsService, IdentityService};
+use crate::PendingDeepLink;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 use tracing::info;
+
+/// Drain any deep-link contact strings that arrived while the identity was locked,
+/// emitting each one to the frontend for confirmation.
+fn drain_pending_deep_links(app: &tauri::AppHandle) {
+    if let Ok(mut queue) = app.state::<PendingDeepLink>().0.lock() {
+        for contact_string in queue.drain(..) {
+            let _ = app.emit("deep_link_contact", &contact_string);
+        }
+    }
+}
 
 /// Check if an identity has been created
 #[tauri::command]
@@ -32,6 +43,7 @@ pub async fn get_identity_info(
 /// Create a new identity
 #[tauri::command]
 pub async fn create_identity(
+    app: tauri::AppHandle,
     identity_service: State<'_, Arc<IdentityService>>,
     accounts_service: State<'_, Arc<AccountsService>>,
     request: CreateIdentityRequest,
@@ -57,16 +69,22 @@ pub async fn create_identity(
         }
     }
 
+    // create_identity auto-unlocks the identity, so replay any queued deep links
+    drain_pending_deep_links(&app);
+
     Ok(identity)
 }
 
 /// Unlock the identity with passphrase
 #[tauri::command]
 pub async fn unlock_identity(
+    app: tauri::AppHandle,
     identity_service: State<'_, Arc<IdentityService>>,
     passphrase: String,
 ) -> Result<IdentityInfo, AppError> {
-    identity_service.unlock(&passphrase)
+    let identity = identity_service.unlock(&passphrase)?;
+    drain_pending_deep_links(&app);
+    Ok(identity)
 }
 
 /// Lock the identity
