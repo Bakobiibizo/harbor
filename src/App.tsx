@@ -5,7 +5,7 @@ import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore }
 import { useTauriEvents } from './hooks';
 import { MainLayout } from './components/layout';
 import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/onboarding';
-import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { AddContactDialog, ErrorBoundary } from './components/common';
 import { HarborIcon } from './components/icons';
 import { BoardsPage, ChatPage, WallPage, FeedPage, NetworkPage, SettingsPage } from './pages';
 import type { AccountInfo } from './types';
@@ -85,7 +85,7 @@ function LoadingScreen() {
 
 function AppContent() {
   const { state, initialize } = useIdentityStore();
-  const { checkStatus, startNetwork } = useNetworkStore();
+  const { checkStatus, startNetwork, pendingDeepLinkContact, setPendingDeepLinkContact } = useNetworkStore();
   const { autoStartNetwork } = useSettingsStore();
   const { accounts, loading: accountsLoading, loadAccounts } = useAccountsStore();
 
@@ -197,17 +197,25 @@ function AppContent() {
 
   // Identity unlocked - show main app
   return (
-    <MainLayout>
-      <Routes>
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/wall" element={<WallPage />} />
-        <Route path="/feed" element={<FeedPage />} />
-        <Route path="/boards" element={<BoardsPage />} />
-        <Route path="/network" element={<NetworkPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/chat" replace />} />
-      </Routes>
-    </MainLayout>
+    <>
+      <MainLayout>
+        <Routes>
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/wall" element={<WallPage />} />
+          <Route path="/feed" element={<FeedPage />} />
+          <Route path="/boards" element={<BoardsPage />} />
+          <Route path="/network" element={<NetworkPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/chat" replace />} />
+        </Routes>
+      </MainLayout>
+      {pendingDeepLinkContact && (
+        <AddContactDialog
+          contactString={pendingDeepLinkContact}
+          onClose={() => setPendingDeepLinkContact(null)}
+        />
+      )}
+    </>
   );
 }
 

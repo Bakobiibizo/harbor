@@ -32,6 +32,9 @@ interface NetworkState {
   // NAT status update (called by event handler)
   setNatStatus: (status: NatStatus) => void;
   addRelayAddress: (address: string) => void;
+  // Deep-link contact pending user confirmation
+  pendingDeepLinkContact: string | null;
+  setPendingDeepLinkContact: (contact: string | null) => void;
 }
 
 const initialStats: NetworkStats = {
@@ -55,6 +58,7 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
   relayStatus: 'disconnected',
   error: null,
   isLoading: false,
+  pendingDeepLinkContact: null,
 
   // Start the network
   startNetwork: async () => {
@@ -224,6 +228,9 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       stats: { ...state.stats, natStatus: status },
     }));
   },
+
+  // Set or clear the contact string awaiting confirmation from a deep link
+  setPendingDeepLinkContact: (contact) => set({ pendingDeepLinkContact: contact }),
 
   // Add a relay address (called by event handler)
   addRelayAddress: (address: string) => {
