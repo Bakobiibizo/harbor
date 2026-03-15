@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import toast from 'react-hot-toast';
 import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
 import { feedService } from '../services/feed';

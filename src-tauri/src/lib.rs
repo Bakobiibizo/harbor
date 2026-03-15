@@ -67,11 +67,39 @@ fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
     base_dir.join("harbor.db")
 }
 
+/// Normalize, validate, and route a harbor:// URL to the frontend.
+/// Called from both the deep-link on_open_url handler and the single-instance callback.
+fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
+    let contact_string = if let Some(rest) = url.strip_prefix("harbor://add-friend/") {
+        format!("harbor://{}", rest)
+    } else {
+        url.to_string()
+    };
+    let identity_service = app.state::<Arc<IdentityService>>();
+    if identity_service.is_unlocked() {
+        let _ = app.emit("deep_link_contact", &contact_string);
+    } else {
+        if let Ok(mut queue) = app.state::<PendingDeepLink>().0.lock() {
+            queue.push(contact_string);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let profile = get_profile_name();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Bring the existing window to the foreground
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+            // Route the deep link URL if present in the launch arguments
+            if let Some(url) = args.iter().find(|a| a.starts_with("harbor://")) {
+                handle_deep_link(app, url);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -205,28 +233,17 @@ pub fn run() {
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    let url_str = url.to_string();
-
-                    // Normalize harbor://add-friend/<base64> → harbor://<base64>
-                    // so the existing add_contact_from_string command can parse it unchanged.
-                    let contact_string =
-                        if let Some(rest) = url_str.strip_prefix("harbor://add-friend/") {
-                            format!("harbor://{}", rest)
-                        } else {
-                            url_str
-                        };
-
-                    let identity_service = handle.state::<Arc<IdentityService>>();
-                    if identity_service.is_unlocked() {
-                        let _ = handle.emit("deep_link_contact", &contact_string);
-                    } else {
-                        // Queue for replay — multiple links may arrive before unlock
-                        if let Ok(mut queue) = handle.state::<PendingDeepLink>().0.lock() {
-                            queue.push(contact_string);
-                        }
-                    }
+                    handle_deep_link(&handle, &url.to_string());
                 }
             });
+
+            // Windows cold start: URL arrives as a command-line argument, not via on_open_url
+            for arg in std::env::args().skip(1) {
+                if arg.starts_with("harbor://") {
+                    handle_deep_link(app.handle(), &arg);
+                    break;
+                }
+            }
 
             info!("Application setup complete");
             Ok(())

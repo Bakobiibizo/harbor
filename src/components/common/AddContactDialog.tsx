@@ -27,7 +27,7 @@ function parseContactString(contactString: string): ContactPreview | null {
     const parts: string[] = bundle.multiaddr.split('/');
     const peerId = parts[parts.length - 1];
     return {
-      displayName: bundle.display_name,
+      displayName: bundle.displayName,
       peerId,
       bio: bundle.bio ?? undefined,
     };
