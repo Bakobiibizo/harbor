@@ -32,8 +32,7 @@ pub async fn sync_wall_to_relay(
         }
 
         // Collect image-only media metadata for this post
-        let media_items: Vec<WallPostMediaItem> = match posts_service
-            .get_post_media(&post.post_id)
+        let media_items: Vec<WallPostMediaItem> = match posts_service.get_post_media(&post.post_id)
         {
             Ok(media_list) => media_list
                 .into_iter()

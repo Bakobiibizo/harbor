@@ -1534,15 +1534,13 @@ impl NetworkService {
                     .get_media_path(&request.media_hash)
                     .ok()
                     .and_then(|p| {
-                        p.extension()
-                            .and_then(|e| e.to_str())
-                            .map(|ext| match ext {
-                                "jpg" | "jpeg" => "image/jpeg",
-                                "png" => "image/png",
-                                "gif" => "image/gif",
-                                "webp" => "image/webp",
-                                _ => "application/octet-stream",
-                            })
+                        p.extension().and_then(|e| e.to_str()).map(|ext| match ext {
+                            "jpg" | "jpeg" => "image/jpeg",
+                            "png" => "image/png",
+                            "gif" => "image/gif",
+                            "webp" => "image/webp",
+                            _ => "application/octet-stream",
+                        })
                     })
                     .unwrap_or("application/octet-stream")
                     .to_string();
@@ -2169,7 +2167,10 @@ impl NetworkService {
                                     );
                                     let already_exists = existing
                                         .as_ref()
-                                        .map(|list| list.iter().any(|m| m.media_hash == media_item.media_hash))
+                                        .map(|list| {
+                                            list.iter()
+                                                .any(|m| m.media_hash == media_item.media_hash)
+                                        })
                                         .unwrap_or(false);
 
                                     if !already_exists {
@@ -3290,10 +3291,9 @@ impl NetworkService {
                             .send_request(&peer_id, request);
                         NetworkResponse::Ok
                     }
-                    Err(e) => NetworkResponse::Error(format!(
-                        "Failed to sign media fetch request: {}",
-                        e
-                    )),
+                    Err(e) => {
+                        NetworkResponse::Error(format!("Failed to sign media fetch request: {}", e))
+                    }
                 }
             }
 

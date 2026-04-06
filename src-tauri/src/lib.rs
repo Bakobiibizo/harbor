@@ -15,11 +15,17 @@ use services::{
     PostsService,
 };
 use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::Manager;
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tracing::info;
 
 pub struct LogDirectory(pub PathBuf);
+
+/// Holds deep-link contact strings received while the identity was locked.
+/// Multiple links can arrive before the user unlocks (e.g. clicking two share links
+/// in quick succession). All are queued here and drained after a successful unlock.
+pub struct PendingDeepLink(pub Mutex<Vec<String>>);
 
 /// Get the profile name from environment variable (for multi-instance support)
 fn get_profile_name() -> Option<String> {
@@ -61,14 +67,41 @@ fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
     base_dir.join("harbor.db")
 }
 
+/// Normalize, validate, and route a harbor:// URL to the frontend.
+/// Called from both the deep-link on_open_url handler and the single-instance callback.
+fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
+    let contact_string = if let Some(rest) = url.strip_prefix("harbor://add-friend/") {
+        format!("harbor://{}", rest)
+    } else {
+        url.to_string()
+    };
+    let identity_service = app.state::<Arc<IdentityService>>();
+    if identity_service.is_unlocked() {
+        let _ = app.emit("deep_link_contact", &contact_string);
+    } else if let Ok(mut queue) = app.state::<PendingDeepLink>().0.lock() {
+        queue.push(contact_string);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let profile = get_profile_name();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Bring the existing window to the foreground
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+            // Route the deep link URL if present in the launch arguments
+            if let Some(url) = args.iter().find(|a| a.starts_with("harbor://")) {
+                handle_deep_link(app, url);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
             // Get app data directory first so we can set up logging properly
             let app_data_dir = app
@@ -192,6 +225,23 @@ pub fn run() {
             app.manage(board_service);
             app.manage(media_service);
             app.manage(network_state);
+            app.manage(PendingDeepLink(Mutex::new(Vec::new())));
+
+            // Deep-link handler: receives harbor:// URLs from the OS
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    handle_deep_link(&handle, url.as_ref());
+                }
+            });
+
+            // Windows cold start: URL arrives as a command-line argument, not via on_open_url
+            for arg in std::env::args().skip(1) {
+                if arg.starts_with("harbor://") {
+                    handle_deep_link(app.handle(), &arg);
+                    break;
+                }
+            }
 
             info!("Application setup complete");
             Ok(())

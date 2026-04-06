@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WallPostMediaItem {
     pub media_hash: String,
-    pub media_type: String,  // "image"
-    pub mime_type: String,   // "image/jpeg"
+    pub media_type: String, // "image"
+    pub mime_type: String,  // "image/jpeg"
     pub file_name: String,
     pub file_size: i64,
     pub width: Option<i32>,

@@ -153,10 +153,7 @@ pub enum NetworkEvent {
         post_id: String,
     },
     /// Media was fetched from a peer and stored locally
-    MediaFetched {
-        peer_id: String,
-        media_hash: String,
-    },
+    MediaFetched { peer_id: String, media_hash: String },
 }
 
 /// Commands that can be sent to the network service
@@ -248,10 +245,7 @@ pub enum NetworkCommand {
         media_items: Vec<WallPostMediaItem>,
     },
     /// Fetch media by hash from a peer
-    FetchMedia {
-        peer_id: PeerId,
-        media_hash: String,
-    },
+    FetchMedia { peer_id: PeerId, media_hash: String },
     /// Get wall posts for a specific author from a relay
     GetWallPostsFromRelay {
         relay_peer_id: PeerId,
