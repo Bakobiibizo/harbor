@@ -61,8 +61,7 @@ pub async fn get_media_url(
         .get_media_path(&hash)
         .map_err(|e| format!("Media not found: {}", e))?;
 
-    let data = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read media file: {}", e))?;
+    let data = std::fs::read(&path).map_err(|e| format!("Failed to read media file: {}", e))?;
 
     // Determine MIME type from file extension
     let mime = path
@@ -234,11 +233,7 @@ pub async fn preload_missing_media(
                         );
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to send media fetch for {}: {}",
-                            hash,
-                            e
-                        );
+                        tracing::warn!("Failed to send media fetch for {}: {}", hash, e);
                     }
                 }
             }
@@ -247,8 +242,7 @@ pub async fn preload_missing_media(
             // On the next preloader invocation (triggered by peer_connected or
             // wall_posts_received), they'll be connected and we can fetch.
             for base_addr in &relay_base_addrs {
-                let circuit_addr_str =
-                    format!("{}/p2p-circuit/p2p/{}", base_addr, author_peer_id);
+                let circuit_addr_str = format!("{}/p2p-circuit/p2p/{}", base_addr, author_peer_id);
                 if let Ok(addr) = circuit_addr_str.parse::<libp2p::Multiaddr>() {
                     match handle.dial(peer_id, vec![addr]).await {
                         Ok(_) => {

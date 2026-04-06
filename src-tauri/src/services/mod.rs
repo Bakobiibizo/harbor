@@ -51,6 +51,8 @@ pub use signing::{
     // Identity messages
     SignableIdentityRequest,
     SignableIdentityResponse,
+    // Media fetch
+    SignableMediaFetchRequest,
     SignableMessageAck,
     SignablePeerRegistration,
     SignablePermissionGrant,
@@ -68,6 +70,4 @@ pub use signing::{
     SignableSignalingOffer,
     SignableWallPostDelete,
     SignableWallPostSubmit,
-    // Media fetch
-    SignableMediaFetchRequest,
 };

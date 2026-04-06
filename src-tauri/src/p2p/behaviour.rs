@@ -221,8 +221,7 @@ impl ChatBehaviour {
                 StreamProtocol::new(MEDIA_SYNC_PROTOCOL),
                 ProtocolSupport::Full,
             )],
-            request_response::Config::default()
-                .with_request_timeout(Duration::from_secs(60)),
+            request_response::Config::default().with_request_timeout(Duration::from_secs(60)),
         );
 
         Self {
