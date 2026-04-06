@@ -67,8 +67,8 @@ impl FeedService {
             }
         }
 
-        // Deduplicate (do NOT include our own peer_id — feed is for others' posts)
-        allowed_authors.retain(|id| id != &identity.peer_id);
+        // Include our own peer_id so our posts appear in the feed too
+        allowed_authors.push(identity.peer_id.clone());
         allowed_authors.sort();
         allowed_authors.dedup();
 
