@@ -231,7 +231,7 @@ pub fn run() {
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    handle_deep_link(&handle, &url.to_string());
+                    handle_deep_link(&handle, url.as_ref());
                 }
             });
 
