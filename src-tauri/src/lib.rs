@@ -78,10 +78,8 @@ fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
     let identity_service = app.state::<Arc<IdentityService>>();
     if identity_service.is_unlocked() {
         let _ = app.emit("deep_link_contact", &contact_string);
-    } else {
-        if let Ok(mut queue) = app.state::<PendingDeepLink>().0.lock() {
-            queue.push(contact_string);
-        }
+    } else if let Ok(mut queue) = app.state::<PendingDeepLink>().0.lock() {
+        queue.push(contact_string);
     }
 }
 

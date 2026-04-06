@@ -25,7 +25,6 @@ export function useTauriEvents() {
 
       // Listen for deep-link contact strings forwarded from the OS via Rust
       const unlistenDeepLink = await listen<string>('deep_link_contact', (event) => {
-        console.log('[TauriEvent] deep_link_contact:', event.payload);
         useNetworkStore.getState().setPendingDeepLinkContact(event.payload);
       });
       unlistenersRef.current.push(unlistenDeepLink);
