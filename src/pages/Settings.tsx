@@ -2,7 +2,14 @@ import { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore } from '../stores';
 import type { ThemeMode } from '../stores/settings';
-import { UserIcon, LockIcon, ShieldIcon, ChevronRightIcon, XIcon } from '../components/icons';
+import {
+  UserIcon,
+  LockIcon,
+  ShieldIcon,
+  PhoneIcon,
+  ChevronRightIcon,
+  XIcon,
+} from '../components/icons';
 import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
 
@@ -162,6 +169,10 @@ export function SettingsPage() {
     defaultVisibility,
     avatarUrl,
     theme,
+    iceServers,
+    addIceServer,
+    removeIceServer,
+    getRedactedIceServers,
     setShowReadReceipts,
     setShowOnlineStatus,
     setDefaultVisibility,
@@ -197,6 +208,14 @@ export function SettingsPage() {
   const [importPassphrase, setImportPassphrase] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+
+  // Calling ICE/STUN/TURN state
+  const [iceUrls, setIceUrls] = useState('');
+  const [iceUsername, setIceUsername] = useState('');
+  const [iceCredential, setIceCredential] = useState('');
+  const [iceCredentialPersistence, setIceCredentialPersistence] = useState<'session' | 'device'>(
+    'session',
+  );
 
   // Update state
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -455,10 +474,37 @@ export function SettingsPage() {
     }
   };
 
+  const handleAddIceServer = () => {
+    try {
+      addIceServer({
+        urls: iceUrls,
+        username: iceUsername,
+        credential: iceCredential,
+        credentialPersistence: iceCredentialPersistence,
+      });
+      setIceUrls('');
+      setIceUsername('');
+      setIceCredential('');
+      setIceCredentialPersistence('session');
+      toast.success('ICE server added');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid ICE server configuration';
+      toast.error(message);
+    }
+  };
+
+  const handleRemoveIceServer = (id: string) => {
+    removeIceServer(id);
+    toast.success('ICE server removed');
+  };
+
+  const redactedIceServers = getRedactedIceServers();
+
   const sections = [
     { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
     { id: 'appearance', label: 'Appearance', icon: PaletteIcon, description: 'Theme and display' },
     { id: 'security', label: 'Security', icon: LockIcon, description: 'Passphrase and keys' },
+    { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'ICE, STUN, and TURN' },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
     { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
   ];
@@ -1082,6 +1128,204 @@ export function SettingsPage() {
                 >
                   Delete Account
                 </button>
+              </div>
+            </div>
+          )}
+
+          {activeSection === 'calls' && (
+            <div className="space-y-6">
+              <div>
+                <h3
+                  className="text-xl font-semibold mb-1"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  Calls
+                </h3>
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Configure WebRTC ICE, STUN, and TURN behavior for voice calls
+                </p>
+              </div>
+
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <h4
+                  className="font-medium mb-2"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  ICE servers
+                </h4>
+                <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Harbor does not ship with third-party TURN credentials. Without TURN, WebRTC can
+                  still place LAN/direct calls; strict NAT pairs may need an operator-provided TURN
+                  server.
+                </p>
+
+                <div
+                  className="rounded-lg p-4 mb-4 text-sm"
+                  style={{
+                    background: 'hsl(var(--harbor-warning) / 0.08)',
+                    border: '1px solid hsl(var(--harbor-warning) / 0.25)',
+                    color: 'hsl(var(--harbor-text-secondary))',
+                  }}
+                >
+                  <strong style={{ color: 'hsl(var(--harbor-warning))' }}>Important:</strong> libp2p
+                  relays help Harbor exchange call signaling. They do not relay WebRTC audio media;
+                  use TURN/TURNS when media relay is required.
+                </div>
+
+                <div className="space-y-3">
+                  <textarea
+                    value={iceUrls}
+                    onChange={(event) => setIceUrls(event.target.value)}
+                    placeholder="stun:stun.example.org:3478\nturn:turn.example.org:3478?transport=udp"
+                    rows={3}
+                    className="w-full px-4 py-3 rounded-lg text-sm font-mono resize-none"
+                    style={{
+                      background: 'hsl(var(--harbor-surface-1))',
+                      border: '1px solid hsl(var(--harbor-border-subtle))',
+                      color: 'hsl(var(--harbor-text-primary))',
+                    }}
+                  />
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      value={iceUsername}
+                      onChange={(event) => setIceUsername(event.target.value)}
+                      placeholder="TURN username (TURN only)"
+                      className="px-4 py-3 rounded-lg text-sm"
+                      style={{
+                        background: 'hsl(var(--harbor-surface-1))',
+                        border: '1px solid hsl(var(--harbor-border-subtle))',
+                        color: 'hsl(var(--harbor-text-primary))',
+                      }}
+                    />
+                    <input
+                      type="password"
+                      value={iceCredential}
+                      onChange={(event) => setIceCredential(event.target.value)}
+                      placeholder="TURN credential (TURN only)"
+                      className="px-4 py-3 rounded-lg text-sm"
+                      style={{
+                        background: 'hsl(var(--harbor-surface-1))',
+                        border: '1px solid hsl(var(--harbor-border-subtle))',
+                        color: 'hsl(var(--harbor-text-primary))',
+                      }}
+                    />
+                  </div>
+
+                  <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
+                    <label
+                      className="text-sm flex items-center gap-2"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      TURN credential persistence
+                      <select
+                        value={iceCredentialPersistence}
+                        onChange={(event) =>
+                          setIceCredentialPersistence(event.target.value as 'session' | 'device')
+                        }
+                        className="px-3 py-2 rounded-lg text-sm"
+                        style={{
+                          background: 'hsl(var(--harbor-surface-1))',
+                          border: '1px solid hsl(var(--harbor-border-subtle))',
+                          color: 'hsl(var(--harbor-text-primary))',
+                        }}
+                      >
+                        <option value="session">This session only</option>
+                        <option value="device">Save on this device</option>
+                      </select>
+                    </label>
+
+                    <button
+                      onClick={handleAddIceServer}
+                      className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
+                      style={{
+                        background:
+                          'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                        color: 'white',
+                      }}
+                    >
+                      Add ICE Server
+                    </button>
+                  </div>
+
+                  <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    Session credentials are usable until restart but are redacted from persisted
+                    settings. Choose device persistence only for operator-managed credentials you
+                    are comfortable storing locally.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <h4
+                  className="font-medium mb-2"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  Configured ICE entries
+                </h4>
+                {iceServers.length > 0 ? (
+                  <div className="space-y-2">
+                    {redactedIceServers.map((server) => (
+                      <div
+                        key={server.id}
+                        className="p-3 rounded-lg"
+                        style={{
+                          background: 'hsl(var(--harbor-surface-1))',
+                          border: '1px solid hsl(var(--harbor-border-subtle))',
+                        }}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className="text-sm font-mono break-all"
+                              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                            >
+                              {server.urls.join(', ')}
+                            </p>
+                            <p
+                              className="text-xs mt-1"
+                              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                            >
+                              {server.username ? `username: ${server.username} · ` : ''}
+                              credential:{' '}
+                              {server.hasCredential
+                                ? `${server.redactedCredential} (${server.credentialPersistence})`
+                                : 'none stored for this session'}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveIceServer(server.id)}
+                            className="px-3 py-1 rounded text-sm transition-colors duration-200"
+                            style={{
+                              color: 'hsl(var(--harbor-error))',
+                              background: 'hsl(var(--harbor-error) / 0.1)',
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    No ICE servers configured. Calls will use browser host candidates only, which
+                    keeps LAN/direct scenarios available and avoids undeclared third-party services.
+                  </p>
+                )}
               </div>
             </div>
           )}

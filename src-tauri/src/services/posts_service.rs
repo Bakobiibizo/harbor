@@ -11,8 +11,11 @@ use crate::db::{
 use crate::error::{AppError, Result};
 use crate::services::{
     verify, ContactsService, IdentityService, PermissionsService, Signable, SignablePost,
-    SignablePostDelete, SignablePostUpdate,
+    SignablePostDelete, SignablePostMedia, SignablePostUpdate, SignedPostMediaMetadata,
 };
+
+/// Maximum size for a single wall media attachment (10 MiB).
+pub const MAX_POST_MEDIA_BYTES: i64 = 10 * 1024 * 1024;
 
 /// Service for managing wall/blog posts
 pub struct PostsService {
@@ -30,6 +33,7 @@ pub struct OutgoingPost {
     pub content_type: String,
     pub content_text: Option<String>,
     pub media_hashes: Vec<String>,
+    pub media_items: Vec<SignedPostMediaMetadata>,
     pub visibility: String,
     pub lamport_clock: u64,
     pub created_at: i64,
@@ -55,6 +59,19 @@ pub struct OutgoingPostDelete {
     pub lamport_clock: u64,
     pub deleted_at: i64,
     pub signature: Vec<u8>,
+}
+
+/// Parameters for media that is signed into a newly-created post.
+pub struct CreatePostMediaParams<'a> {
+    pub media_hash: &'a str,
+    pub media_type: &'a str,
+    pub mime_type: &'a str,
+    pub file_name: &'a str,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
 }
 
 /// Parameters for adding media to a post
@@ -84,6 +101,122 @@ pub struct IncomingPostParams<'a> {
     pub signature: &'a [u8],
 }
 
+fn validate_media_hash(media_hash: &str) -> Result<()> {
+    if media_hash.len() != 64 || !media_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::Validation(format!(
+            "Invalid media hash '{}': expected 64 hex characters",
+            media_hash
+        )));
+    }
+    Ok(())
+}
+
+fn expected_media_type_for_mime(mime_type: &str) -> Option<&'static str> {
+    match mime_type {
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => Some("image"),
+        "video/mp4" | "video/webm" | "video/quicktime" => Some("video"),
+        "audio/mpeg" | "audio/mp4" | "audio/wav" | "audio/ogg" | "audio/webm" => Some("audio"),
+        _ => None,
+    }
+}
+
+pub(crate) fn validate_signed_media_metadata(media: &SignedPostMediaMetadata) -> Result<()> {
+    validate_media_hash(&media.media_hash)?;
+
+    let expected_type = expected_media_type_for_mime(&media.mime_type).ok_or_else(|| {
+        AppError::Validation(format!("Unsupported media MIME type: {}", media.mime_type))
+    })?;
+
+    if media.media_type != expected_type {
+        return Err(AppError::Validation(format!(
+            "Media type '{}' does not match MIME type '{}'",
+            media.media_type, media.mime_type
+        )));
+    }
+
+    if media.file_size <= 0 || media.file_size > MAX_POST_MEDIA_BYTES {
+        return Err(AppError::Validation(format!(
+            "Media '{}' is oversized or empty ({} bytes, max {} bytes)",
+            media.file_name, media.file_size, MAX_POST_MEDIA_BYTES
+        )));
+    }
+
+    if media.file_name.trim().is_empty() {
+        return Err(AppError::Validation(
+            "Media file name is required".to_string(),
+        ));
+    }
+
+    if media.sort_order < 0 {
+        return Err(AppError::Validation(format!(
+            "Invalid media sort_order {}",
+            media.sort_order
+        )));
+    }
+
+    for (field, value) in [("width", media.width), ("height", media.height)] {
+        if matches!(value, Some(v) if v <= 0) {
+            return Err(AppError::Validation(format!(
+                "Media {} must be positive when provided",
+                field
+            )));
+        }
+    }
+
+    if matches!(media.duration_seconds, Some(duration) if duration <= 0) {
+        return Err(AppError::Validation(
+            "Media duration_seconds must be positive when provided".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn signable_media_from_signed(
+    post_id: &str,
+    author_peer_id: &str,
+    media: &SignedPostMediaMetadata,
+) -> SignablePostMedia {
+    SignablePostMedia {
+        post_id: post_id.to_string(),
+        author_peer_id: author_peer_id.to_string(),
+        media_hash: media.media_hash.clone(),
+        media_type: media.media_type.clone(),
+        mime_type: media.mime_type.clone(),
+        file_name: media.file_name.clone(),
+        file_size: media.file_size,
+        width: media.width,
+        height: media.height,
+        duration_seconds: media.duration_seconds,
+        sort_order: media.sort_order,
+    }
+}
+
+pub(crate) fn sorted_media_hashes(media_items: &[SignedPostMediaMetadata]) -> Vec<String> {
+    let mut sorted = media_items.to_vec();
+    sorted.sort_by_key(|media| media.sort_order);
+    sorted.into_iter().map(|media| media.media_hash).collect()
+}
+
+pub(crate) fn post_media_data_from_signed(
+    post_id: &str,
+    media: &SignedPostMediaMetadata,
+) -> PostMediaData {
+    PostMediaData {
+        post_id: post_id.to_string(),
+        media_hash: media.media_hash.clone(),
+        media_type: media.media_type.clone(),
+        mime_type: media.mime_type.clone(),
+        file_name: media.file_name.clone(),
+        file_size: media.file_size,
+        width: media.width,
+        height: media.height,
+        duration_seconds: media.duration_seconds,
+        sort_order: media.sort_order,
+        signature: media.signature.clone(),
+    }
+}
+
 impl PostsService {
     /// Create a new posts service
     pub fn new(
@@ -100,12 +233,23 @@ impl PostsService {
         }
     }
 
-    /// Create a new post
+    /// Create a new post without media.
     pub fn create_post(
         &self,
         content_type: &str,
         content_text: Option<&str>,
         visibility: PostVisibility,
+    ) -> Result<OutgoingPost> {
+        self.create_post_with_media(content_type, content_text, visibility, &[])
+    }
+
+    /// Create a new post and bind ordered media hashes plus signed metadata to it.
+    pub fn create_post_with_media(
+        &self,
+        content_type: &str,
+        content_text: Option<&str>,
+        visibility: PostVisibility,
+        media: &[CreatePostMediaParams<'_>],
     ) -> Result<OutgoingPost> {
         let identity = self
             .identity_service
@@ -119,13 +263,40 @@ impl PostsService {
                 .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let created_at = chrono::Utc::now().timestamp();
 
-        // Create signable
+        let mut signed_media_items = Vec::with_capacity(media.len());
+        for item in media {
+            let unsigned = SignedPostMediaMetadata {
+                media_hash: item.media_hash.to_string(),
+                media_type: item.media_type.to_string(),
+                mime_type: item.mime_type.to_string(),
+                file_name: item.file_name.to_string(),
+                file_size: item.file_size,
+                width: item.width,
+                height: item.height,
+                duration_seconds: item.duration_seconds,
+                sort_order: item.sort_order,
+                signature: Vec::new(),
+            };
+            validate_signed_media_metadata(&unsigned)?;
+
+            let signable_media = signable_media_from_signed(&post_id, &identity.peer_id, &unsigned);
+            let media_signature = self.identity_service.sign(&signable_media)?;
+            signed_media_items.push(SignedPostMediaMetadata {
+                signature: media_signature,
+                ..unsigned
+            });
+        }
+
+        let media_hashes = sorted_media_hashes(&signed_media_items);
+
+        // Create signable. If media is part of the post, media_hashes is non-empty
+        // before the post signature is produced.
         let signable = SignablePost {
             post_id: post_id.clone(),
             author_peer_id: identity.peer_id.clone(),
             content_type: content_type.to_string(),
             content_text: content_text.map(String::from),
-            media_hashes: Vec::new(), // Media added separately
+            media_hashes: media_hashes.clone(),
             visibility: visibility.to_string(),
             lamport_clock,
             created_at,
@@ -147,6 +318,12 @@ impl PostsService {
 
         PostsRepository::insert_post(&self.db, &post_data)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        for media_item in &signed_media_items {
+            let media_data = post_media_data_from_signed(&post_id, media_item);
+            PostsRepository::add_media(&self.db, &media_data)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        }
 
         // Record event
         let event_id = format!("created:{}", post_id);
@@ -171,7 +348,8 @@ impl PostsService {
             author_peer_id: identity.peer_id,
             content_type: content_type.to_string(),
             content_text: content_text.map(String::from),
-            media_hashes: Vec::new(),
+            media_hashes,
+            media_items: signed_media_items,
             visibility: visibility.to_string(),
             lamport_clock,
             created_at,
@@ -339,8 +517,7 @@ impl PostsService {
             ));
         }
 
-        let media_data = PostMediaData {
-            post_id: params.post_id.to_string(),
+        let unsigned = SignedPostMediaMetadata {
             media_hash: params.media_hash.to_string(),
             media_type: params.media_type.to_string(),
             mime_type: params.mime_type.to_string(),
@@ -350,7 +527,69 @@ impl PostsService {
             height: params.height,
             duration_seconds: params.duration_seconds,
             sort_order: params.sort_order,
+            signature: Vec::new(),
         };
+        validate_signed_media_metadata(&unsigned)?;
+
+        let signable_media =
+            signable_media_from_signed(params.post_id, &identity.peer_id, &unsigned);
+        let signed_media = SignedPostMediaMetadata {
+            signature: self.identity_service.sign(&signable_media)?,
+            ..unsigned
+        };
+
+        let existing_media = PostsRepository::get_post_media(&self.db, params.post_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        if existing_media
+            .iter()
+            .any(|media| media.media_hash == signed_media.media_hash)
+        {
+            return Ok(());
+        }
+
+        let mut media_for_signature: Vec<SignedPostMediaMetadata> = existing_media
+            .into_iter()
+            .map(|media| SignedPostMediaMetadata {
+                media_hash: media.media_hash,
+                media_type: media.media_type,
+                mime_type: media.mime_type,
+                file_name: media.file_name,
+                file_size: media.file_size,
+                width: media.width,
+                height: media.height,
+                duration_seconds: media.duration_seconds,
+                sort_order: media.sort_order,
+                signature: media.signature,
+            })
+            .collect();
+        media_for_signature.push(signed_media.clone());
+        let media_hashes = sorted_media_hashes(&media_for_signature);
+
+        let signable_post = SignablePost {
+            post_id: post.post_id.clone(),
+            author_peer_id: post.author_peer_id.clone(),
+            content_type: post.content_type.clone(),
+            content_text: post.content_text.clone(),
+            media_hashes,
+            visibility: post.visibility.to_string(),
+            lamport_clock: post.lamport_clock as u64,
+            created_at: post.created_at,
+        };
+        let verifying_key = VerifyingKey::from_bytes(
+            identity
+                .public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+        if !verify(&verifying_key, &signable_post, &post.signature)? {
+            return Err(AppError::Validation(
+                "Cannot attach media that was not included in the post signature".to_string(),
+            ));
+        }
+
+        let media_data = post_media_data_from_signed(params.post_id, &signed_media);
 
         PostsRepository::add_media(&self.db, &media_data)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
@@ -937,33 +1176,106 @@ mod tests {
     }
 
     #[test]
-    fn test_add_and_get_media() {
+    fn test_create_post_with_signed_media() {
         let (_db, _identity, _contacts, _perms, service, _peer_id) = create_test_env();
+        let media_hash = "a".repeat(64);
 
         let created = service
-            .create_post("text", Some("Post with media"), PostVisibility::Public)
+            .create_post_with_media(
+                "image",
+                Some("Post with media"),
+                PostVisibility::Public,
+                &[CreatePostMediaParams {
+                    media_hash: &media_hash,
+                    media_type: "image",
+                    mime_type: "image/jpeg",
+                    file_name: "photo.jpg",
+                    file_size: 12345,
+                    width: Some(800),
+                    height: Some(600),
+                    duration_seconds: None,
+                    sort_order: 0,
+                }],
+            )
             .unwrap();
 
-        service
-            .add_media_to_post(&AddMediaParams {
-                post_id: &created.post_id,
-                media_hash: "hash123",
-                media_type: "image",
-                mime_type: "image/jpeg",
-                file_name: "photo.jpg",
-                file_size: 12345,
-                width: Some(800),
-                height: Some(600),
-                duration_seconds: None,
-                sort_order: 0,
-            })
-            .unwrap();
+        assert_eq!(created.media_hashes, vec![media_hash.clone()]);
+        assert_eq!(created.media_items.len(), 1);
+        assert!(!created.media_items[0].signature.is_empty());
 
         let media = service.get_post_media(&created.post_id).unwrap();
         assert_eq!(media.len(), 1);
-        assert_eq!(media[0].media_hash, "hash123");
+        assert_eq!(media[0].media_hash, media_hash);
         assert_eq!(media[0].file_name, "photo.jpg");
         assert_eq!(media[0].width, Some(800));
+        assert!(!media[0].signature.is_empty());
+    }
+
+    #[test]
+    fn test_create_post_with_media_rejects_unsupported_and_oversized_media() {
+        let (_db, _identity, _contacts, _perms, service, _peer_id) = create_test_env();
+        let media_hash = "c".repeat(64);
+
+        let unsupported = service.create_post_with_media(
+            "image",
+            Some("bad mime"),
+            PostVisibility::Public,
+            &[CreatePostMediaParams {
+                media_hash: &media_hash,
+                media_type: "image",
+                mime_type: "application/octet-stream",
+                file_name: "bad.bin",
+                file_size: 123,
+                width: None,
+                height: None,
+                duration_seconds: None,
+                sort_order: 0,
+            }],
+        );
+        assert!(unsupported.is_err());
+
+        let oversized = service.create_post_with_media(
+            "video",
+            Some("too large"),
+            PostVisibility::Public,
+            &[CreatePostMediaParams {
+                media_hash: &media_hash,
+                media_type: "video",
+                mime_type: "video/mp4",
+                file_name: "large.mp4",
+                file_size: MAX_POST_MEDIA_BYTES + 1,
+                width: Some(640),
+                height: Some(480),
+                duration_seconds: Some(5),
+                sort_order: 0,
+            }],
+        );
+        assert!(oversized.is_err());
+    }
+
+    #[test]
+    fn test_add_media_rejects_when_post_signature_did_not_include_hash() {
+        let (_db, _identity, _contacts, _perms, service, _peer_id) = create_test_env();
+        let created = service
+            .create_post("text", Some("Unsigned media later"), PostVisibility::Public)
+            .unwrap();
+        let media_hash = "b".repeat(64);
+
+        let result = service.add_media_to_post(&AddMediaParams {
+            post_id: &created.post_id,
+            media_hash: &media_hash,
+            media_type: "image",
+            mime_type: "image/jpeg",
+            file_name: "photo.jpg",
+            file_size: 12345,
+            width: Some(800),
+            height: Some(600),
+            duration_seconds: None,
+            sort_order: 0,
+        });
+
+        assert!(result.is_err());
+        assert!(service.get_post_media(&created.post_id).unwrap().is_empty());
     }
 
     #[test]

@@ -1,5 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Post, PostMedia, PostVisibility, CreatePostResult } from '../types';
+import type {
+  Post,
+  PostMedia,
+  PostVisibility,
+  CreatePostResult,
+  CreatePostMediaInput,
+} from '../types';
 
 /** Posts service - wraps Tauri commands for wall/blog functionality */
 export const postsService = {
@@ -8,11 +14,13 @@ export const postsService = {
     contentType: string,
     contentText?: string,
     visibility?: PostVisibility,
+    media?: CreatePostMediaInput[],
   ): Promise<CreatePostResult> {
     return invoke<CreatePostResult>('create_post', {
       contentType,
       contentText,
       visibility,
+      media,
     });
   },
 

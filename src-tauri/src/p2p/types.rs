@@ -242,6 +242,7 @@ pub enum NetworkCommand {
         lamport_clock: i64,
         created_at: i64,
         signature: Vec<u8>,
+        media_hashes: Vec<String>,
         media_items: Vec<WallPostMediaItem>,
     },
     /// Fetch media by hash from a peer

@@ -1,6 +1,6 @@
 //! Media sync protocol types
 //!
-//! P2P request-response protocol for fetching image bytes by SHA256 hash
+//! P2P request-response protocol for fetching media bytes by SHA256 hash
 //! directly from the author peer.
 
 use serde::{Deserialize, Serialize};

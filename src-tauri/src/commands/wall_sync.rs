@@ -10,7 +10,7 @@ use crate::services::{ContactsService, PostsService};
 
 /// Submit all local wall posts to the relay for offline availability.
 /// This finds the connected community relay and sends each unsynced post.
-/// Media metadata (images only) is included so receiving clients know what to fetch.
+/// Media metadata for supported images, video, and audio is included so receiving clients know what to fetch.
 #[tauri::command]
 pub async fn sync_wall_to_relay(
     network_state: State<'_, NetworkState>,
@@ -31,12 +31,11 @@ pub async fn sync_wall_to_relay(
             continue;
         }
 
-        // Collect image-only media metadata for this post
+        // Collect signed media metadata for this post.
         let media_items: Vec<WallPostMediaItem> = match posts_service.get_post_media(&post.post_id)
         {
             Ok(media_list) => media_list
                 .into_iter()
-                .filter(|m| m.media_type == "image")
                 .map(|m| WallPostMediaItem {
                     media_hash: m.media_hash,
                     media_type: m.media_type,
@@ -45,11 +44,16 @@ pub async fn sync_wall_to_relay(
                     file_size: m.file_size,
                     width: m.width,
                     height: m.height,
+                    duration_seconds: m.duration_seconds,
                     sort_order: m.sort_order,
+                    signature: m.signature,
                 })
                 .collect(),
             Err(_) => Vec::new(),
         };
+        let mut sorted_media = media_items.clone();
+        sorted_media.sort_by_key(|m| m.sort_order);
+        let media_hashes = sorted_media.iter().map(|m| m.media_hash.clone()).collect();
 
         handle
             .submit_wall_post_to_relay(
@@ -61,6 +65,7 @@ pub async fn sync_wall_to_relay(
                 post.lamport_clock,
                 post.created_at,
                 post.signature,
+                media_hashes,
                 media_items,
             )
             .await?;

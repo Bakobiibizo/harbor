@@ -90,6 +90,10 @@ fn extension_to_mime(ext: &str) -> &'static str {
         "mov" => "video/quicktime",
         "avi" => "video/x-msvideo",
         "mkv" => "video/x-matroska",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
         _ => "application/octet-stream",
     }
 }
@@ -105,7 +109,7 @@ pub async fn has_media(
 
 /// Preload missing media from connected peers.
 ///
-/// Scans post_media for image entries where the file is missing locally,
+/// Scans post_media for supported media entries where the file is missing locally,
 /// groups them by author peer ID, and either:
 /// - Sends P2P fetch requests if the author is already connected
 /// - Dials the author through the relay circuit to establish a connection
@@ -126,14 +130,14 @@ pub async fn preload_missing_media(
         .flatten()
         .map(|id| id.peer_id);
 
-    // Query all image-type media entries with their author (excluding own posts)
+    // Query all supported media entries with their author (excluding own posts)
     let all_media = db
         .with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT pm.media_hash, pm.media_type, p.author_peer_id
                  FROM post_media pm
                  JOIN posts p ON pm.post_id = p.post_id
-                 WHERE pm.media_type = 'image'",
+                 WHERE pm.media_type IN ('image', 'video', 'audio')",
             )?;
 
             let mut results = Vec::new();
@@ -247,7 +251,7 @@ pub async fn preload_missing_media(
                     match handle.dial(peer_id, vec![addr]).await {
                         Ok(_) => {
                             tracing::info!(
-                                "Dialing {} through relay for media fetch ({} images pending)",
+                                "Dialing {} through relay for media fetch ({} media items pending)",
                                 author_peer_id,
                                 hashes.len()
                             );

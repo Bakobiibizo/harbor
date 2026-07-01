@@ -3,11 +3,14 @@ import { useSettingsStore } from './settings';
 
 describe('useSettingsStore', () => {
   beforeEach(() => {
+    localStorage.clear();
     // Reset to defaults
     useSettingsStore.setState({
+      soundEnabled: true,
       autoStartNetwork: true,
       localDiscovery: true,
       bootstrapNodes: [],
+      iceServers: [],
       showReadReceipts: true,
       showOnlineStatus: true,
       defaultVisibility: 'contacts',
@@ -57,6 +60,70 @@ describe('useSettingsStore', () => {
       useSettingsStore.getState().removeBootstrapNode('/ip4/nonexistent/tcp/9000');
 
       expect(useSettingsStore.getState().bootstrapNodes).toEqual(['/ip4/1.2.3.4/tcp/9000']);
+    });
+
+    it('should add validated ICE servers and reject invalid entries', () => {
+      const { addIceServer } = useSettingsStore.getState();
+
+      const stun = addIceServer({ urls: 'stun:stun.example.test:3478' });
+      const turn = addIceServer({
+        urls: 'turn:turn.example.test:3478?transport=udp',
+        username: 'operator',
+        credential: 'secret',
+      });
+
+      expect(useSettingsStore.getState().iceServers).toEqual([stun, turn]);
+      expect(turn.credentialPersistence).toBe('session');
+      expect(() => addIceServer({ urls: 'https://invalid.example.test' })).toThrow(/stun:|turn:/);
+    });
+
+    it('should redact ICE server credentials for display', () => {
+      const { addIceServer, getRedactedIceServers } = useSettingsStore.getState();
+
+      addIceServer({
+        urls: 'turn:turn.example.test:3478',
+        username: 'operator',
+        credential: 'secret',
+      });
+
+      expect(getRedactedIceServers()).toEqual([
+        expect.objectContaining({
+          username: 'operator',
+          hasCredential: true,
+          redactedCredential: '••••••••',
+        }),
+      ]);
+    });
+
+    it('should remove ICE servers', () => {
+      const server = useSettingsStore
+        .getState()
+        .addIceServer({ urls: 'stun:stun.example.test:3478' });
+
+      useSettingsStore.getState().removeIceServer(server.id);
+
+      expect(useSettingsStore.getState().iceServers).toEqual([]);
+    });
+
+    it('should persist device TURN credentials but not session-only TURN credentials', () => {
+      useSettingsStore.getState().addIceServer({
+        urls: 'turn:session.example.test:3478',
+        username: 'session-user',
+        credential: 'session-secret',
+        credentialPersistence: 'session',
+      });
+      useSettingsStore.getState().addIceServer({
+        urls: 'turn:device.example.test:3478',
+        username: 'device-user',
+        credential: 'device-secret',
+        credentialPersistence: 'device',
+      });
+
+      const stored = JSON.parse(localStorage.getItem('harbor-settings') ?? '{}');
+
+      expect(stored.state.iceServers[0]).not.toHaveProperty('credential');
+      expect(stored.state.iceServers[1].credential).toBe('device-secret');
+      expect(useSettingsStore.getState().iceServers[0].credential).toBe('session-secret');
     });
   });
 
@@ -128,6 +195,7 @@ describe('useSettingsStore', () => {
       expect(state.autoStartNetwork).toBe(true);
       expect(state.localDiscovery).toBe(true);
       expect(state.bootstrapNodes).toEqual([]);
+      expect(state.iceServers).toEqual([]);
       expect(state.showReadReceipts).toBe(true);
       expect(state.showOnlineStatus).toBe(true);
       expect(state.defaultVisibility).toBe('contacts');

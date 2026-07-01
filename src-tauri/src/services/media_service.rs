@@ -191,6 +191,7 @@ impl MediaStorageService {
 const KNOWN_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", // images
     "mp4", "webm", "mov", "avi", "mkv", // video
+    "mp3", "m4a", "wav", "ogg", // audio
     "bin", // fallback
 ];
 
@@ -209,6 +210,11 @@ fn mime_to_extension(mime_type: &str) -> &'static str {
         "video/quicktime" => "mov",
         "video/x-msvideo" => "avi",
         "video/x-matroska" => "mkv",
+        "audio/mpeg" => "mp3",
+        "audio/mp4" => "m4a",
+        "audio/wav" => "wav",
+        "audio/ogg" => "ogg",
+        "audio/webm" => "webm",
         _ => "bin",
     }
 }
@@ -222,6 +228,7 @@ mod tests {
         assert_eq!(mime_to_extension("image/jpeg"), "jpg");
         assert_eq!(mime_to_extension("image/png"), "png");
         assert_eq!(mime_to_extension("video/mp4"), "mp4");
+        assert_eq!(mime_to_extension("audio/mpeg"), "mp3");
         assert_eq!(mime_to_extension("application/octet-stream"), "bin");
     }
 

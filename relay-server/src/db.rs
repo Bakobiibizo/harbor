@@ -78,7 +78,9 @@ CREATE TABLE IF NOT EXISTS wall_post_media (
     file_size INTEGER NOT NULL,
     width INTEGER,
     height INTEGER,
+    duration_seconds INTEGER,
     sort_order INTEGER DEFAULT 0,
+    signature BLOB NOT NULL DEFAULT X'',
     FOREIGN KEY (post_id) REFERENCES wall_posts(post_id) ON DELETE CASCADE
 );
 
@@ -103,11 +105,56 @@ impl RelayDatabase {
             conn: Arc::new(Mutex::new(conn)),
         };
 
+        db.ensure_wall_media_columns()?;
+
         // Create default "General" board if none exist
         db.ensure_default_board()?;
 
         info!("Relay database initialized at {}", path);
         Ok(db)
+    }
+
+    fn ensure_wall_media_columns(&self) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let has_duration: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('wall_post_media') WHERE name = 'duration_seconds'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_duration {
+            conn.execute(
+                "ALTER TABLE wall_post_media ADD COLUMN duration_seconds INTEGER",
+                [],
+            )?;
+        }
+
+        let has_signature: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('wall_post_media') WHERE name = 'signature'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_signature {
+            conn.execute(
+                "ALTER TABLE wall_post_media ADD COLUMN signature BLOB NOT NULL DEFAULT X''",
+                [],
+            )?;
+        }
+
+        conn.execute(
+            "DELETE FROM wall_post_media WHERE id NOT IN (SELECT MIN(id) FROM wall_post_media GROUP BY post_id, media_hash)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_wall_post_media_post_hash ON wall_post_media(post_id, media_hash)",
+            [],
+        )?;
+        Ok(())
     }
 
     fn ensure_default_board(&self) -> SqliteResult<()> {
@@ -163,6 +210,7 @@ impl RelayDatabase {
     /// path, which atomically validates and advances the clock. This bare
     /// insert is retained for administrative or testing scenarios.
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)] // Database insert mirrors the board_posts schema columns.
     pub fn insert_post(
         &self,
         post_id: &str,
@@ -275,9 +323,7 @@ impl RelayDatabase {
     /// Retrieve the stored public key for a registered peer
     pub fn get_peer_public_key(&self, peer_id: &str) -> SqliteResult<Option<Vec<u8>>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT public_key FROM known_peers WHERE peer_id = ?",
-        )?;
+        let mut stmt = conn.prepare("SELECT public_key FROM known_peers WHERE peer_id = ?")?;
         let mut rows = stmt.query([peer_id])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
@@ -337,11 +383,7 @@ impl RelayDatabase {
     /// which writes the clock inside its own transaction. This standalone writer
     /// is retained for administrative use and testing.
     #[allow(dead_code)]
-    pub fn update_lamport_clock(
-        &self,
-        author_peer_id: &str,
-        new_clock: u64,
-    ) -> SqliteResult<()> {
+    pub fn update_lamport_clock(&self, author_peer_id: &str, new_clock: u64) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp();
         conn.execute(
@@ -368,6 +410,7 @@ impl RelayDatabase {
     ///
     /// Returns `Ok(())` on success, or an error string on validation failure
     /// / database error.
+    #[allow(clippy::too_many_arguments)] // Transaction arguments match the signed board post fields.
     pub fn insert_post_with_clock_validation(
         &self,
         post_id: &str,
@@ -455,6 +498,7 @@ impl RelayDatabase {
     ///
     /// Uses INSERT OR REPLACE so that re-submitting the same post_id
     /// (e.g. after a retry) is idempotent.
+    #[allow(clippy::too_many_arguments)] // Database insert mirrors the wall_posts schema columns.
     pub fn insert_wall_post(
         &self,
         post_id: &str,
@@ -527,6 +571,7 @@ impl RelayDatabase {
 
     /// Insert media metadata for a wall post.
     /// Uses INSERT OR IGNORE so re-submitting the same post_id+media_hash is idempotent.
+    #[allow(clippy::too_many_arguments)] // Database insert mirrors the wall_post_media schema columns.
     pub fn insert_wall_post_media(
         &self,
         post_id: &str,
@@ -537,14 +582,26 @@ impl RelayDatabase {
         file_size: i64,
         width: Option<i32>,
         height: Option<i32>,
+        duration_seconds: Option<i32>,
         sort_order: i32,
+        signature: &[u8],
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO wall_post_media
-                (post_id, media_hash, media_type, mime_type, file_name, file_size, width, height, sort_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![post_id, media_hash, media_type, mime_type, file_name, file_size, width, height, sort_order],
+            "INSERT INTO wall_post_media
+                (post_id, media_hash, media_type, mime_type, file_name, file_size, width, height, duration_seconds, sort_order, signature)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(post_id, media_hash) DO UPDATE SET
+                media_type = excluded.media_type,
+                mime_type = excluded.mime_type,
+                file_name = excluded.file_name,
+                file_size = excluded.file_size,
+                width = excluded.width,
+                height = excluded.height,
+                duration_seconds = excluded.duration_seconds,
+                sort_order = excluded.sort_order,
+                signature = excluded.signature",
+            params![post_id, media_hash, media_type, mime_type, file_name, file_size, width, height, duration_seconds, sort_order, signature],
         )?;
         Ok(())
     }
@@ -553,7 +610,7 @@ impl RelayDatabase {
     pub fn get_wall_post_media(&self, post_id: &str) -> SqliteResult<Vec<WallPostMediaRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT media_hash, media_type, mime_type, file_name, file_size, width, height, sort_order
+            "SELECT media_hash, media_type, mime_type, file_name, file_size, width, height, duration_seconds, sort_order, signature
              FROM wall_post_media
              WHERE post_id = ?
              ORDER BY sort_order ASC",
@@ -570,7 +627,9 @@ impl RelayDatabase {
                 file_size: row.get(4)?,
                 width: row.get(5)?,
                 height: row.get(6)?,
-                sort_order: row.get(7)?,
+                duration_seconds: row.get(7)?,
+                sort_order: row.get(8)?,
+                signature: row.get(9)?,
             });
         }
         Ok(items)
@@ -635,5 +694,7 @@ pub struct WallPostMediaRow {
     pub file_size: i64,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
     pub sort_order: i32,
+    pub signature: Vec<u8>,
 }

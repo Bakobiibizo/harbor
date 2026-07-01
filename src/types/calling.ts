@@ -4,6 +4,65 @@ export type CallState = 'ringing' | 'incoming' | 'connected' | 'ended';
 /** Hangup reason */
 export type HangupReason = 'normal' | 'busy' | 'declined' | 'error';
 
+/** Supported ICE server URL schemes */
+export type IceServerProtocol = 'stun' | 'stuns' | 'turn' | 'turns';
+
+/** How a TURN credential may be retained by settings persistence */
+export type TurnCredentialPersistence = 'session' | 'device';
+
+/** Operator-configured ICE server entry for WebRTC calls */
+export interface IceServerConfig {
+  id: string;
+  urls: string[];
+  username?: string;
+  credential?: string;
+  credentialPersistence?: TurnCredentialPersistence;
+}
+
+/** Raw ICE server form/config input before validation */
+export interface IceServerInput {
+  id?: string;
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+  credentialPersistence?: TurnCredentialPersistence;
+}
+
+export type IceServerValidationResult =
+  | { ok: true; server: IceServerConfig }
+  | { ok: false; error: string };
+
+/** Redacted ICE server entry safe for display/logging */
+export interface RedactedIceServerConfig {
+  id: string;
+  urls: string[];
+  username?: string;
+  credentialPersistence?: TurnCredentialPersistence;
+  hasCredential: boolean;
+  redactedCredential?: string;
+}
+
+export type CallIceErrorCode =
+  | 'strict-nat-no-turn'
+  | 'relay-only-without-turn'
+  | 'turn-credentials-missing'
+  | 'ice-candidate-error'
+  | 'ice-failed';
+
+export interface CallIceError {
+  code: CallIceErrorCode;
+  message: string;
+  recoverable: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface CallIceStateSnapshot {
+  iceGatheringState: RTCIceGatheringState;
+  iceConnectionState: RTCIceConnectionState;
+  connectionState: RTCPeerConnectionState;
+  error: CallIceError | null;
+}
+
 /** An outgoing offer result */
 export interface OfferResult {
   callId: string;

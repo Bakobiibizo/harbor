@@ -11,11 +11,12 @@ use clap::Parser;
 use db::RelayDatabase;
 use futures::StreamExt;
 use libp2p::{
-    identify, noise, ping, relay,
+    identify,
+    identity::Keypair,
+    noise, ping, relay,
     request_response::{self, ProtocolSupport},
     swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, StreamProtocol, SwarmBuilder,
-    identity::Keypair,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -67,10 +68,7 @@ impl PeerRateLimiter {
     fn check_rate_limit(&mut self, peer_id: &PeerId) -> Result<(), String> {
         let now = Instant::now();
 
-        let (request_count, window_start) = self
-            .peers
-            .entry(*peer_id)
-            .or_insert((0, now));
+        let (request_count, window_start) = self.peers.entry(*peer_id).or_insert((0, now));
 
         // If the current window has expired, reset the counter
         if now.duration_since(*window_start) >= self.window_duration {
@@ -82,7 +80,9 @@ impl PeerRateLimiter {
         if *request_count >= self.max_requests {
             warn!(
                 "Rate limit exceeded for peer {}: {} requests in {}s window",
-                peer_id, request_count, self.window_duration.as_secs()
+                peer_id,
+                request_count,
+                self.window_duration.as_secs()
             );
             return Err("Rate limit exceeded. Try again later.".to_string());
         }
@@ -101,10 +101,9 @@ impl PeerRateLimiter {
         let stale_threshold = self.window_duration * 2;
         let initial_count = self.peers.len();
 
-        self.peers
-            .retain(|_peer_id, (_count, window_start)| {
-                now.duration_since(*window_start) < stale_threshold
-            });
+        self.peers.retain(|_peer_id, (_count, window_start)| {
+            now.duration_since(*window_start) < stale_threshold
+        });
 
         let removed_count = initial_count - self.peers.len();
         if removed_count > 0 {
@@ -166,6 +165,8 @@ pub enum BoardSyncRequest {
         lamport_clock: i64,
         created_at: i64,
         signature: Vec<u8>,
+        #[serde(default)]
+        media_hashes: Vec<String>,
         timestamp: i64,
         request_signature: Vec<u8>,
         #[serde(default)]
@@ -221,7 +222,9 @@ pub struct WallPostMediaItemProto {
     pub file_size: i64,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
     pub sort_order: i32,
+    pub signature: Vec<u8>,
 }
 
 /// Wall post data in responses
@@ -235,6 +238,8 @@ pub struct WallPostData {
     pub lamport_clock: i64,
     pub created_at: i64,
     pub signature: Vec<u8>,
+    #[serde(default)]
+    pub media_hashes: Vec<String>,
     pub stored_at: i64,
     #[serde(default)]
     pub media_items: Vec<WallPostMediaItemProto>,
@@ -253,16 +258,28 @@ pub enum BoardSyncResponse {
         posts: Vec<BoardPostInfoProto>,
         has_more: bool,
     },
-    PostAccepted { post_id: String },
-    PeerRegistered { peer_id: String },
-    PostDeleted { post_id: String },
+    PostAccepted {
+        post_id: String,
+    },
+    PeerRegistered {
+        peer_id: String,
+    },
+    PostDeleted {
+        post_id: String,
+    },
     WallPosts {
         posts: Vec<WallPostData>,
         has_more: bool,
     },
-    WallPostStored { post_id: String },
-    WallPostDeleted { post_id: String },
-    Error { error: String },
+    WallPostStored {
+        post_id: String,
+    },
+    WallPostDeleted {
+        post_id: String,
+    },
+    Error {
+        error: String,
+    },
 }
 
 /// Harbor Relay Server - Enables NAT traversal and optionally hosts community boards
@@ -446,7 +463,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_circuits_per_peer: args.max_circuits_per_peer,
                 reservation_duration: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
                 max_circuit_duration: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
-                max_circuit_bytes: 0, // unlimited
+                max_circuit_bytes: 0,                                        // unlimited
                 ..Default::default()
             };
 
@@ -483,7 +500,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 board_sync,
             }
         })?
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(365 * 24 * 60 * 60)))
+        .with_swarm_config(|cfg| {
+            cfg.with_idle_connection_timeout(Duration::from_secs(365 * 24 * 60 * 60))
+        })
         .build();
 
     let local_peer_id = *swarm.local_peer_id();
@@ -501,13 +520,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If announce IP is provided, add external addresses
     if let Some(announce_ip) = args.announce_ip {
-        let external_tcp: Multiaddr =
-            format!("/ip4/{}/tcp/{}/p2p/{}", announce_ip, args.port, local_peer_id).parse()?;
-        let external_quic: Multiaddr =
-            format!("/ip4/{}/udp/{}/quic-v1/p2p/{}", announce_ip, args.port, local_peer_id)
-                .parse()?;
-        let local_0_0_0_0_tcp: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}/p2p/{}", args.port, local_peer_id).parse()?;
-        let local_0_0_0_0_quic: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1/p2p/{}", args.port, local_peer_id).parse()?;
+        let external_tcp: Multiaddr = format!(
+            "/ip4/{}/tcp/{}/p2p/{}",
+            announce_ip, args.port, local_peer_id
+        )
+        .parse()?;
+        let external_quic: Multiaddr = format!(
+            "/ip4/{}/udp/{}/quic-v1/p2p/{}",
+            announce_ip, args.port, local_peer_id
+        )
+        .parse()?;
+        let local_0_0_0_0_tcp: Multiaddr =
+            format!("/ip4/0.0.0.0/tcp/{}/p2p/{}", args.port, local_peer_id).parse()?;
+        let local_0_0_0_0_quic: Multiaddr = format!(
+            "/ip4/0.0.0.0/udp/{}/quic-v1/p2p/{}",
+            args.port, local_peer_id
+        )
+        .parse()?;
 
         swarm.add_external_address(external_tcp.clone());
         swarm.add_external_address(external_quic.clone());
@@ -528,9 +557,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Periodic cleanup timer for the rate limiter
-    let mut cleanup_interval = tokio::time::interval(Duration::from_secs(
-        RATE_LIMITER_CLEANUP_INTERVAL_SECS,
-    ));
+    let mut cleanup_interval =
+        tokio::time::interval(Duration::from_secs(RATE_LIMITER_CLEANUP_INTERVAL_SECS));
     // The first tick completes immediately; consume it so we don't
     // run cleanup at startup.
     cleanup_interval.tick().await;
@@ -622,7 +650,13 @@ fn handle_board_request(
                     error: "peer_id mismatch".to_string(),
                 };
             }
-            match service.process_register_peer(&peer_id, &public_key, &display_name, timestamp, &signature) {
+            match service.process_register_peer(
+                &peer_id,
+                &public_key,
+                &display_name,
+                timestamp,
+                &signature,
+            ) {
                 Ok(()) => BoardSyncResponse::PeerRegistered { peer_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
@@ -633,7 +667,10 @@ fn handle_board_request(
             signature,
         } => match service.process_list_boards(&requester_peer_id, timestamp, &signature) {
             Ok(boards) => {
-                info!("Serving board list for community: {}", service.community_name());
+                info!(
+                    "Serving board list for community: {}",
+                    service.community_name()
+                );
                 BoardSyncResponse::BoardList {
                     boards: boards
                         .into_iter()
@@ -646,7 +683,7 @@ fn handle_board_request(
                         .collect(),
                     relay_peer_id: local_peer_id.to_string(),
                 }
-            },
+            }
             Err(e) => BoardSyncResponse::Error { error: e },
         },
         BoardSyncRequest::GetBoardPosts {
@@ -656,7 +693,14 @@ fn handle_board_request(
             limit,
             timestamp,
             signature,
-        } => match service.process_get_board_posts(&requester_peer_id, &board_id, after_timestamp, limit, timestamp, &signature) {
+        } => match service.process_get_board_posts(
+            &requester_peer_id,
+            &board_id,
+            after_timestamp,
+            limit,
+            timestamp,
+            &signature,
+        ) {
             Ok((posts, has_more)) => BoardSyncResponse::BoardPosts {
                 board_id,
                 posts: posts
@@ -732,6 +776,7 @@ fn handle_board_request(
             lamport_clock,
             created_at,
             signature,
+            media_hashes,
             timestamp,
             request_signature,
             media_items,
@@ -750,6 +795,7 @@ fn handle_board_request(
                 lamport_clock,
                 created_at,
                 &signature,
+                &media_hashes,
                 timestamp,
                 &request_signature,
                 &media_items,
@@ -776,35 +822,39 @@ fn handle_board_request(
             ) {
                 Ok((posts, has_more, media_map)) => {
                     // Build a lookup from post_id -> media items
-                    let media_lookup: std::collections::HashMap<String, Vec<WallPostMediaItemProto>> =
-                        media_map
-                            .into_iter()
-                            .map(|(post_id, items)| {
-                                let protos = items
-                                    .into_iter()
-                                    .map(|m| WallPostMediaItemProto {
-                                        media_hash: m.media_hash,
-                                        media_type: m.media_type,
-                                        mime_type: m.mime_type,
-                                        file_name: m.file_name,
-                                        file_size: m.file_size,
-                                        width: m.width,
-                                        height: m.height,
-                                        sort_order: m.sort_order,
-                                    })
-                                    .collect();
-                                (post_id, protos)
-                            })
-                            .collect();
+                    let media_lookup: std::collections::HashMap<
+                        String,
+                        Vec<WallPostMediaItemProto>,
+                    > = media_map
+                        .into_iter()
+                        .map(|(post_id, items)| {
+                            let protos = items
+                                .into_iter()
+                                .map(|m| WallPostMediaItemProto {
+                                    media_hash: m.media_hash,
+                                    media_type: m.media_type,
+                                    mime_type: m.mime_type,
+                                    file_name: m.file_name,
+                                    file_size: m.file_size,
+                                    width: m.width,
+                                    height: m.height,
+                                    duration_seconds: m.duration_seconds,
+                                    sort_order: m.sort_order,
+                                    signature: m.signature,
+                                })
+                                .collect();
+                            (post_id, protos)
+                        })
+                        .collect();
 
                     BoardSyncResponse::WallPosts {
                         posts: posts
                             .into_iter()
                             .map(|p| {
-                                let media_items = media_lookup
-                                    .get(&p.post_id)
-                                    .cloned()
-                                    .unwrap_or_default();
+                                let media_items =
+                                    media_lookup.get(&p.post_id).cloned().unwrap_or_default();
+                                let media_hashes =
+                                    media_items.iter().map(|m| m.media_hash.clone()).collect();
                                 WallPostData {
                                     post_id: p.post_id,
                                     author_peer_id: p.author_peer_id,
@@ -814,6 +864,7 @@ fn handle_board_request(
                                     lamport_clock: p.lamport_clock,
                                     created_at: p.created_at,
                                     signature: p.signature,
+                                    media_hashes,
                                     stored_at: p.stored_at,
                                     media_items,
                                 }
@@ -821,7 +872,7 @@ fn handle_board_request(
                             .collect(),
                         has_more,
                     }
-                },
+                }
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
         }
@@ -836,7 +887,8 @@ fn handle_board_request(
                     error: "author_peer_id mismatch".to_string(),
                 };
             }
-            match service.process_delete_wall_post(&author_peer_id, &post_id, timestamp, &signature) {
+            match service.process_delete_wall_post(&author_peer_id, &post_id, timestamp, &signature)
+            {
                 Ok(()) => BoardSyncResponse::WallPostDeleted { post_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }

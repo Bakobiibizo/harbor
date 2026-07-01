@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useWallStore } from './wall';
 import { postsService } from '../services/posts';
+import { mediaService } from '../services/media';
 
 vi.mock('../services/posts', () => ({
   postsService: {
@@ -10,6 +11,19 @@ vi.mock('../services/posts', () => ({
     updatePost: vi.fn(),
     deletePost: vi.fn(),
     addPostMedia: vi.fn(),
+  },
+}));
+
+vi.mock('../services/media', () => ({
+  mediaService: {
+    storeMediaBytes: vi.fn(),
+    getMediaUrl: vi.fn(),
+  },
+}));
+
+vi.mock('../services/feed', () => ({
+  feedService: {
+    syncWallToRelay: vi.fn(() => Promise.resolve()),
   },
 }));
 
@@ -80,6 +94,50 @@ describe('useWallStore', () => {
       expect(state.error).toContain('Network error');
     });
 
+    it('should render image and video media after reload or sync', async () => {
+      vi.mocked(postsService.getMyPosts).mockResolvedValue([mockBackendPost]);
+      vi.mocked(postsService.getPostMedia).mockResolvedValue([
+        {
+          id: 1,
+          postId: 'post-1',
+          mediaHash: 'a'.repeat(64),
+          mediaType: 'image',
+          mimeType: 'image/png',
+          fileName: 'photo.png',
+          fileSize: 100,
+          width: null,
+          height: null,
+          durationSeconds: null,
+          sortOrder: 0,
+          signature: [1, 2, 3],
+        },
+        {
+          id: 2,
+          postId: 'post-1',
+          mediaHash: 'b'.repeat(64),
+          mediaType: 'video',
+          mimeType: 'video/mp4',
+          fileName: 'clip.mp4',
+          fileSize: 200,
+          width: null,
+          height: null,
+          durationSeconds: 2,
+          sortOrder: 1,
+          signature: [4, 5, 6],
+        },
+      ]);
+      vi.mocked(mediaService.getMediaUrl)
+        .mockResolvedValueOnce('data:image/png;base64,image')
+        .mockResolvedValueOnce('data:video/mp4;base64,video');
+
+      await useWallStore.getState().loadPosts();
+
+      expect(useWallStore.getState().posts[0].media).toEqual([
+        { type: 'image', url: 'data:image/png;base64,image', name: 'photo.png' },
+        { type: 'video', url: 'data:video/mp4;base64,video', name: 'clip.mp4' },
+      ]);
+    });
+
     it('should handle media fetch errors gracefully per post', async () => {
       vi.mocked(postsService.getMyPosts).mockResolvedValue([mockBackendPost]);
       vi.mocked(postsService.getPostMedia).mockRejectedValue(new Error('Media error'));
@@ -146,19 +204,65 @@ describe('useWallStore', () => {
       await expect(useWallStore.getState().createPost('content')).rejects.toThrow('Create failed');
     });
 
-    it('should add media when provided', async () => {
+    it('should sign image media at create time when provided', async () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'media-post',
         createdAt: 1700000100,
       });
-      vi.mocked(postsService.addPostMedia).mockResolvedValue(undefined);
+      vi.mocked(mediaService.storeMediaBytes).mockResolvedValue('a'.repeat(64));
 
-      const media = [{ type: 'image' as const, url: 'blob:test', name: 'photo.jpg' }];
+      const file = {
+        type: 'image/png',
+        arrayBuffer: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
+      } as unknown as File;
+      const media = [{ type: 'image' as const, url: 'blob:test', name: 'photo.png', file }];
       await useWallStore.getState().createPost('Post with image', 'post', media);
 
-      expect(postsService.addPostMedia).toHaveBeenCalledTimes(1);
+      expect(mediaService.storeMediaBytes).toHaveBeenCalledTimes(1);
+      expect(postsService.createPost).toHaveBeenCalledWith('text', 'Post with image', 'contacts', [
+        {
+          mediaHash: 'a'.repeat(64),
+          mediaType: 'image',
+          mimeType: 'image/png',
+          fileName: 'photo.png',
+          fileSize: 3,
+          sortOrder: 0,
+        },
+      ]);
+      expect(postsService.addPostMedia).not.toHaveBeenCalled();
       const state = useWallStore.getState();
-      expect(state.posts[0].media).toEqual(media);
+      expect(state.posts[0].media).toEqual(
+        media.map(({ type, url, name }) => ({ type, url, name })),
+      );
+    });
+
+    it('should sign video media at create time when provided', async () => {
+      vi.mocked(postsService.createPost).mockResolvedValue({
+        postId: 'video-post',
+        createdAt: 1700000100,
+      });
+      vi.mocked(mediaService.storeMediaBytes).mockResolvedValue('b'.repeat(64));
+
+      const file = {
+        type: 'video/mp4',
+        arrayBuffer: vi.fn(async () => new Uint8Array([4, 5, 6, 7]).buffer),
+      } as unknown as File;
+      await useWallStore
+        .getState()
+        .createPost('Post with video', 'video', [
+          { type: 'video', url: 'blob:video', name: 'clip.mp4', file },
+        ]);
+
+      expect(postsService.createPost).toHaveBeenCalledWith('video', 'Post with video', 'contacts', [
+        {
+          mediaHash: 'b'.repeat(64),
+          mediaType: 'video',
+          mimeType: 'video/mp4',
+          fileName: 'clip.mp4',
+          fileSize: 4,
+          sortOrder: 0,
+        },
+      ]);
     });
   });
 

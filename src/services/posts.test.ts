@@ -18,6 +18,41 @@ describe('postsService', () => {
         contentType: 'text',
         contentText: 'Hello world',
         visibility: 'contacts',
+        media: undefined,
+      });
+      expect(result).toEqual(mockResult);
+    });
+
+    it('should invoke create_post with image and video media metadata', async () => {
+      const media = [
+        {
+          mediaHash: 'a'.repeat(64),
+          mediaType: 'image' as const,
+          mimeType: 'image/png',
+          fileName: 'photo.png',
+          fileSize: 1024,
+          sortOrder: 0,
+        },
+        {
+          mediaHash: 'b'.repeat(64),
+          mediaType: 'video' as const,
+          mimeType: 'video/mp4',
+          fileName: 'clip.mp4',
+          fileSize: 2048,
+          durationSeconds: 2,
+          sortOrder: 1,
+        },
+      ];
+      const mockResult = { postId: 'post-media', createdAt: 1700000000 };
+      vi.mocked(invoke).mockResolvedValue(mockResult);
+
+      const result = await postsService.createPost('video', 'caption', 'contacts', media);
+
+      expect(invoke).toHaveBeenCalledWith('create_post', {
+        contentType: 'video',
+        contentText: 'caption',
+        visibility: 'contacts',
+        media,
       });
       expect(result).toEqual(mockResult);
     });
@@ -122,16 +157,18 @@ describe('postsService', () => {
       );
 
       expect(invoke).toHaveBeenCalledWith('add_post_media', {
-        postId: 'post-1',
-        mediaHash: 'hash-abc',
-        mediaType: 'image',
-        mimeType: 'image/jpeg',
-        fileName: 'photo.jpg',
-        fileSize: 1024000,
-        width: 1920,
-        height: 1080,
-        durationSeconds: undefined,
-        sortOrder: 0,
+        params: {
+          postId: 'post-1',
+          mediaHash: 'hash-abc',
+          mediaType: 'image',
+          mimeType: 'image/jpeg',
+          fileName: 'photo.jpg',
+          fileSize: 1024000,
+          width: 1920,
+          height: 1080,
+          durationSeconds: undefined,
+          sortOrder: 0,
+        },
       });
     });
   });

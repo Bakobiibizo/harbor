@@ -9,4 +9,5 @@ export { feedService } from './feed';
 export { mediaService } from './media';
 export { commentsService } from './comments';
 export { callingService } from './calling';
+export * from './callingIce';
 export * as loggingService from './logging';

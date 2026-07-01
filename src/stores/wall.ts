@@ -3,7 +3,7 @@ import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
 import { feedService } from '../services/feed';
 import { createLogger } from '../utils/logger';
-import type { Post, PostMedia } from '../types';
+import type { CreatePostMediaInput, Post, PostMedia } from '../types';
 
 const log = createLogger('WallStore');
 
@@ -28,7 +28,7 @@ export interface WallPost {
   likes: number;
   comments: number;
   liked: boolean;
-  media?: { type: 'image' | 'video'; url: string; name?: string }[];
+  media?: { type: 'image' | 'video' | 'audio'; url: string; name?: string }[];
   // Repost data
   sharedFrom?: SharedFrom;
   // Backend data
@@ -48,7 +48,7 @@ interface WallState {
   createPost: (
     content: string,
     contentType?: WallContentType,
-    media?: { type: 'image' | 'video'; url: string; file?: File; name?: string }[],
+    media?: { type: 'image' | 'video' | 'audio'; url: string; file?: File; name?: string }[],
   ) => Promise<void>;
   shareToWall: (comment: string, sharedFrom: SharedFrom) => Promise<void>;
   updatePost: (postId: string, content: string) => Promise<void>;
@@ -97,7 +97,8 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
   if (media && media.length > 0) {
     resolvedMedia = await Promise.all(
       media.map(async (m) => ({
-        type: (m.mediaType === 'video' ? 'video' : 'image') as 'image' | 'video',
+        type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as
+          'image' | 'video' | 'audio',
         url: await resolveMediaUrl(m.mediaHash),
         name: m.fileName,
       })),
@@ -163,15 +164,54 @@ export const useWallStore = create<WallState>((set) => ({
   createPost: async (
     content: string,
     contentType: WallContentType = 'post',
-    media?: { type: 'image' | 'video'; url: string; file?: File; name?: string }[],
+    media?: { type: 'image' | 'video' | 'audio'; url: string; file?: File; name?: string }[],
   ) => {
     try {
       // Map WallContentType to backend content_type string
       const backendContentType = contentType === 'post' ? 'text' : contentType;
-      const result = await postsService.createPost(backendContentType, content, 'contacts');
 
-      // Add to local state immediately for instant UI feedback
-      // (media URLs use blob URLs for preview until resolved)
+      const signedMediaInputs: CreatePostMediaInput[] = [];
+      if (media && media.length > 0) {
+        for (let i = 0; i < media.length; i++) {
+          const m = media[i];
+          const fallbackMimeType =
+            m.type === 'image' ? 'image/jpeg' : m.type === 'video' ? 'video/mp4' : 'audio/mpeg';
+          let fileSize = 0;
+          let mediaHash: string;
+          let mimeType = m.file?.type || fallbackMimeType;
+
+          if (m.file) {
+            const bytes = await readFileAsBytes(m.file);
+            fileSize = bytes.length;
+            mediaHash = await mediaService.storeMediaBytes(bytes, mimeType);
+          } else {
+            const response = await fetch(m.url);
+            const blob = await response.blob();
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            fileSize = bytes.length;
+            mimeType = blob.type || mimeType;
+            mediaHash = await mediaService.storeMediaBytes(bytes, mimeType);
+          }
+
+          signedMediaInputs.push({
+            mediaHash,
+            mediaType: m.type,
+            mimeType,
+            fileName: m.name || `media-${i}`,
+            fileSize,
+            sortOrder: i,
+          });
+        }
+      }
+
+      const result = await postsService.createPost(
+        backendContentType,
+        content,
+        'contacts',
+        signedMediaInputs.length > 0 ? signedMediaInputs : undefined,
+      );
+
+      // Add to local state immediately for instant UI feedback.
       const previewMedia = media?.map((m) => ({
         type: m.type,
         url: m.url,
@@ -196,55 +236,10 @@ export const useWallStore = create<WallState>((set) => ({
         posts: [newPost, ...state.posts],
       }));
 
-      // Store media files and record metadata (best-effort, post already visible)
-      if (media && media.length > 0) {
-        for (let i = 0; i < media.length; i++) {
-          const m = media[i];
-          try {
-            let mediaHash: string;
-            let fileSize = 0;
-            const mimeType = m.type === 'image' ? 'image/jpeg' : 'video/mp4';
-
-            if (m.file) {
-              // Store the actual file data via content-addressed storage
-              const bytes = await readFileAsBytes(m.file);
-              fileSize = bytes.length;
-              mediaHash = await mediaService.storeMediaBytes(bytes, m.file.type || mimeType);
-            } else {
-              // Fallback: fetch blob URL and store the bytes
-              const response = await fetch(m.url);
-              const blob = await response.blob();
-              const bytes = new Uint8Array(await blob.arrayBuffer());
-              fileSize = bytes.length;
-              const detectedMime = blob.type || mimeType;
-              mediaHash = await mediaService.storeMediaBytes(bytes, detectedMime);
-            }
-
-            // Record the media metadata in the database
-            await postsService.addPostMedia(
-              result.postId,
-              mediaHash,
-              m.type,
-              m.file?.type || mimeType,
-              m.name || `media-${i}`,
-              fileSize,
-              undefined,
-              undefined,
-              undefined,
-              i,
-            );
-          } catch (mediaErr) {
-            log.warn(`Failed to store media ${i} for post ${result.postId}`, mediaErr);
-          }
-        }
-      }
-
       // Best-effort sync to relay -- post is already saved locally
-      feedService
-        .syncWallToRelay()
-        .catch((err) => {
-          log.warn('Failed to sync post to relay (saved locally)', err);
-        });
+      feedService.syncWallToRelay().catch((err) => {
+        log.warn('Failed to sync post to relay (saved locally)', err);
+      });
     } catch (err) {
       log.error('Failed to create post', err);
       throw err;
@@ -323,10 +318,10 @@ export const useWallStore = create<WallState>((set) => ({
       posts: state.posts.map((post) =>
         post.postId === postId
           ? {
-            ...post,
-            liked: !post.liked,
-            likes: post.liked ? post.likes - 1 : post.likes + 1,
-          }
+              ...post,
+              liked: !post.liked,
+              likes: post.liked ? post.likes - 1 : post.likes + 1,
+            }
           : post,
       ),
     }));

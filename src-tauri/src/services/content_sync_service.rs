@@ -1,15 +1,20 @@
 //! Content sync service for synchronizing posts between peers
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ed25519_dalek::VerifyingKey;
 
-use crate::db::{Capability, Database, PostData, PostVisibility, PostsRepository};
+use crate::db::{Capability, Database, PostData, PostMediaData, PostVisibility, PostsRepository};
 use crate::error::{AppError, Result};
+use crate::services::posts_service::{
+    post_media_data_from_signed, signable_media_from_signed, sorted_media_hashes,
+    validate_signed_media_metadata,
+};
 use crate::services::{
     verify, ContactsService, IdentityService, PermissionsService, PostSummary,
     SignableContentManifestRequest, SignableContentManifestResponse, SignablePost,
+    SignedPostMediaMetadata,
 };
 
 /// Service for syncing content between peers
@@ -62,6 +67,8 @@ pub struct OutgoingFetchResponse {
     pub lamport_clock: u64,
     pub created_at: i64,
     pub signature: Vec<u8>,
+    pub media_hashes: Vec<String>,
+    pub media_items: Vec<SignedPostMediaMetadata>,
 }
 
 /// Parameters for storing a remote post received from a peer
@@ -74,6 +81,8 @@ pub struct RemotePostParams<'a> {
     pub lamport_clock: u64,
     pub created_at: i64,
     pub signature: &'a [u8],
+    pub media_hashes: &'a [String],
+    pub media_items: &'a [SignedPostMediaMetadata],
 }
 
 impl ContentSyncService {
@@ -236,6 +245,25 @@ impl ContentSyncService {
         // For Public, anyone with WallRead can access
         // Note: We don't serve posts with other visibility levels
 
+        let stored_media = PostsRepository::get_post_media(&self.db, &post.post_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let media_items: Vec<SignedPostMediaMetadata> = stored_media
+            .into_iter()
+            .map(|media| SignedPostMediaMetadata {
+                media_hash: media.media_hash,
+                media_type: media.media_type,
+                mime_type: media.mime_type,
+                file_name: media.file_name,
+                file_size: media.file_size,
+                width: media.width,
+                height: media.height,
+                duration_seconds: media.duration_seconds,
+                sort_order: media.sort_order,
+                signature: media.signature,
+            })
+            .collect();
+        let media_hashes = sorted_media_hashes(&media_items);
+
         Ok(OutgoingFetchResponse {
             post_id: post.post_id,
             author_peer_id: post.author_peer_id,
@@ -245,6 +273,8 @@ impl ContentSyncService {
             lamport_clock: post.lamport_clock as u64,
             created_at: post.created_at,
             signature: post.signature,
+            media_hashes,
+            media_items,
         })
     }
 
@@ -435,7 +465,7 @@ impl ContentSyncService {
             author_peer_id: author_peer_id.to_string(),
             content_type: content_type.to_string(),
             content_text: content_text.map(String::from),
-            media_hashes: Vec::new(), // Will be added separately
+            media_hashes: params.media_hashes.to_vec(),
             visibility: visibility.to_string(),
             lamport_clock,
             created_at,
@@ -453,22 +483,24 @@ impl ContentSyncService {
             return Err(AppError::Crypto("Invalid post signature".to_string()));
         }
 
-        // Check for existing post
-        if let Some(existing) = PostsRepository::get_by_post_id(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?
-        {
-            if existing.lamport_clock as u64 >= lamport_clock {
-                return Ok(()); // We have a newer or same version
-            }
-            // Update existing post
-            PostsRepository::update_post(
-                &self.db,
-                post_id,
-                content_text,
-                created_at,
-                lamport_clock as i64,
-            )
+        let existing_post = PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        if let Some(existing) = existing_post {
+            if (existing.lamport_clock as u64) > lamport_clock {
+                return Ok(()); // We have a newer version
+            }
+            if (existing.lamport_clock as u64) < lamport_clock {
+                // Update existing post
+                PostsRepository::update_post(
+                    &self.db,
+                    post_id,
+                    content_text,
+                    created_at,
+                    lamport_clock as i64,
+                )
+                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+            }
         } else {
             // Insert new post
             let vis = PostVisibility::from_str(visibility).unwrap_or(PostVisibility::Contacts);
@@ -492,6 +524,73 @@ impl ContentSyncService {
         self.db
             .update_lamport_clock(author_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        if !params.media_items.is_empty() || !params.media_hashes.is_empty() {
+            self.store_verified_media_metadata(
+                post_id,
+                author_peer_id,
+                params.media_hashes,
+                params.media_items,
+                &verifying_key,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn store_verified_media_metadata(
+        &self,
+        post_id: &str,
+        author_peer_id: &str,
+        media_hashes: &[String],
+        media_items: &[SignedPostMediaMetadata],
+        verifying_key: &VerifyingKey,
+    ) -> Result<()> {
+        let sorted_hashes = sorted_media_hashes(media_items);
+        if sorted_hashes != media_hashes {
+            return Err(AppError::Validation(format!(
+                "Rejected media metadata for post {}: ordered media hashes do not match signed post hashes",
+                post_id
+            )));
+        }
+
+        let mut seen_orders = HashSet::new();
+        let mut seen_hashes = HashSet::new();
+        for media in media_items {
+            validate_signed_media_metadata(media).map_err(|e| {
+                AppError::Validation(format!(
+                    "Rejected media metadata for post {}: {}",
+                    post_id, e
+                ))
+            })?;
+
+            if !seen_orders.insert(media.sort_order) {
+                return Err(AppError::Validation(format!(
+                    "Rejected media metadata for post {}: duplicate sort_order {}",
+                    post_id, media.sort_order
+                )));
+            }
+            if !seen_hashes.insert(media.media_hash.clone()) {
+                return Err(AppError::Validation(format!(
+                    "Rejected media metadata for post {}: duplicate media hash {}",
+                    post_id, media.media_hash
+                )));
+            }
+
+            let signable_media = signable_media_from_signed(post_id, author_peer_id, media);
+            if !verify(verifying_key, &signable_media, &media.signature)? {
+                return Err(AppError::Crypto(format!(
+                    "Invalid media metadata signature for post {} hash {}",
+                    post_id, media.media_hash
+                )));
+            }
+        }
+
+        for media in media_items {
+            let media_data: PostMediaData = post_media_data_from_signed(post_id, media);
+            PostsRepository::add_media(&self.db, &media_data)
+                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        }
 
         Ok(())
     }
@@ -707,6 +806,8 @@ mod tests {
                 lamport_clock: 1,
                 created_at: 1000,
                 signature: &signature,
+                media_hashes: &[],
+                media_items: &[],
             })
             .unwrap();
 
@@ -715,6 +816,172 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(post.content_text, Some("Remote post content".to_string()));
+    }
+
+    #[test]
+    fn test_store_remote_post_with_signed_media_metadata() {
+        let (service, db, _identity_service, _peer_id) = create_test_env();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: peer_peer_id.clone(),
+                public_key: peer_verifying.to_bytes().to_vec(),
+                x25519_public: vec![0u8; 32],
+                display_name: "Remote Peer".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+
+        let media_hash = "a".repeat(64);
+        let signable_media = crate::services::SignablePostMedia {
+            post_id: "remote-post-media".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            media_hash: media_hash.clone(),
+            media_type: "video".to_string(),
+            mime_type: "video/mp4".to_string(),
+            file_name: "clip.mp4".to_string(),
+            file_size: 4096,
+            width: Some(1920),
+            height: Some(1080),
+            duration_seconds: Some(3),
+            sort_order: 0,
+        };
+        let media_signature = crate::services::sign(&peer_signing, &signable_media).unwrap();
+        let media_item = crate::services::SignedPostMediaMetadata {
+            media_hash: media_hash.clone(),
+            media_type: "video".to_string(),
+            mime_type: "video/mp4".to_string(),
+            file_name: "clip.mp4".to_string(),
+            file_size: 4096,
+            width: Some(1920),
+            height: Some(1080),
+            duration_seconds: Some(3),
+            sort_order: 0,
+            signature: media_signature,
+        };
+        let media_hashes = vec![media_hash.clone()];
+        let signable = crate::services::SignablePost {
+            post_id: "remote-post-media".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "video".to_string(),
+            content_text: Some("Remote video".to_string()),
+            media_hashes: media_hashes.clone(),
+            visibility: "public".to_string(),
+            lamport_clock: 1,
+            created_at: 1000,
+        };
+        let signature = crate::services::sign(&peer_signing, &signable).unwrap();
+
+        service
+            .store_remote_post(&RemotePostParams {
+                post_id: "remote-post-media",
+                author_peer_id: &peer_peer_id,
+                content_type: "video",
+                content_text: Some("Remote video"),
+                visibility: "public",
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: &signature,
+                media_hashes: &media_hashes,
+                media_items: &[media_item],
+            })
+            .unwrap();
+
+        let stored_media = PostsRepository::get_post_media(&db, "remote-post-media").unwrap();
+        assert_eq!(stored_media.len(), 1);
+        assert_eq!(stored_media[0].media_hash, media_hash);
+        assert_eq!(stored_media[0].media_type, "video");
+        assert!(!stored_media[0].signature.is_empty());
+    }
+
+    #[test]
+    fn test_store_remote_post_rejects_tampered_media_but_preserves_text() {
+        let (service, db, _identity_service, _peer_id) = create_test_env();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: peer_peer_id.clone(),
+                public_key: peer_verifying.to_bytes().to_vec(),
+                x25519_public: vec![0u8; 32],
+                display_name: "Remote Peer".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+
+        let signed_hash = "a".repeat(64);
+        let tampered_hash = "b".repeat(64);
+        let signable_media = crate::services::SignablePostMedia {
+            post_id: "remote-post-tampered-media".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            media_hash: tampered_hash.clone(),
+            media_type: "image".to_string(),
+            mime_type: "image/png".to_string(),
+            file_name: "image.png".to_string(),
+            file_size: 1024,
+            width: Some(640),
+            height: Some(480),
+            duration_seconds: None,
+            sort_order: 0,
+        };
+        let media_signature = crate::services::sign(&peer_signing, &signable_media).unwrap();
+        let media_item = crate::services::SignedPostMediaMetadata {
+            media_hash: tampered_hash,
+            media_type: "image".to_string(),
+            mime_type: "image/png".to_string(),
+            file_name: "image.png".to_string(),
+            file_size: 1024,
+            width: Some(640),
+            height: Some(480),
+            duration_seconds: None,
+            sort_order: 0,
+            signature: media_signature,
+        };
+        let media_hashes = vec![signed_hash];
+        let signable = crate::services::SignablePost {
+            post_id: "remote-post-tampered-media".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "image".to_string(),
+            content_text: Some("Text survives".to_string()),
+            media_hashes: media_hashes.clone(),
+            visibility: "public".to_string(),
+            lamport_clock: 1,
+            created_at: 1000,
+        };
+        let signature = crate::services::sign(&peer_signing, &signable).unwrap();
+
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-post-tampered-media",
+            author_peer_id: &peer_peer_id,
+            content_type: "image",
+            content_text: Some("Text survives"),
+            visibility: "public",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &signature,
+            media_hashes: &media_hashes,
+            media_items: &[media_item],
+        });
+
+        assert!(result.is_err());
+        let post = PostsRepository::get_by_post_id(&db, "remote-post-tampered-media")
+            .unwrap()
+            .unwrap();
+        assert_eq!(post.content_text, Some("Text survives".to_string()));
+        assert!(
+            PostsRepository::get_post_media(&db, "remote-post-tampered-media")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -745,6 +1012,8 @@ mod tests {
             lamport_clock: 1,
             created_at: 1000,
             signature: &vec![0u8; 64], // Invalid signature
+            media_hashes: &[],
+            media_items: &[],
         });
 
         assert!(result.is_err());
@@ -763,6 +1032,8 @@ mod tests {
             lamport_clock: 1,
             created_at: 1000,
             signature: &vec![0u8; 64],
+            media_hashes: &[],
+            media_items: &[],
         });
 
         assert!(result.is_err());
@@ -809,6 +1080,8 @@ mod tests {
                 lamport_clock: 1,
                 created_at: 1000,
                 signature: &sig1,
+                media_hashes: &[],
+                media_items: &[],
             })
             .unwrap();
 
@@ -835,6 +1108,8 @@ mod tests {
                 lamport_clock: 2,
                 created_at: 1000,
                 signature: &sig2,
+                media_hashes: &[],
+                media_items: &[],
             })
             .unwrap();
 
@@ -887,6 +1162,8 @@ mod tests {
                 lamport_clock: 5,
                 created_at: 1000,
                 signature: &sig1,
+                media_hashes: &[],
+                media_items: &[],
             })
             .unwrap();
 
@@ -914,6 +1191,8 @@ mod tests {
                 lamport_clock: 3,
                 created_at: 1000,
                 signature: &sig2,
+                media_hashes: &[],
+                media_items: &[],
             })
             .unwrap();
 

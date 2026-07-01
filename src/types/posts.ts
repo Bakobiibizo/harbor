@@ -28,6 +28,20 @@ export interface PostMedia {
   height: number | null;
   durationSeconds: number | null;
   sortOrder: number;
+  signature: number[];
+}
+
+/** Media metadata used when creating a signed media post */
+export interface CreatePostMediaInput {
+  mediaHash: string;
+  mediaType: 'image' | 'video' | 'audio';
+  mimeType: string;
+  fileName: string;
+  fileSize: number;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  sortOrder: number;
 }
 
 /** Result of creating a post */

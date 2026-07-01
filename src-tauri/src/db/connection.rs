@@ -14,6 +14,7 @@ const MIGRATION_008: &str = include_str!("migrations/008_boards.sql");
 const MIGRATION_009: &str = include_str!("migrations/009_comments.sql");
 const MIGRATION_010: &str = include_str!("migrations/010_message_edit.sql");
 const MIGRATION_011: &str = include_str!("migrations/011_posts_lamport_index.sql");
+const MIGRATION_012: &str = include_str!("migrations/012_post_media_signature.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -167,6 +168,33 @@ impl Database {
             info!("Running migration 011...");
             conn.execute_batch(MIGRATION_011)?;
             info!("Migration 011 complete");
+        }
+
+        if version < 12 {
+            info!("Running migration 012...");
+            let has_media_signature: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('post_media') WHERE name = 'signature'",
+                    [],
+                    |row| row.get::<_, i32>(0),
+                )
+                .map(|count| count > 0)
+                .unwrap_or(false);
+
+            if has_media_signature {
+                conn.execute(
+                    "DELETE FROM post_media WHERE id NOT IN (SELECT MIN(id) FROM post_media GROUP BY post_id, media_hash)",
+                    [],
+                )?;
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_post_media_post_hash ON post_media(post_id, media_hash)",
+                    [],
+                )?;
+                conn.execute("UPDATE schema_version SET version = 12 WHERE id = 1", [])?;
+            } else {
+                conn.execute_batch(MIGRATION_012)?;
+            }
+            info!("Migration 012 complete");
         }
 
         Ok(())

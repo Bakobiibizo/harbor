@@ -472,7 +472,7 @@ interface UnifiedPost {
     avatarGradient: string;
   };
   isReal: boolean;
-  media?: { type: 'image' | 'video'; url: string; name?: string }[];
+  media?: { type: 'image' | 'video' | 'audio'; url: string; name?: string }[];
 }
 
 type FeedTab = 'all' | 'saved';
@@ -534,7 +534,7 @@ useEffect(() => {
           const mediaList = await postsService.getPostMedia(item.postId);
           if (mediaList.length > 0 && !cancelled) {
             mediaMap[item.postId] = mediaList.map((m) => ({
-              type: (m.mediaType === 'video' ? 'video' : 'image') as 'image' | 'video',
+              type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as 'image' | 'video' | 'audio',
               url: m.mediaHash,
               name: m.fileName,
             }));

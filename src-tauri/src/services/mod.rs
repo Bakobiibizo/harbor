@@ -62,6 +62,7 @@ pub use signing::{
     // Post messages
     SignablePost,
     SignablePostDelete,
+    SignablePostMedia,
     SignablePostUpdate,
     SignableSignalingAnswer,
     SignableSignalingHangup,
@@ -70,4 +71,5 @@ pub use signing::{
     SignableSignalingOffer,
     SignableWallPostDelete,
     SignableWallPostSubmit,
+    SignedPostMediaMetadata,
 };

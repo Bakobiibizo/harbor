@@ -17,83 +17,83 @@ const CONTENT_TYPES: {
   placeholder: string;
   charLimit?: number;
 }[] = [
-    {
-      type: 'post',
-      label: 'Post',
-      icon: (
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
-          />
-        </svg>
-      ),
-      placeholder: 'Share your thoughts, ideas, or creative work...',
-    },
-    {
-      type: 'thought',
-      label: 'Thought',
-      icon: (
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18"
-          />
-        </svg>
-      ),
-      placeholder: "What's on your mind? (280 characters max)",
-      charLimit: 280,
-    },
-    {
-      type: 'image',
-      label: 'Image',
-      icon: (
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"
-          />
-        </svg>
-      ),
-      placeholder: 'Add a caption for your image...',
-    },
-    {
-      type: 'video',
-      label: 'Video',
-      icon: (
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"
-          />
-        </svg>
-      ),
-      placeholder: 'Add a caption for your video...',
-    },
-    {
-      type: 'audio',
-      label: 'Audio',
-      icon: (
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
-          />
-        </svg>
-      ),
-      placeholder: 'Add a caption for your audio...',
-    },
-  ];
+  {
+    type: 'post',
+    label: 'Post',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+        />
+      </svg>
+    ),
+    placeholder: 'Share your thoughts, ideas, or creative work...',
+  },
+  {
+    type: 'thought',
+    label: 'Thought',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18"
+        />
+      </svg>
+    ),
+    placeholder: "What's on your mind? (280 characters max)",
+    charLimit: 280,
+  },
+  {
+    type: 'image',
+    label: 'Image',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"
+        />
+      </svg>
+    ),
+    placeholder: 'Add a caption for your image...',
+  },
+  {
+    type: 'video',
+    label: 'Video',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"
+        />
+      </svg>
+    ),
+    placeholder: 'Add a caption for your video...',
+  },
+  {
+    type: 'audio',
+    label: 'Audio',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
+        />
+      </svg>
+    ),
+    placeholder: 'Add a caption for your audio...',
+  },
+];
 
 /** Filter options including "All" */
 const FILTER_OPTIONS: { type: WallContentType | 'all'; label: string }[] = [
@@ -135,12 +135,12 @@ export function WallPage() {
   const [selectedContentType, setSelectedContentType] = useState<WallContentType>('post');
   const [filterType, setFilterType] = useState<WallContentType | 'all'>('all');
   const [pendingMedia, setPendingMedia] = useState<
-    { type: 'image' | 'video'; url: string; name: string }[]
+    { type: 'image' | 'video' | 'audio'; url: string; name: string; file: File }[]
   >([]);
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaTypeRef = useRef<'image' | 'video'>('image');
+  const mediaTypeRef = useRef<'image' | 'video' | 'audio'>('image');
 
   const identity = state.status === 'unlocked' ? state.identity : null;
 
@@ -216,10 +216,11 @@ export function WallPage() {
     likePost(postId);
   };
 
-  const handleAddMedia = (type: 'image' | 'video') => {
+  const handleAddMedia = (type: 'image' | 'video' | 'audio') => {
     mediaTypeRef.current = type;
     if (fileInputRef.current) {
-      fileInputRef.current.accept = type === 'image' ? 'image/*' : 'video/*';
+      fileInputRef.current.accept =
+        type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*';
       fileInputRef.current.click();
     }
   };
@@ -242,15 +243,20 @@ export function WallPage() {
         type: mediaTypeRef.current,
         url,
         name: file.name,
+        file,
       },
     ]);
-    toast.success(`${mediaTypeRef.current === 'image' ? 'Image' : 'Video'} added!`);
+    toast.success(
+      `${mediaTypeRef.current === 'image' ? 'Image' : mediaTypeRef.current === 'video' ? 'Video' : 'Audio'} added!`,
+    );
 
     // Auto-select the matching content type if adding media
     if (mediaTypeRef.current === 'image' && selectedContentType !== 'image') {
       setSelectedContentType('image');
     } else if (mediaTypeRef.current === 'video' && selectedContentType !== 'video') {
       setSelectedContentType('video');
+    } else if (mediaTypeRef.current === 'audio' && selectedContentType !== 'audio') {
+      setSelectedContentType('audio');
     }
 
     // Reset file input
@@ -461,8 +467,12 @@ export function WallPage() {
                     >
                       {media.type === 'image' ? (
                         <img src={media.url} alt={media.name} className="w-32 h-32 object-cover" />
-                      ) : (
+                      ) : media.type === 'video' ? (
                         <video src={media.url} className="w-32 h-32 object-cover" />
+                      ) : (
+                        <div className="w-48 h-32 flex items-center justify-center p-3">
+                          <audio src={media.url} controls className="w-full" />
+                        </div>
                       )}
                       <button
                         onClick={() => handleRemoveMedia(index)}
@@ -534,6 +544,21 @@ export function WallPage() {
                       strokeLinejoin="round"
                       strokeWidth={1.5}
                       d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                    />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => handleAddMedia('audio')}
+                  className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/5"
+                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                  title="Add audio"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M9 19V6l12-2v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-2c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"
                     />
                   </svg>
                 </button>
@@ -838,8 +863,9 @@ export function WallPage() {
                     <>
                       {post.content && (
                         <p
-                          className={`whitespace-pre-wrap leading-relaxed ${post.contentType === 'thought' ? 'text-lg italic' : 'text-base'
-                            }`}
+                          className={`whitespace-pre-wrap leading-relaxed ${
+                            post.contentType === 'thought' ? 'text-lg italic' : 'text-base'
+                          }`}
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
                           {post.content}
@@ -920,8 +946,10 @@ export function WallPage() {
                               alt={media.name || 'Image'}
                               className="max-w-full max-h-96 object-contain"
                             />
-                          ) : (
+                          ) : media.type === 'video' ? (
                             <video src={media.url} controls className="max-w-full max-h-96" />
+                          ) : (
+                            <audio src={media.url} controls className="w-72 max-w-full" />
                           )}
                         </div>
                       ))}

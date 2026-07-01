@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import {
+  stripSessionCredentialsForPersistence,
+  validateIceServerInput,
+} from '../services/callingIce';
+import type { IceServerConfig, IceServerInput, RedactedIceServerConfig } from '../types';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSize = 'small' | 'medium' | 'large';
@@ -81,6 +86,9 @@ interface SettingsState {
   localDiscovery: boolean;
   bootstrapNodes: string[];
 
+  // Calling / WebRTC NAT traversal settings
+  iceServers: IceServerConfig[];
+
   // Notification settings
   soundEnabled: boolean;
 
@@ -103,6 +111,9 @@ interface SettingsState {
   setLocalDiscovery: (value: boolean) => void;
   addBootstrapNode: (address: string) => void;
   removeBootstrapNode: (address: string) => void;
+  addIceServer: (input: IceServerInput) => IceServerConfig;
+  removeIceServer: (id: string) => void;
+  getRedactedIceServers: () => RedactedIceServerConfig[];
   setShowReadReceipts: (value: boolean) => void;
   setShowOnlineStatus: (value: boolean) => void;
   setDefaultVisibility: (value: 'contacts' | 'public') => void;
@@ -148,12 +159,13 @@ function applyFontSize(size: FontSize) {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       // Initial values
       soundEnabled: true,
       autoStartNetwork: true,
       localDiscovery: true,
       bootstrapNodes: [],
+      iceServers: [],
       showReadReceipts: true,
       showOnlineStatus: true,
       defaultVisibility: 'contacts',
@@ -176,6 +188,27 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           bootstrapNodes: state.bootstrapNodes.filter((a) => a !== address),
         })),
+      addIceServer: (input) => {
+        const result = validateIceServerInput(input, get().iceServers);
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        set((state) => ({ iceServers: [...state.iceServers, result.server] }));
+        return result.server;
+      },
+      removeIceServer: (id) =>
+        set((state) => ({
+          iceServers: state.iceServers.filter((server) => server.id !== id),
+        })),
+      getRedactedIceServers: () =>
+        get().iceServers.map((server) => ({
+          id: server.id,
+          urls: [...server.urls],
+          username: server.username,
+          credentialPersistence: server.credentialPersistence,
+          hasCredential: Boolean(server.credential),
+          redactedCredential: server.credential ? '••••••••' : undefined,
+        })),
       setShowReadReceipts: (value) => set({ showReadReceipts: value }),
       setShowOnlineStatus: (value) => set({ showOnlineStatus: value }),
       setDefaultVisibility: (value) => set({ defaultVisibility: value }),
@@ -195,6 +228,20 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'harbor-settings',
+      partialize: (state) => ({
+        soundEnabled: state.soundEnabled,
+        autoStartNetwork: state.autoStartNetwork,
+        localDiscovery: state.localDiscovery,
+        bootstrapNodes: state.bootstrapNodes,
+        iceServers: state.iceServers.map(stripSessionCredentialsForPersistence),
+        showReadReceipts: state.showReadReceipts,
+        showOnlineStatus: state.showOnlineStatus,
+        defaultVisibility: state.defaultVisibility,
+        avatarUrl: state.avatarUrl,
+        theme: state.theme,
+        accentColor: state.accentColor,
+        fontSize: state.fontSize,
+      }),
       onRehydrateStorage: () => {
         return (state: SettingsState | undefined) => {
           if (state?.theme) {

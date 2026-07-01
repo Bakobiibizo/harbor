@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::db::repositories::{Post, PostMedia, PostVisibility};
 use crate::error::AppError;
-use crate::services::posts_service::AddMediaParams;
+use crate::services::posts_service::{AddMediaParams, CreatePostMediaParams};
 use crate::services::PostsService;
 
 /// Post info for the frontend
@@ -57,6 +57,7 @@ pub struct PostMediaInfo {
     pub height: Option<i32>,
     pub duration_seconds: Option<i32>,
     pub sort_order: i32,
+    pub signature: Vec<u8>,
 }
 
 impl From<PostMedia> for PostMediaInfo {
@@ -73,6 +74,7 @@ impl From<PostMedia> for PostMediaInfo {
             height: media.height,
             duration_seconds: media.duration_seconds,
             sort_order: media.sort_order,
+            signature: media.signature,
         }
     }
 }
@@ -85,6 +87,21 @@ pub struct CreatePostResult {
     pub created_at: i64,
 }
 
+/// Media metadata supplied while creating a post.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePostMediaInput {
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
+}
+
 /// Create a new post
 #[tauri::command]
 pub async fn create_post(
@@ -93,13 +110,35 @@ pub async fn create_post(
     content_type: String,
     content_text: Option<String>,
     visibility: Option<String>,
+    media: Option<Vec<CreatePostMediaInput>>,
 ) -> Result<CreatePostResult, AppError> {
     let vis = match visibility.as_deref() {
         Some("public") => PostVisibility::Public,
         _ => PostVisibility::Contacts, // Default to contacts-only
     };
 
-    let outgoing = posts_service.create_post(&content_type, content_text.as_deref(), vis)?;
+    let media = media.unwrap_or_default();
+    let media_params: Vec<CreatePostMediaParams<'_>> = media
+        .iter()
+        .map(|item| CreatePostMediaParams {
+            media_hash: &item.media_hash,
+            media_type: &item.media_type,
+            mime_type: &item.mime_type,
+            file_name: &item.file_name,
+            file_size: item.file_size,
+            width: item.width,
+            height: item.height,
+            duration_seconds: item.duration_seconds,
+            sort_order: item.sort_order,
+        })
+        .collect();
+
+    let outgoing = posts_service.create_post_with_media(
+        &content_type,
+        content_text.as_deref(),
+        vis,
+        &media_params,
+    )?;
 
     // Auto-sync: submit the new post to the relay in the background.
     // We don't fail the command if relay submission fails -- the user can
@@ -116,9 +155,25 @@ pub async fn create_post(
                 let lc = outgoing.lamport_clock as i64;
                 let ca = outgoing.created_at;
                 let sig = outgoing.signature.clone();
-                // Fire and forget -- don't block post creation on relay submission
-                // Media is added separately via add_post_media, so pass empty vec here.
-                // The full wall sync (sync_wall_to_relay) will include media metadata.
+                let media_hashes = outgoing.media_hashes.clone();
+                let media_items: Vec<crate::p2p::protocols::board_sync::WallPostMediaItem> =
+                    outgoing
+                        .media_items
+                        .iter()
+                        .map(|m| crate::p2p::protocols::board_sync::WallPostMediaItem {
+                            media_hash: m.media_hash.clone(),
+                            media_type: m.media_type.clone(),
+                            mime_type: m.mime_type.clone(),
+                            file_name: m.file_name.clone(),
+                            file_size: m.file_size,
+                            width: m.width,
+                            height: m.height,
+                            duration_seconds: m.duration_seconds,
+                            sort_order: m.sort_order,
+                            signature: m.signature.clone(),
+                        })
+                        .collect();
+                // Fire and forget -- don't block post creation on relay submission.
                 tokio::spawn(async move {
                     if let Err(e) = handle
                         .submit_wall_post_to_relay(
@@ -130,7 +185,8 @@ pub async fn create_post(
                             lc,
                             ca,
                             sig,
-                            Vec::new(),
+                            media_hashes,
+                            media_items,
                         )
                         .await
                     {

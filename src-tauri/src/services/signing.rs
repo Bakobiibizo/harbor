@@ -186,6 +186,9 @@ pub struct SignablePost {
     pub author_peer_id: String,
     pub content_type: String,
     pub content_text: Option<String>,
+    /// Ordered SHA-256 hashes for media that is part of this post.
+    ///
+    /// The metadata for each hash is signed separately by [`SignablePostMedia`].
     pub media_hashes: Vec<String>,
     pub visibility: String,
     pub lamport_clock: u64,
@@ -193,6 +196,42 @@ pub struct SignablePost {
 }
 
 impl Signable for SignablePost {}
+
+/// Signed media metadata carried with a post.
+///
+/// The field order and names are intentionally mirrored by relay wire structs
+/// so wall relay request signatures are deterministic across crates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignedPostMediaMetadata {
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
+    pub signature: Vec<u8>,
+}
+
+/// Signable version of media metadata (excludes signature).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignablePostMedia {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
+}
+
+impl Signable for SignablePostMedia {}
 
 /// Signable version of PostUpdate (excludes signature)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +340,8 @@ pub struct SignableWallPostSubmit {
     pub lamport_clock: i64,
     pub created_at: i64,
     pub signature: Vec<u8>,
+    pub media_hashes: Vec<String>,
+    pub media_items: Vec<SignedPostMediaMetadata>,
     pub timestamp: i64,
 }
 
@@ -594,7 +635,7 @@ mod tests {
             author_peer_id: "12D3KooWAuthor".to_string(),
             content_type: "text".to_string(),
             content_text: Some("Hello world".to_string()),
-            media_hashes: vec![],
+            media_hashes: vec!["a".repeat(64)],
             visibility: "public".to_string(),
             lamport_clock: 1,
             created_at: 1234567890,
@@ -602,6 +643,41 @@ mod tests {
 
         let signature = sign(&signing_key, &post).unwrap();
         assert!(verify(&verifying_key, &post, &signature).unwrap());
+
+        let tampered_media = SignablePost {
+            media_hashes: vec!["b".repeat(64)],
+            ..post
+        };
+        assert!(!verify(&verifying_key, &tampered_media, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_sign_and_verify_post_media_metadata() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+
+        let media = SignablePostMedia {
+            post_id: "post-1".to_string(),
+            author_peer_id: "12D3KooWAuthor".to_string(),
+            media_hash: "a".repeat(64),
+            media_type: "image".to_string(),
+            mime_type: "image/png".to_string(),
+            file_name: "image.png".to_string(),
+            file_size: 1024,
+            width: Some(800),
+            height: Some(600),
+            duration_seconds: None,
+            sort_order: 0,
+        };
+
+        let signature = sign(&signing_key, &media).unwrap();
+        assert!(verify(&verifying_key, &media, &signature).unwrap());
+
+        let tampered = SignablePostMedia {
+            mime_type: "image/jpeg".to_string(),
+            ..media
+        };
+        assert!(!verify(&verifying_key, &tampered, &signature).unwrap());
     }
 
     #[test]

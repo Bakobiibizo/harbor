@@ -5,7 +5,7 @@ import { createLogger } from '../../utils/logger';
 const log = createLogger('PostMedia');
 
 export interface PostMediaItem {
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'audio';
   url: string;
   name?: string;
 }
@@ -93,10 +93,7 @@ function MediaItem({ item }: { item: PostMediaItem }) {
               borderTopColor: 'transparent',
             }}
           />
-          <span
-            className="text-xs"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
+          <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
             Loading media...
           </span>
         </div>
@@ -130,10 +127,7 @@ function MediaItem({ item }: { item: PostMediaItem }) {
               d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
             />
           </svg>
-          <span
-            className="text-xs"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
+          <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
             {error || 'Media unavailable'}
           </span>
         </div>
@@ -147,14 +141,20 @@ function MediaItem({ item }: { item: PostMediaItem }) {
         className="rounded-lg overflow-hidden"
         style={{ background: 'hsl(var(--harbor-surface-1))' }}
       >
-        <video
-          src={resolvedUrl}
-          controls
-          className="max-w-full max-h-96"
-          preload="metadata"
-        >
+        <video src={resolvedUrl} controls className="max-w-full max-h-96" preload="metadata">
           <track kind="captions" />
         </video>
+      </div>
+    );
+  }
+
+  if (item.type === 'audio') {
+    return (
+      <div
+        className="rounded-lg overflow-hidden p-3"
+        style={{ background: 'hsl(var(--harbor-surface-1))' }}
+      >
+        <audio src={resolvedUrl} controls className="w-72 max-w-full" />
       </div>
     );
   }

@@ -390,6 +390,7 @@ impl NetworkHandle {
         lamport_clock: i64,
         created_at: i64,
         signature: Vec<u8>,
+        media_hashes: Vec<String>,
         media_items: Vec<super::protocols::board_sync::WallPostMediaItem>,
     ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
@@ -404,6 +405,7 @@ impl NetworkHandle {
                     lamport_clock,
                     created_at,
                     signature,
+                    media_hashes,
                     media_items,
                 },
                 Some(tx),
@@ -965,6 +967,23 @@ impl NetworkService {
                             lamport_clock: resp.lamport_clock,
                             created_at: resp.created_at,
                             signature: resp.signature,
+                            media_hashes: resp.media_hashes,
+                            media_items: resp
+                                .media_items
+                                .into_iter()
+                                .map(|m| super::protocols::board_sync::WallPostMediaItem {
+                                    media_hash: m.media_hash,
+                                    media_type: m.media_type,
+                                    mime_type: m.mime_type,
+                                    file_name: m.file_name,
+                                    file_size: m.file_size,
+                                    width: m.width,
+                                    height: m.height,
+                                    duration_seconds: m.duration_seconds,
+                                    sort_order: m.sort_order,
+                                    signature: m.signature,
+                                })
+                                .collect(),
                         };
 
                         if let Err(e) = self
@@ -1095,6 +1114,8 @@ impl NetworkService {
                 lamport_clock,
                 created_at,
                 signature,
+                media_hashes,
+                media_items,
             } => {
                 info!("Received post {} from {}", post_id, peer);
 
@@ -1107,7 +1128,23 @@ impl NetworkService {
                     return;
                 }
 
-                // Store the remote post
+                let signed_media_items: Vec<crate::services::SignedPostMediaMetadata> = media_items
+                    .iter()
+                    .map(|m| crate::services::SignedPostMediaMetadata {
+                        media_hash: m.media_hash.clone(),
+                        media_type: m.media_type.clone(),
+                        mime_type: m.mime_type.clone(),
+                        file_name: m.file_name.clone(),
+                        file_size: m.file_size,
+                        width: m.width,
+                        height: m.height,
+                        duration_seconds: m.duration_seconds,
+                        sort_order: m.sort_order,
+                        signature: m.signature.clone(),
+                    })
+                    .collect();
+
+                // Store the remote post and verified media metadata
                 match content_sync_service.store_remote_post(&RemotePostParams {
                     post_id: &post_id,
                     author_peer_id: &author_peer_id,
@@ -1117,6 +1154,8 @@ impl NetworkService {
                     lamport_clock,
                     created_at,
                     signature: &signature,
+                    media_hashes: &media_hashes,
+                    media_items: &signed_media_items,
                 }) {
                     Ok(_) => {
                         info!("Stored remote post {} from {}", post_id, peer);
@@ -1539,6 +1578,15 @@ impl NetworkService {
                             "png" => "image/png",
                             "gif" => "image/gif",
                             "webp" => "image/webp",
+                            "mp4" => "video/mp4",
+                            "webm" => "video/webm",
+                            "mov" => "video/quicktime",
+                            "avi" => "video/x-msvideo",
+                            "mkv" => "video/x-matroska",
+                            "mp3" => "audio/mpeg",
+                            "m4a" => "audio/mp4",
+                            "wav" => "audio/wav",
+                            "ogg" => "audio/ogg",
                             _ => "application/octet-stream",
                         })
                     })
@@ -2130,6 +2178,23 @@ impl NetworkService {
                 // Store received posts in local SQLite via content_sync_service
                 if let Some(ref content_sync_service) = self.content_sync_service {
                     for post in &posts {
+                        let signed_media_items: Vec<crate::services::SignedPostMediaMetadata> =
+                            post.media_items
+                                .iter()
+                                .map(|m| crate::services::SignedPostMediaMetadata {
+                                    media_hash: m.media_hash.clone(),
+                                    media_type: m.media_type.clone(),
+                                    mime_type: m.mime_type.clone(),
+                                    file_name: m.file_name.clone(),
+                                    file_size: m.file_size,
+                                    width: m.width,
+                                    height: m.height,
+                                    duration_seconds: m.duration_seconds,
+                                    sort_order: m.sort_order,
+                                    signature: m.signature.clone(),
+                                })
+                                .collect();
+
                         match content_sync_service.store_remote_post(&RemotePostParams {
                             post_id: &post.post_id,
                             author_peer_id: &post.author_peer_id,
@@ -2139,6 +2204,8 @@ impl NetworkService {
                             lamport_clock: post.lamport_clock as u64,
                             created_at: post.created_at,
                             signature: &post.signature,
+                            media_hashes: &post.media_hashes,
+                            media_items: &signed_media_items,
                         }) {
                             Ok(_) => {
                                 debug!(
@@ -2151,60 +2218,6 @@ impl NetworkService {
                                     "Failed to store wall post {} from relay: {}",
                                     post.post_id, e
                                 );
-                            }
-                        }
-
-                        // Store media metadata from the relay response
-                        // Use PostsRepository directly since add_media_to_post checks ownership
-                        if !post.media_items.is_empty() {
-                            if let Some(ref content_sync_svc) = self.content_sync_service {
-                                for media_item in &post.media_items {
-                                    use crate::db::{PostMediaData, PostsRepository};
-                                    // Check if this media entry already exists (idempotent)
-                                    let existing = PostsRepository::get_post_media(
-                                        content_sync_svc.db(),
-                                        &post.post_id,
-                                    );
-                                    let already_exists = existing
-                                        .as_ref()
-                                        .map(|list| {
-                                            list.iter()
-                                                .any(|m| m.media_hash == media_item.media_hash)
-                                        })
-                                        .unwrap_or(false);
-
-                                    if !already_exists {
-                                        let media_data = PostMediaData {
-                                            post_id: post.post_id.clone(),
-                                            media_hash: media_item.media_hash.clone(),
-                                            media_type: media_item.media_type.clone(),
-                                            mime_type: media_item.mime_type.clone(),
-                                            file_name: media_item.file_name.clone(),
-                                            file_size: media_item.file_size,
-                                            width: media_item.width,
-                                            height: media_item.height,
-                                            duration_seconds: None,
-                                            sort_order: media_item.sort_order,
-                                        };
-                                        match PostsRepository::add_media(
-                                            content_sync_svc.db(),
-                                            &media_data,
-                                        ) {
-                                            Ok(_) => {
-                                                debug!(
-                                                    "Stored media metadata {} for post {} from relay",
-                                                    media_item.media_hash, post.post_id
-                                                );
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "Failed to store media metadata for post {}: {}",
-                                                    post.post_id, e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
@@ -3201,6 +3214,7 @@ impl NetworkService {
                 lamport_clock,
                 created_at,
                 signature,
+                media_hashes,
                 media_items,
             } => {
                 let identity = match self.identity_service.get_identity() {
@@ -3223,6 +3237,22 @@ impl NetworkService {
                     lamport_clock,
                     created_at,
                     signature: signature.clone(),
+                    media_hashes: media_hashes.clone(),
+                    media_items: media_items
+                        .iter()
+                        .map(|m| crate::services::SignedPostMediaMetadata {
+                            media_hash: m.media_hash.clone(),
+                            media_type: m.media_type.clone(),
+                            mime_type: m.mime_type.clone(),
+                            file_name: m.file_name.clone(),
+                            file_size: m.file_size,
+                            width: m.width,
+                            height: m.height,
+                            duration_seconds: m.duration_seconds,
+                            sort_order: m.sort_order,
+                            signature: m.signature.clone(),
+                        })
+                        .collect(),
                     timestamp: now,
                 };
 
@@ -3237,6 +3267,7 @@ impl NetworkService {
                             lamport_clock,
                             created_at,
                             signature,
+                            media_hashes,
                             timestamp: now,
                             request_signature,
                             media_items,

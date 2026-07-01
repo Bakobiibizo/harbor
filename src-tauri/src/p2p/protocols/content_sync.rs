@@ -67,6 +67,21 @@ pub struct ContentFetchRequest {
     pub signature: Vec<u8>,
 }
 
+/// Media metadata attached to a fetched post.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentPostMediaItem {
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
+    pub signature: Vec<u8>,
+}
+
 /// Response with full post content
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentFetchResponse {
@@ -88,6 +103,10 @@ pub struct ContentFetchResponse {
     pub created_at: i64,
     /// Author's signature on the post
     pub post_signature: Vec<u8>,
+    /// Ordered media hashes covered by the post signature
+    pub media_hashes: Vec<String>,
+    /// Signed media metadata items
+    pub media_items: Vec<ContentPostMediaItem>,
     /// Response timestamp
     pub timestamp: i64,
     /// Responder's signature over all fields above
@@ -254,6 +273,77 @@ mod tests {
             assert!(decoded_req.include_media);
         } else {
             panic!("Expected FetchRequest variant");
+        }
+    }
+
+    #[test]
+    fn test_fetch_response_media_metadata_roundtrip() {
+        let media_hashes = vec!["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+        let response = ContentFetchResponse {
+            responder_peer_id: "responder".to_string(),
+            post_id: "post-123".to_string(),
+            author_peer_id: "author-456".to_string(),
+            content_type: "mixed".to_string(),
+            content_text: Some("media post".to_string()),
+            visibility: "public".to_string(),
+            lamport_clock: 7,
+            created_at: 1234567890,
+            post_signature: vec![1; 64],
+            media_hashes: media_hashes.clone(),
+            media_items: vec![
+                ContentPostMediaItem {
+                    media_hash: media_hashes[0].clone(),
+                    media_type: "image".to_string(),
+                    mime_type: "image/png".to_string(),
+                    file_name: "photo.png".to_string(),
+                    file_size: 100,
+                    width: Some(640),
+                    height: Some(480),
+                    duration_seconds: None,
+                    sort_order: 0,
+                    signature: vec![2; 64],
+                },
+                ContentPostMediaItem {
+                    media_hash: media_hashes[1].clone(),
+                    media_type: "video".to_string(),
+                    mime_type: "video/mp4".to_string(),
+                    file_name: "clip.mp4".to_string(),
+                    file_size: 200,
+                    width: Some(1280),
+                    height: Some(720),
+                    duration_seconds: Some(3),
+                    sort_order: 1,
+                    signature: vec![3; 64],
+                },
+                ContentPostMediaItem {
+                    media_hash: media_hashes[2].clone(),
+                    media_type: "audio".to_string(),
+                    mime_type: "audio/mpeg".to_string(),
+                    file_name: "sound.mp3".to_string(),
+                    file_size: 300,
+                    width: None,
+                    height: None,
+                    duration_seconds: Some(5),
+                    sort_order: 2,
+                    signature: vec![4; 64],
+                },
+            ],
+            timestamp: 1234567891,
+            signature: vec![5; 64],
+        };
+
+        let wrapped = ContentSyncMessage::FetchResponse(response.clone());
+        let encoded = ContentSyncCodec::encode(&wrapped).unwrap();
+        let decoded = ContentSyncCodec::decode(&encoded).unwrap();
+
+        if let ContentSyncMessage::FetchResponse(decoded_resp) = decoded {
+            assert_eq!(decoded_resp.media_hashes, media_hashes);
+            assert_eq!(decoded_resp.media_items.len(), 3);
+            assert_eq!(decoded_resp.media_items[0].media_type, "image");
+            assert_eq!(decoded_resp.media_items[1].media_type, "video");
+            assert_eq!(decoded_resp.media_items[2].media_type, "audio");
+        } else {
+            panic!("Expected FetchResponse variant");
         }
     }
 

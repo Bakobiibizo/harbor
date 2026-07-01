@@ -10,7 +10,8 @@ A decentralized peer-to-peer chat application with local-first data storage, end
 - **End-to-End Encryption**: AES-256-GCM with HKDF-derived conversation keys
 - **Permission System**: Signed capability grants for content access (Chat, WallRead, Call)
 - **Event Sourcing**: Append-only logs with lamport clocks for conflict-free sync
-- **Voice Calling**: WebRTC signaling through libp2p (best-effort, works on LAN/most NATs)
+- **One-to-One Voice Calling**: signed WebRTC signaling through libp2p (best-effort, works on LAN/most NATs)
+- **Group-Call Topology Contract**: first production group calls use the [ADR-0001 relay-assisted small-group mesh](docs/architecture/adr-0001-group-call-topology.md) with a hard 4-participant limit
 
 ## Quick Start
 
@@ -224,7 +225,7 @@ struct PermissionGrant {
 - No forward secrecy (no double-ratchet yet - compromise exposes history)
 - No HSM/secure enclave integration
 - Connection patterns visible (metadata leakage)
-- Voice calls may not work behind strict NATs (no TURN server)
+- Calls use no hard-coded third-party STUN/TURN service by default; strict NAT pairs require operator-configured TURN, and group calls are capped at 4 total participants by [ADR-0001](docs/architecture/adr-0001-group-call-topology.md)
 
 ## Protocol Messages (CBOR)
 
@@ -245,10 +246,28 @@ struct PermissionGrant {
 - `ContentFetchRequest` - Request specific post
 - `MediaChunkRequest/Response` - Transfer media files
 
-### Voice Calling
+### Calling
+One-to-one voice signaling is implemented today. Any group audio/video/screen-share signaling must follow [ADR-0001](docs/architecture/adr-0001-group-call-topology.md): relay-assisted small-group full mesh, maximum 4 total participants, signed roster-bound messages, and no SFU/MCU behavior without a replacement ADR.
+
 - `SignalingOffer/Answer` - WebRTC SDP exchange
 - `SignalingIce` - ICE candidate exchange
 - `SignalingHangup` - End call
+
+## Voice Call ICE/STUN/TURN Behavior
+
+Harbor keeps voice calls LAN/direct-capable by default and does not bundle private TURN credentials or depend on an undeclared third-party TURN service.
+
+- Default runtime: `iceServers: []`, `iceTransportPolicy: "all"`. Browser host candidates remain enabled, so LAN/direct calls are not blocked when no TURN server is configured.
+- Operators/users can add `stun:`, `stuns:`, `turn:`, and `turns:` entries in **Settings → Calls**. TURN/TURNS entries require username and credential fields; credentials embedded in URLs are rejected.
+- TURN credential persistence is explicit. The default is **This session only**, which is usable for the current runtime but redacts the credential from persisted settings. **Save on this device** stores the credential locally for operator-managed deployments.
+- libp2p relay connectivity and WebRTC media relay are separate. Harbor/libp2p relays can carry call signaling, but audio media relay requires TURN/TURNS.
+- If ICE fails without usable TURN, Harbor reports strict-NAT guidance. If relay-only media is requested without TURN, Harbor reports that TURN is required rather than implying libp2p relay can carry media.
+
+Manual validation checklist for call networking changes:
+
+1. Start two local Harbor profiles on the same LAN with no ICE servers configured and confirm a voice call still reaches ICE gathering/connection through host candidates.
+2. Add an operator STUN or TURN test entry in Settings → Calls and confirm the generated `RTCPeerConnection` configuration contains the configured ICE server.
+3. Force a controlled failure with `iceTransportPolicy: "relay"` and no TURN entry; confirm the user-facing error mentions WebRTC TURN media relay and distinguishes it from libp2p relay signaling.
 
 ## Development
 
@@ -285,10 +304,11 @@ The codebase follows these patterns:
 
 ### Future (Stretch Goals)
 - [ ] Double-ratchet for forward secrecy
-- [ ] Video calling + screen sharing
+- [ ] Video calling + screen sharing within the ADR-0001 small-group mesh contract
+- [ ] Group video calls capped at 4 total participants by ADR-0001
 - [ ] Group chats
 - [ ] Mobile app (iOS/Android via Tauri)
-- [ ] TURN server for better NAT traversal
+- [ ] Operator-configurable TURN for strict-NAT call support
 - [ ] Profile photo uploads
 - [ ] Read receipts
 - [ ] Typing indicators

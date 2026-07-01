@@ -70,7 +70,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         get().loadCommentCounts(postIds);
       }
 
-      // Trigger background media preloader for any missing images
+      // Trigger background media preloader for any missing media
       mediaService.preloadMissingMedia().catch(() => {});
     } catch (error) {
       log.error('Failed to load feed', error);

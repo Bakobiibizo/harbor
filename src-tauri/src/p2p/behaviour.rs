@@ -7,7 +7,7 @@ use libp2p::{
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::protocols::board_sync::{BoardSyncRequest, BoardSyncResponse};
+use super::protocols::board_sync::{BoardSyncRequest, BoardSyncResponse, WallPostMediaItem};
 use super::protocols::media_sync::{MediaFetchRequest, MediaFetchResponse, MEDIA_SYNC_PROTOCOL};
 use super::protocols::{
     BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL,
@@ -42,7 +42,7 @@ pub struct ChatBehaviour {
     pub content_sync: request_response::cbor::Behaviour<ContentSyncRequest, ContentSyncResponse>,
     /// Request-response for board sync (community boards)
     pub board_sync: request_response::cbor::Behaviour<BoardSyncRequest, BoardSyncResponse>,
-    /// Request-response for media sync (P2P image transfer)
+    /// Request-response for media sync (P2P media transfer)
     pub media_sync: request_response::cbor::Behaviour<MediaFetchRequest, MediaFetchResponse>,
 }
 
@@ -139,6 +139,8 @@ pub enum ContentSyncResponse {
         lamport_clock: u64,
         created_at: i64,
         signature: Vec<u8>,
+        media_hashes: Vec<String>,
+        media_items: Vec<WallPostMediaItem>,
     },
     /// Error response
     Error { error: String },
@@ -215,7 +217,7 @@ impl ChatBehaviour {
             request_response::Config::default(),
         );
 
-        // Media sync protocol (with larger response size for image transfers)
+        // Media sync protocol (with larger response size for media transfers)
         let media_sync = request_response::cbor::Behaviour::new(
             [(
                 StreamProtocol::new(MEDIA_SYNC_PROTOCOL),

@@ -11,13 +11,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WallPostMediaItem {
     pub media_hash: String,
-    pub media_type: String, // "image"
-    pub mime_type: String,  // "image/jpeg"
+    pub media_type: String, // "image", "video", or "audio"
+    pub mime_type: String,
     pub file_name: String,
     pub file_size: i64,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
     pub sort_order: i32,
+    pub signature: Vec<u8>,
 }
 
 /// Board sync request (wire protocol)
@@ -75,6 +77,8 @@ pub enum BoardSyncRequest {
         lamport_clock: i64,
         created_at: i64,
         signature: Vec<u8>,
+        #[serde(default)]
+        media_hashes: Vec<String>,
         timestamp: i64,
         request_signature: Vec<u8>,
         #[serde(default)]
@@ -133,6 +137,8 @@ pub struct WallPostData {
     pub lamport_clock: i64,
     pub created_at: i64,
     pub signature: Vec<u8>,
+    #[serde(default)]
+    pub media_hashes: Vec<String>,
     pub stored_at: i64,
     #[serde(default)]
     pub media_items: Vec<WallPostMediaItem>,
@@ -170,4 +176,118 @@ pub enum BoardSyncResponse {
     WallPostDeleted { post_id: String },
     /// Error response
     Error { error: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wall_post_relay_media_metadata_roundtrip() {
+        let media_hashes = vec!["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+        let media_items = vec![
+            WallPostMediaItem {
+                media_hash: media_hashes[0].clone(),
+                media_type: "image".to_string(),
+                mime_type: "image/png".to_string(),
+                file_name: "photo.png".to_string(),
+                file_size: 100,
+                width: Some(640),
+                height: Some(480),
+                duration_seconds: None,
+                sort_order: 0,
+                signature: vec![1; 64],
+            },
+            WallPostMediaItem {
+                media_hash: media_hashes[1].clone(),
+                media_type: "video".to_string(),
+                mime_type: "video/mp4".to_string(),
+                file_name: "clip.mp4".to_string(),
+                file_size: 200,
+                width: Some(1280),
+                height: Some(720),
+                duration_seconds: Some(4),
+                sort_order: 1,
+                signature: vec![2; 64],
+            },
+            WallPostMediaItem {
+                media_hash: media_hashes[2].clone(),
+                media_type: "audio".to_string(),
+                mime_type: "audio/mpeg".to_string(),
+                file_name: "sound.mp3".to_string(),
+                file_size: 300,
+                width: None,
+                height: None,
+                duration_seconds: Some(6),
+                sort_order: 2,
+                signature: vec![3; 64],
+            },
+        ];
+
+        let request = BoardSyncRequest::SubmitWallPost {
+            author_peer_id: "author".to_string(),
+            post_id: "post-1".to_string(),
+            content_type: "mixed".to_string(),
+            content_text: Some("media".to_string()),
+            visibility: "public".to_string(),
+            lamport_clock: 1,
+            created_at: 1234567890,
+            signature: vec![4; 64],
+            media_hashes: media_hashes.clone(),
+            timestamp: 1234567891,
+            request_signature: vec![5; 64],
+            media_items: media_items.clone(),
+        };
+
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&request, &mut encoded).unwrap();
+        let decoded: BoardSyncRequest = ciborium::from_reader(encoded.as_slice()).unwrap();
+
+        match decoded {
+            BoardSyncRequest::SubmitWallPost {
+                media_hashes: decoded_hashes,
+                media_items: decoded_items,
+                ..
+            } => {
+                assert_eq!(decoded_hashes, media_hashes);
+                assert_eq!(decoded_items.len(), 3);
+                assert_eq!(decoded_items[0].media_type, "image");
+                assert_eq!(decoded_items[1].media_type, "video");
+                assert_eq!(decoded_items[2].media_type, "audio");
+                assert_eq!(decoded_items[1].duration_seconds, Some(4));
+            }
+            _ => panic!("Expected SubmitWallPost"),
+        }
+
+        let response = BoardSyncResponse::WallPosts {
+            posts: vec![WallPostData {
+                post_id: "post-1".to_string(),
+                author_peer_id: "author".to_string(),
+                content_type: "mixed".to_string(),
+                content_text: Some("media".to_string()),
+                visibility: "public".to_string(),
+                lamport_clock: 1,
+                created_at: 1234567890,
+                signature: vec![4; 64],
+                media_hashes: media_hashes.clone(),
+                stored_at: 1234567892,
+                media_items,
+            }],
+            has_more: false,
+        };
+
+        let mut encoded = Vec::new();
+        ciborium::into_writer(&response, &mut encoded).unwrap();
+        let decoded: BoardSyncResponse = ciborium::from_reader(encoded.as_slice()).unwrap();
+
+        match decoded {
+            BoardSyncResponse::WallPosts { posts, has_more } => {
+                assert!(!has_more);
+                assert_eq!(posts[0].media_hashes, media_hashes);
+                assert_eq!(posts[0].media_items[2].media_type, "audio");
+                assert_eq!(posts[0].media_items[2].signature, vec![3; 64]);
+            }
+            _ => panic!("Expected WallPosts"),
+        }
+    }
 }

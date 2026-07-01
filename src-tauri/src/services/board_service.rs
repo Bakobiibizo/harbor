@@ -285,6 +285,8 @@ impl BoardService {
             lamport_clock,
             created_at,
             signature: post_signature.to_vec(),
+            media_hashes: Vec::new(),
+            media_items: Vec::new(),
             timestamp: now,
         };
 

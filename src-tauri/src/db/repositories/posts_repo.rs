@@ -80,6 +80,7 @@ pub struct PostMedia {
     pub height: Option<i32>,
     pub duration_seconds: Option<i32>,
     pub sort_order: i32,
+    pub signature: Vec<u8>,
 }
 
 /// Data for inserting post media
@@ -95,6 +96,7 @@ pub struct PostMediaData {
     pub height: Option<i32>,
     pub duration_seconds: Option<i32>,
     pub sort_order: i32,
+    pub signature: Vec<u8>,
 }
 
 /// Aggregated visibility counts for an author's posts.
@@ -599,11 +601,11 @@ impl PostsRepository {
     pub fn add_media(db: &Database, media: &PostMediaData) -> SqliteResult<()> {
         db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO post_media (
+                "INSERT OR REPLACE INTO post_media (
                     post_id, media_hash, media_type, mime_type,
                     file_name, file_size, width, height,
-                    duration_seconds, sort_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    duration_seconds, sort_order, signature
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     media.post_id,
                     media.media_hash,
@@ -615,6 +617,7 @@ impl PostsRepository {
                     media.height,
                     media.duration_seconds,
                     media.sort_order,
+                    media.signature,
                 ],
             )?;
             Ok(())
@@ -627,7 +630,7 @@ impl PostsRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, post_id, media_hash, media_type, mime_type,
                         file_name, file_size, width, height,
-                        duration_seconds, sort_order
+                        duration_seconds, sort_order, signature
                  FROM post_media
                  WHERE post_id = ?
                  ORDER BY sort_order ASC",
@@ -648,6 +651,7 @@ impl PostsRepository {
                     height: row.get(8)?,
                     duration_seconds: row.get(9)?,
                     sort_order: row.get(10)?,
+                    signature: row.get(11)?,
                 });
             }
 
@@ -833,6 +837,7 @@ mod tests {
             height: Some(600),
             duration_seconds: None,
             sort_order: 0,
+            signature: vec![9, 9, 9],
         };
 
         PostsRepository::add_media(&db, &media).unwrap();

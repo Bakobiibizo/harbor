@@ -3,7 +3,10 @@
 use crate::db::RelayDatabase;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
+use std::collections::HashSet;
 use tracing::{info, warn};
+
+const MAX_POST_MEDIA_BYTES: i64 = 10 * 1024 * 1024;
 
 // ============================================================
 // Signable types (must match the client-side definitions exactly)
@@ -90,10 +93,45 @@ struct SignableWallPostSubmit {
     pub lamport_clock: i64,
     pub created_at: i64,
     pub signature: Vec<u8>,
+    pub media_hashes: Vec<String>,
+    pub media_items: Vec<crate::WallPostMediaItemProto>,
     pub timestamp: i64,
 }
 
 impl Signable for SignableWallPostSubmit {}
+
+/// Signable version of a wall post (must match client SignablePost).
+#[derive(Debug, Clone, Serialize)]
+struct SignablePost {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub content_type: String,
+    pub content_text: Option<String>,
+    pub media_hashes: Vec<String>,
+    pub visibility: String,
+    pub lamport_clock: u64,
+    pub created_at: i64,
+}
+
+impl Signable for SignablePost {}
+
+/// Signable version of media metadata (must match client SignablePostMedia).
+#[derive(Debug, Clone, Serialize)]
+struct SignablePostMedia {
+    pub post_id: String,
+    pub author_peer_id: String,
+    pub media_hash: String,
+    pub media_type: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+    pub sort_order: i32,
+}
+
+impl Signable for SignablePostMedia {}
 
 /// Signable version of a wall posts retrieval request (excludes signature).
 /// Must match `SignableGetWallPosts` on the client side.
@@ -164,6 +202,85 @@ fn verify_registered_peer_signature(
     verify_signature(&stored_public_key, signable, signature_bytes)
 }
 
+fn validate_media_hash(media_hash: &str) -> Result<(), String> {
+    if media_hash.len() != 64 || !media_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "Invalid media hash '{}': expected 64 hex characters",
+            media_hash
+        ));
+    }
+    Ok(())
+}
+
+fn expected_media_type_for_mime(mime_type: &str) -> Option<&'static str> {
+    match mime_type {
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => Some("image"),
+        "video/mp4" | "video/webm" | "video/quicktime" => Some("video"),
+        "audio/mpeg" | "audio/mp4" | "audio/wav" | "audio/ogg" | "audio/webm" => Some("audio"),
+        _ => None,
+    }
+}
+
+fn validate_media_item(item: &crate::WallPostMediaItemProto) -> Result<(), String> {
+    validate_media_hash(&item.media_hash)?;
+    let expected = expected_media_type_for_mime(&item.mime_type)
+        .ok_or_else(|| format!("Unsupported media MIME type: {}", item.mime_type))?;
+    if item.media_type != expected {
+        return Err(format!(
+            "Media type '{}' does not match MIME type '{}'",
+            item.media_type, item.mime_type
+        ));
+    }
+    if item.file_size <= 0 || item.file_size > MAX_POST_MEDIA_BYTES {
+        return Err(format!(
+            "Media '{}' is oversized or empty ({} bytes, max {} bytes)",
+            item.file_name, item.file_size, MAX_POST_MEDIA_BYTES
+        ));
+    }
+    if item.file_name.trim().is_empty() {
+        return Err("Media file name is required".to_string());
+    }
+    if item.sort_order < 0 {
+        return Err(format!("Invalid media sort_order {}", item.sort_order));
+    }
+    if matches!(item.width, Some(width) if width <= 0) {
+        return Err("Media width must be positive when provided".to_string());
+    }
+    if matches!(item.height, Some(height) if height <= 0) {
+        return Err("Media height must be positive when provided".to_string());
+    }
+    if matches!(item.duration_seconds, Some(duration) if duration <= 0) {
+        return Err("Media duration_seconds must be positive when provided".to_string());
+    }
+    Ok(())
+}
+
+fn sorted_media_hashes(media_items: &[crate::WallPostMediaItemProto]) -> Vec<String> {
+    let mut sorted = media_items.to_vec();
+    sorted.sort_by_key(|item| item.sort_order);
+    sorted.into_iter().map(|item| item.media_hash).collect()
+}
+
+fn signable_media_from_item(
+    post_id: &str,
+    author_peer_id: &str,
+    item: &crate::WallPostMediaItemProto,
+) -> SignablePostMedia {
+    SignablePostMedia {
+        post_id: post_id.to_string(),
+        author_peer_id: author_peer_id.to_string(),
+        media_hash: item.media_hash.clone(),
+        media_type: item.media_type.clone(),
+        mime_type: item.mime_type.clone(),
+        file_name: item.file_name.clone(),
+        file_size: item.file_size,
+        width: item.width,
+        height: item.height,
+        duration_seconds: item.duration_seconds,
+        sort_order: item.sort_order,
+    }
+}
+
 // ============================================================
 // Board service
 // ============================================================
@@ -230,6 +347,7 @@ impl BoardService {
     ///
     /// Verifies the signature against the author's stored public key
     /// before accepting the post.
+    #[allow(clippy::too_many_arguments)] // Relay protocol fields are passed through verbatim for signature verification.
     pub fn process_submit_post(
         &self,
         post_id: &str,
@@ -324,19 +442,14 @@ impl BoardService {
             timestamp,
         };
 
-        verify_registered_peer_signature(
-            &self.db,
-            requester_peer_id,
-            &signable_request,
-            signature,
-        )
-        .map_err(|verification_error| {
-            warn!(
-                "ListBoards signature verification failed for {}: {}",
-                requester_peer_id, verification_error
-            );
-            format!("Signature verification failed: {}", verification_error)
-        })?;
+        verify_registered_peer_signature(&self.db, requester_peer_id, &signable_request, signature)
+            .map_err(|verification_error| {
+                warn!(
+                    "ListBoards signature verification failed for {}: {}",
+                    requester_peer_id, verification_error
+                );
+                format!("Signature verification failed: {}", verification_error)
+            })?;
 
         self.db
             .list_boards()
@@ -362,19 +475,14 @@ impl BoardService {
             timestamp,
         };
 
-        verify_registered_peer_signature(
-            &self.db,
-            requester_peer_id,
-            &signable_request,
-            signature,
-        )
-        .map_err(|verification_error| {
-            warn!(
-                "GetBoardPosts signature verification failed for {}: {}",
-                requester_peer_id, verification_error
-            );
-            format!("Signature verification failed: {}", verification_error)
-        })?;
+        verify_registered_peer_signature(&self.db, requester_peer_id, &signable_request, signature)
+            .map_err(|verification_error| {
+                warn!(
+                    "GetBoardPosts signature verification failed for {}: {}",
+                    requester_peer_id, verification_error
+                );
+                format!("Signature verification failed: {}", verification_error)
+            })?;
 
         let clamped_limit = limit.min(100);
         let posts = self
@@ -445,6 +553,7 @@ impl BoardService {
     /// Only the author can submit their own wall posts.  We verify the
     /// `request_signature` (which covers the entire request payload including
     /// the inner post `signature`) against the author's stored public key.
+    #[allow(clippy::too_many_arguments)] // Mirrors the signed relay wire request without dropping fields.
     pub fn process_submit_wall_post(
         &self,
         author_peer_id: &str,
@@ -455,6 +564,7 @@ impl BoardService {
         lamport_clock: i64,
         created_at: i64,
         signature: &[u8],
+        media_hashes: &[String],
         timestamp: i64,
         request_signature: &[u8],
         media_items: &[crate::WallPostMediaItemProto],
@@ -487,6 +597,8 @@ impl BoardService {
             lamport_clock,
             created_at,
             signature: signature.to_vec(),
+            media_hashes: media_hashes.to_vec(),
+            media_items: media_items.to_vec(),
             timestamp,
         };
 
@@ -503,6 +615,62 @@ impl BoardService {
             );
             format!("Signature verification failed: {}", verification_error)
         })?;
+
+        let signable_post = SignablePost {
+            post_id: post_id.to_string(),
+            author_peer_id: author_peer_id.to_string(),
+            content_type: content_type.to_string(),
+            content_text: content_text.map(|t| t.to_string()),
+            media_hashes: media_hashes.to_vec(),
+            visibility: visibility.to_string(),
+            lamport_clock: lamport_clock as u64,
+            created_at,
+        };
+        verify_registered_peer_signature(&self.db, author_peer_id, &signable_post, signature)
+            .map_err(|verification_error| {
+                warn!(
+                    "Inner wall post signature verification failed for post {} by {}: {}",
+                    post_id, author_peer_id, verification_error
+                );
+                format!("Post signature verification failed: {}", verification_error)
+            })?;
+
+        let sorted_hashes = sorted_media_hashes(media_items);
+        if sorted_hashes != media_hashes {
+            return Err(
+                "Media metadata hashes do not match the hashes signed by the post".to_string(),
+            );
+        }
+
+        let mut seen_orders = HashSet::new();
+        let mut seen_hashes = HashSet::new();
+        for item in media_items {
+            validate_media_item(item)
+                .map_err(|error| format!("Invalid media metadata: {}", error))?;
+            if !seen_orders.insert(item.sort_order) {
+                return Err(format!("Duplicate media sort_order {}", item.sort_order));
+            }
+            if !seen_hashes.insert(item.media_hash.clone()) {
+                return Err(format!("Duplicate media hash {}", item.media_hash));
+            }
+            let signable_media = signable_media_from_item(post_id, author_peer_id, item);
+            verify_registered_peer_signature(
+                &self.db,
+                author_peer_id,
+                &signable_media,
+                &item.signature,
+            )
+            .map_err(|verification_error| {
+                warn!(
+                    "Media metadata signature verification failed for post {} hash {}: {}",
+                    post_id, item.media_hash, verification_error
+                );
+                format!(
+                    "Media signature verification failed: {}",
+                    verification_error
+                )
+            })?;
+        }
 
         // Store the wall post
         self.db
@@ -529,18 +697,21 @@ impl BoardService {
                 item.file_size,
                 item.width,
                 item.height,
+                item.duration_seconds,
                 item.sort_order,
+                &item.signature,
             ) {
-                warn!(
-                    "Failed to store media metadata for post {}: {}",
-                    post_id, e
-                );
+                warn!("Failed to store media metadata for post {}: {}", post_id, e);
             }
         }
 
         info!(
             "Wall post {} stored for {} (visibility={}, lamport_clock={}, media={})",
-            post_id, author_peer_id, visibility, lamport_clock, media_items.len()
+            post_id,
+            author_peer_id,
+            visibility,
+            lamport_clock,
+            media_items.len()
         );
         Ok(())
     }
@@ -549,6 +720,7 @@ impl BoardService {
     ///
     /// Verifies the requester's signature before returning data.
     /// The requester must be a registered peer.
+    #[allow(clippy::type_complexity)] // Return type mirrors posts plus per-post media metadata from relay storage.
     pub fn process_get_wall_posts(
         &self,
         requester_peer_id: &str,
@@ -557,7 +729,14 @@ impl BoardService {
         limit: u32,
         timestamp: i64,
         signature: &[u8],
-    ) -> Result<(Vec<crate::db::WallPostRow>, bool, Vec<(String, Vec<crate::db::WallPostMediaRow>)>), String> {
+    ) -> Result<
+        (
+            Vec<crate::db::WallPostRow>,
+            bool,
+            Vec<(String, Vec<crate::db::WallPostMediaRow>)>,
+        ),
+        String,
+    > {
         // Verify the requester's signature
         let signable_request = SignableGetWallPosts {
             requester_peer_id: requester_peer_id.to_string(),
@@ -567,19 +746,14 @@ impl BoardService {
             timestamp,
         };
 
-        verify_registered_peer_signature(
-            &self.db,
-            requester_peer_id,
-            &signable_request,
-            signature,
-        )
-        .map_err(|verification_error| {
-            warn!(
-                "GetWallPosts signature verification failed for {}: {}",
-                requester_peer_id, verification_error
-            );
-            format!("Signature verification failed: {}", verification_error)
-        })?;
+        verify_registered_peer_signature(&self.db, requester_peer_id, &signable_request, signature)
+            .map_err(|verification_error| {
+                warn!(
+                    "GetWallPosts signature verification failed for {}: {}",
+                    requester_peer_id, verification_error
+                );
+                format!("Signature verification failed: {}", verification_error)
+            })?;
 
         let clamped_limit = limit.min(100);
         let posts = self
