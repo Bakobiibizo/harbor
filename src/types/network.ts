@@ -1,3 +1,5 @@
+import type { SignalingEnvelope } from './calling';
+
 /** Network connection status */
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -53,4 +55,6 @@ export type NetworkEvent =
   | { type: 'wall_post_synced'; relay_peer_id: string; post_id: string }
   | { type: 'wall_posts_received'; relay_peer_id: string; author_peer_id: string; post_count: number }
   | { type: 'wall_post_deleted_on_relay'; relay_peer_id: string; post_id: string }
-  | { type: 'media_fetched'; peer_id: string; media_hash: string };
+  | { type: 'media_fetched'; peer_id: string; media_hash: string }
+  | { type: 'call_signaling_received'; peer_id: string; message: SignalingEnvelope }
+  | { type: 'call_signaling_error'; peer_id: string; error: string };

@@ -1,6 +1,6 @@
 //! Feed service for aggregating posts from contacts
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::db::{Capability, Database, Post, PostVisibility, PostsRepository};
@@ -53,14 +53,16 @@ impl FeedService {
 
         // Get all peer IDs who granted us WallRead (excludes our own posts)
         let permissions = self.permissions_service.get_received_permissions()?;
-        let mut allowed_authors: Vec<String> = permissions
+        let wall_read_authors: HashSet<String> = permissions
             .iter()
             .filter(|p| p.capability == "wall_read" && p.revoked_at.is_none())
             .map(|p| p.issuer_peer_id.clone())
             .collect();
+        let mut allowed_authors: Vec<String> = wall_read_authors.iter().cloned().collect();
 
-        // Also include all contacts (so we see their posts even before
-        // explicit permission grants — wall posts synced from relay)
+        // Also include all active contacts so their public posts can appear in
+        // the feed. Contacts-only posts are filtered below unless the author
+        // has granted us wall_read.
         if let Ok(contacts) = self.contacts_service.get_active_contacts() {
             for contact in contacts {
                 allowed_authors.push(contact.peer_id);
@@ -93,10 +95,9 @@ impl FeedService {
                 if post.visibility == PostVisibility::Public {
                     return true;
                 }
-                // Contacts-only posts require WallRead permission
-                // (already verified via allowed_authors list)
+                // Contacts-only posts require WallRead permission from the author.
                 if post.visibility == PostVisibility::Contacts {
-                    return true;
+                    return wall_read_authors.contains(&post.author_peer_id);
                 }
                 false
             })
@@ -142,20 +143,24 @@ impl FeedService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        // Check permission if not our own wall
-        if author_peer_id != identity.peer_id
-            && !self
+        let can_read_contacts_only = author_peer_id == identity.peer_id
+            || self
                 .permissions_service
-                .we_have_capability(author_peer_id, Capability::WallRead)?
-        {
-            return Err(AppError::PermissionDenied(
-                "No permission to view this wall".to_string(),
-            ));
-        }
+                .we_have_capability(author_peer_id, Capability::WallRead)?;
+        let visibility_filter = if can_read_contacts_only {
+            None
+        } else {
+            Some(PostVisibility::Public)
+        };
 
-        let posts =
-            PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
-                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let posts = PostsRepository::get_by_author_with_visibility(
+            &self.db,
+            author_peer_id,
+            visibility_filter,
+            limit,
+            before_timestamp,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Look up display name for the author
         let author_display_name = if author_peer_id == identity.peer_id {
@@ -168,7 +173,6 @@ impl FeedService {
                 .map(|c| c.display_name)
         };
 
-        // All posts are visible (permission was verified above)
         let feed_items: Vec<FeedItem> = posts
             .into_iter()
             .map(|post| FeedItem {
@@ -370,11 +374,31 @@ mod tests {
     }
 
     #[test]
-    fn test_get_wall_other_user_no_permission() {
-        let (service, _db, _identity, _perms, _peer_id) = create_test_env();
+    fn test_get_wall_other_user_without_permission_returns_public_only() {
+        let (service, db, _identity, _perms, _peer_id) = create_test_env();
 
-        let result = service.get_wall("12D3KooWOtherPeer", 10, None);
-        assert!(result.is_err());
+        let other_peer = "12D3KooWOtherPeer".to_string();
+        insert_test_post(
+            &db,
+            "other-public",
+            &other_peer,
+            "Public post",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "other-contacts",
+            &other_peer,
+            "Contacts-only post",
+            2000,
+            PostVisibility::Contacts,
+        );
+
+        let wall = service.get_wall(&other_peer, 10, None).unwrap();
+        assert_eq!(wall.len(), 1);
+        assert_eq!(wall[0].post.post_id, "other-public");
+        assert_eq!(wall[0].post.visibility, PostVisibility::Public);
     }
 
     #[test]
@@ -425,6 +449,46 @@ mod tests {
         let wall = service.get_wall(&other_peer, 10, None).unwrap();
         assert_eq!(wall.len(), 1);
         assert_eq!(wall[0].post.content_text, Some("Other post".to_string()));
+    }
+
+    #[test]
+    fn test_get_feed_filters_contacts_only_without_wall_read() {
+        let (service, db, _identity, _permissions, _peer_id) = create_test_env();
+
+        let other_peer = "12D3KooWFeedContact".to_string();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: other_peer.clone(),
+                public_key: vec![1u8; 32],
+                x25519_public: vec![2u8; 32],
+                display_name: "Feed Contact".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+
+        insert_test_post(
+            &db,
+            "contact-public",
+            &other_peer,
+            "Public contact post",
+            1000,
+            PostVisibility::Public,
+        );
+        insert_test_post(
+            &db,
+            "contact-private",
+            &other_peer,
+            "Contacts-only contact post",
+            2000,
+            PostVisibility::Contacts,
+        );
+
+        let feed = service.get_feed(10, None).unwrap();
+        assert_eq!(feed.len(), 1);
+        assert_eq!(feed[0].post.post_id, "contact-public");
     }
 
     #[test]

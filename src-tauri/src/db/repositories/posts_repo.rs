@@ -296,6 +296,55 @@ impl PostsRepository {
         })
     }
 
+    /// Get posts by author with lamport_clock greater than the given cursor,
+    /// optionally filtered to a specific visibility.
+    pub fn get_by_author_after_cursor_with_visibility(
+        db: &Database,
+        author_peer_id: &str,
+        cursor: i64,
+        visibility: Option<PostVisibility>,
+        limit: i64,
+    ) -> SqliteResult<Vec<Post>> {
+        db.with_connection(|conn| {
+            let mut posts = Vec::new();
+            match visibility {
+                Some(vis) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, post_id, author_peer_id, content_type, content_text,
+                                visibility, lamport_clock, created_at, updated_at,
+                                deleted_at, is_local, signature
+                         FROM posts
+                         WHERE author_peer_id = ? AND deleted_at IS NULL
+                               AND lamport_clock > ? AND visibility = ?
+                         ORDER BY lamport_clock ASC
+                         LIMIT ?",
+                    )?;
+                    let mut rows =
+                        stmt.query(params![author_peer_id, cursor, vis.as_str(), limit])?;
+                    while let Some(row) = rows.next()? {
+                        posts.push(Self::row_to_post(row)?);
+                    }
+                }
+                None => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, post_id, author_peer_id, content_type, content_text,
+                                visibility, lamport_clock, created_at, updated_at,
+                                deleted_at, is_local, signature
+                         FROM posts
+                         WHERE author_peer_id = ? AND deleted_at IS NULL AND lamport_clock > ?
+                         ORDER BY lamport_clock ASC
+                         LIMIT ?",
+                    )?;
+                    let mut rows = stmt.query(params![author_peer_id, cursor, limit])?;
+                    while let Some(row) = rows.next()? {
+                        posts.push(Self::row_to_post(row)?);
+                    }
+                }
+            }
+            Ok(posts)
+        })
+    }
+
     /// Get local posts (for own wall)
     pub fn get_local_posts(
         db: &Database,
@@ -723,6 +772,30 @@ mod tests {
         Database::in_memory().unwrap()
     }
 
+    fn insert_test_post(
+        db: &Database,
+        post_id: &str,
+        author_peer_id: &str,
+        visibility: PostVisibility,
+        lamport_clock: i64,
+        created_at: i64,
+    ) {
+        PostsRepository::insert_post(
+            db,
+            &PostData {
+                post_id: post_id.to_string(),
+                author_peer_id: author_peer_id.to_string(),
+                content_type: "text".to_string(),
+                content_text: Some(post_id.to_string()),
+                visibility,
+                lamport_clock,
+                created_at,
+                signature: vec![1, 2, 3, 4],
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_insert_and_get_post() {
         let db = create_test_db();
@@ -849,5 +922,85 @@ mod tests {
 
         let hashes = PostsRepository::get_media_hashes(&db, "post-media").unwrap();
         assert_eq!(hashes, vec!["abc123"]);
+    }
+
+    #[test]
+    fn test_visibility_counts_and_preview_filter_ignore_deleted_posts() {
+        let db = create_test_db();
+        insert_test_post(&db, "public-1", "peer-a", PostVisibility::Public, 1, 1000);
+        insert_test_post(
+            &db,
+            "contacts-1",
+            "peer-a",
+            PostVisibility::Contacts,
+            2,
+            2000,
+        );
+        insert_test_post(
+            &db,
+            "public-deleted",
+            "peer-a",
+            PostVisibility::Public,
+            3,
+            3000,
+        );
+        PostsRepository::delete_post(&db, "public-deleted", 4000).unwrap();
+
+        let counts = PostsRepository::count_by_visibility(&db, "peer-a").unwrap();
+        assert_eq!(counts.total_posts, 2);
+        assert_eq!(counts.public_posts, 1);
+        assert_eq!(counts.contacts_only_posts, 1);
+
+        let public_posts = PostsRepository::get_by_author_with_visibility(
+            &db,
+            "peer-a",
+            Some(PostVisibility::Public),
+            10,
+            None,
+        )
+        .unwrap();
+        assert_eq!(public_posts.len(), 1);
+        assert_eq!(public_posts[0].post_id, "public-1");
+    }
+
+    #[test]
+    fn test_after_cursor_visibility_filter_returns_public_posts_past_contacts_only() {
+        let db = create_test_db();
+        insert_test_post(
+            &db,
+            "contacts-older",
+            "peer-a",
+            PostVisibility::Contacts,
+            1,
+            1000,
+        );
+        insert_test_post(&db, "public-mid", "peer-a", PostVisibility::Public, 2, 2000);
+        insert_test_post(
+            &db,
+            "contacts-newer",
+            "peer-a",
+            PostVisibility::Contacts,
+            3,
+            3000,
+        );
+        insert_test_post(
+            &db,
+            "public-newest",
+            "peer-a",
+            PostVisibility::Public,
+            4,
+            4000,
+        );
+
+        let public_posts = PostsRepository::get_by_author_after_cursor_with_visibility(
+            &db,
+            "peer-a",
+            0,
+            Some(PostVisibility::Public),
+            10,
+        )
+        .unwrap();
+        let ids: Vec<_> = public_posts.into_iter().map(|post| post.post_id).collect();
+        assert_eq!(ids, vec!["public-mid", "public-newest"]);
     }
 }

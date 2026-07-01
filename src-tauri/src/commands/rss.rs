@@ -58,16 +58,7 @@ pub async fn generate_rss_feed(
         ..Default::default()
     });
 
-    // Get public posts
-    let posts =
-        PostsRepository::get_by_author(&db, &identity.peer_id, config.max_items as i64, None)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-    // Filter to only public posts
-    let public_posts: Vec<_> = posts
-        .into_iter()
-        .filter(|p| p.visibility == PostVisibility::Public)
-        .collect();
+    let public_posts = get_public_rss_posts(&db, &identity.peer_id, config.max_items)?;
 
     // Generate RSS XML
     let rss_xml = generate_rss_xml(&config, &public_posts, &identity.peer_id);
@@ -84,15 +75,7 @@ pub async fn get_peer_rss_feed(
 ) -> Result<String> {
     let max_items = max_items.unwrap_or(50);
 
-    // Get public posts from this peer
-    let posts = PostsRepository::get_by_author(&db, &peer_id, max_items as i64, None)
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-    // Filter to only public posts
-    let public_posts: Vec<_> = posts
-        .into_iter()
-        .filter(|p| p.visibility == PostVisibility::Public)
-        .collect();
+    let public_posts = get_public_rss_posts(&db, &peer_id, max_items)?;
 
     let config = RssFeedConfig {
         base_url: format!("harbor://peer/{}", peer_id),
@@ -104,6 +87,21 @@ pub async fn get_peer_rss_feed(
     let rss_xml = generate_rss_xml(&config, &public_posts, &peer_id);
 
     Ok(rss_xml)
+}
+
+fn get_public_rss_posts(
+    db: &Database,
+    peer_id: &str,
+    max_items: usize,
+) -> Result<Vec<crate::db::repositories::Post>> {
+    PostsRepository::get_by_author_with_visibility(
+        db,
+        peer_id,
+        Some(PostVisibility::Public),
+        max_items as i64,
+        None,
+    )
+    .map_err(|e| AppError::DatabaseString(e.to_string()))
 }
 
 /// Get RSS feed URL for sharing
@@ -208,6 +206,7 @@ fn xml_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::repositories::PostData;
 
     #[test]
     fn test_xml_escape() {
@@ -232,5 +231,44 @@ mod tests {
         assert!(xml.contains("<rss version=\"2.0\""));
         assert!(xml.contains("<title>Test Feed</title>"));
         assert!(xml.contains("<channel>"));
+    }
+
+    #[test]
+    fn test_get_public_rss_posts_filters_contacts_only_in_sql() {
+        let db = Database::in_memory().unwrap();
+        let peer_id = "peer-rss";
+        PostsRepository::insert_post(
+            &db,
+            &PostData {
+                post_id: "contacts-new".to_string(),
+                author_peer_id: peer_id.to_string(),
+                content_type: "text".to_string(),
+                content_text: Some("Contacts only".to_string()),
+                visibility: PostVisibility::Contacts,
+                lamport_clock: 2,
+                created_at: 2000,
+                signature: vec![0u8; 64],
+            },
+        )
+        .unwrap();
+        PostsRepository::insert_post(
+            &db,
+            &PostData {
+                post_id: "public-old".to_string(),
+                author_peer_id: peer_id.to_string(),
+                content_type: "text".to_string(),
+                content_text: Some("Public".to_string()),
+                visibility: PostVisibility::Public,
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: vec![0u8; 64],
+            },
+        )
+        .unwrap();
+
+        let posts = get_public_rss_posts(&db, peer_id, 1).unwrap();
+
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, "public-old");
     }
 }

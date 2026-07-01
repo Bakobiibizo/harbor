@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::protocols::board_sync::WallPostMediaItem;
+use super::protocols::signaling::SignalingEnvelope;
 
 /// Network connection status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +155,13 @@ pub enum NetworkEvent {
     },
     /// Media was fetched from a peer and stored locally
     MediaFetched { peer_id: String, media_hash: String },
+    /// A verified call signaling message was received from a peer
+    CallSignalingReceived {
+        peer_id: String,
+        message: SignalingEnvelope,
+    },
+    /// A call signaling transport error occurred
+    CallSignalingError { peer_id: String, error: String },
 }
 
 /// Commands that can be sent to the network service
@@ -171,6 +179,16 @@ pub enum NetworkCommand {
         peer_id: PeerId,
         protocol: String,
         payload: Vec<u8>,
+    },
+    /// Send a signed call signaling envelope to a peer.
+    ///
+    /// This command owns its response channel so the Tauri command can wait for
+    /// request-response acceptance or deterministic outbound failure instead of
+    /// receiving an immediate fire-and-forget acknowledgement.
+    SendSignaling {
+        peer_id: PeerId,
+        envelope: SignalingEnvelope,
+        response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
     },
     /// Request identity from a peer
     RequestIdentity { peer_id: PeerId },

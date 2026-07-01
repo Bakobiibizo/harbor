@@ -632,20 +632,24 @@ impl PostsService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        if author_peer_id != identity.peer_id {
-            // Check if they've granted us WallRead permission
-            if !self
+        let visibility_filter = if author_peer_id == identity.peer_id
+            || self
                 .permissions_service
                 .we_have_capability(author_peer_id, Capability::WallRead)?
-            {
-                return Err(AppError::PermissionDenied(
-                    "No permission to view this user's wall".to_string(),
-                ));
-            }
-        }
+        {
+            None
+        } else {
+            Some(PostVisibility::Public)
+        };
 
-        PostsRepository::get_by_author(&self.db, author_peer_id, limit, before_timestamp)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))
+        PostsRepository::get_by_author_with_visibility(
+            &self.db,
+            author_peer_id,
+            visibility_filter,
+            limit,
+            before_timestamp,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 
     /// Process an incoming post from the network
@@ -1114,6 +1118,45 @@ mod tests {
 
         let posts = service.get_my_posts(3, None).unwrap();
         assert_eq!(posts.len(), 3);
+    }
+
+    #[test]
+    fn test_get_posts_by_author_without_wall_read_returns_public_only() {
+        let (db, _identity, _contacts, _perms, service, _peer_id) = create_test_env();
+        let remote_peer = "12D3KooWRemoteWall";
+
+        PostsRepository::insert_remote_post(
+            &db,
+            &PostData {
+                post_id: "remote-public".to_string(),
+                author_peer_id: remote_peer.to_string(),
+                content_type: "text".to_string(),
+                content_text: Some("Public".to_string()),
+                visibility: PostVisibility::Public,
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: vec![0u8; 64],
+            },
+        )
+        .unwrap();
+        PostsRepository::insert_remote_post(
+            &db,
+            &PostData {
+                post_id: "remote-contacts".to_string(),
+                author_peer_id: remote_peer.to_string(),
+                content_type: "text".to_string(),
+                content_text: Some("Contacts".to_string()),
+                visibility: PostVisibility::Contacts,
+                lamport_clock: 2,
+                created_at: 2000,
+                signature: vec![0u8; 64],
+            },
+        )
+        .unwrap();
+
+        let posts = service.get_posts_by_author(remote_peer, 10, None).unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, "remote-public");
     }
 
     #[test]

@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { useIdentityStore, useWallStore } from '../stores';
+import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
+import type { PostVisibility } from '../types';
 import { WallIcon, EllipsisIcon } from '../components/icons';
 import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
 import { extractFirstUrl } from '../utils/urlDetection';
@@ -95,6 +96,20 @@ const CONTENT_TYPES: {
   },
 ];
 
+/** Per-post visibility options */
+const VISIBILITY_OPTIONS: { visibility: PostVisibility; label: string; description: string }[] = [
+  {
+    visibility: 'contacts',
+    label: 'Contacts only',
+    description: 'Visible to contacts with wall access',
+  },
+  {
+    visibility: 'public',
+    label: 'Public',
+    description: 'Visible in public previews and RSS',
+  },
+];
+
 /** Filter options including "All" */
 const FILTER_OPTIONS: { type: WallContentType | 'all'; label: string }[] = [
   { type: 'all', label: 'All' },
@@ -130,9 +145,11 @@ export function WallPage() {
     editingPostId,
     setEditingPost,
   } = useWallStore();
+  const defaultVisibility = useSettingsStore((settings) => settings.defaultVisibility);
   const [newPost, setNewPost] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [selectedContentType, setSelectedContentType] = useState<WallContentType>('post');
+  const [selectedVisibility, setSelectedVisibility] = useState<PostVisibility>(defaultVisibility);
   const [filterType, setFilterType] = useState<WallContentType | 'all'>('all');
   const [pendingMedia, setPendingMedia] = useState<
     { type: 'image' | 'video' | 'audio'; url: string; name: string; file: File }[]
@@ -160,6 +177,13 @@ export function WallPage() {
       loadPosts();
     }
   }, [identity, loadPosts]);
+
+  // Keep the composer aligned to the persisted default until the author starts a draft.
+  useEffect(() => {
+    if (!isComposing && !newPost && pendingMedia.length === 0) {
+      setSelectedVisibility(defaultVisibility);
+    }
+  }, [defaultVisibility, isComposing, newPost, pendingMedia.length]);
 
   const formatDate = (date: Date) => {
     const now = new Date();
@@ -200,11 +224,13 @@ export function WallPage() {
         newPost.trim(),
         selectedContentType,
         pendingMedia.length > 0 ? pendingMedia : undefined,
+        selectedVisibility,
       );
       setNewPost('');
       setPendingMedia([]);
       setIsComposing(false);
       setSelectedContentType('post');
+      setSelectedVisibility(defaultVisibility);
       toast.success(`${getContentTypeLabel(selectedContentType)} published!`);
     } catch (err) {
       log.error('Failed to create post', err);
@@ -415,6 +441,55 @@ export function WallPage() {
               })}
             </div>
 
+            {/* Visibility selector */}
+            <div
+              className="px-5 py-3 border-b flex flex-col gap-3 sm:flex-row sm:items-center"
+              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+            >
+              <span
+                className="text-xs font-medium flex-shrink-0"
+                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+              >
+                Visibility:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {VISIBILITY_OPTIONS.map((option) => {
+                  const isSelected = selectedVisibility === option.visibility;
+                  return (
+                    <button
+                      key={option.visibility}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => {
+                        setSelectedVisibility(option.visibility);
+                        setIsComposing(true);
+                      }}
+                      className="px-3 py-2 rounded-lg text-left transition-all duration-200"
+                      style={{
+                        background: isSelected
+                          ? 'hsl(var(--harbor-primary) / 0.15)'
+                          : 'hsl(var(--harbor-surface-1))',
+                        border: isSelected
+                          ? '1px solid hsl(var(--harbor-primary) / 0.45)'
+                          : '1px solid hsl(var(--harbor-border-subtle))',
+                        color: isSelected
+                          ? 'hsl(var(--harbor-primary))'
+                          : 'hsl(var(--harbor-text-secondary))',
+                      }}
+                    >
+                      <span className="block text-xs font-semibold">{option.label}</span>
+                      <span
+                        className="block text-[11px] mt-0.5"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      >
+                        {option.description}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Composer body */}
             <div className="p-5">
               <textarea
@@ -571,6 +646,7 @@ export function WallPage() {
                       setIsComposing(false);
                       setNewPost('');
                       setSelectedContentType('post');
+                      setSelectedVisibility(defaultVisibility);
                       pendingMedia.forEach((m) => URL.revokeObjectURL(m.url));
                       setPendingMedia([]);
                     }}
@@ -773,6 +849,22 @@ export function WallPage() {
                             {getContentTypeLabel(post.contentType)}
                           </span>
                         )}
+                        <span
+                          className="px-2 py-0.5 rounded-full text-xs"
+                          title={`Visibility: ${post.visibility === 'public' ? 'Public' : 'Contacts only'}`}
+                          style={{
+                            background:
+                              post.visibility === 'public'
+                                ? 'hsl(var(--harbor-success) / 0.1)'
+                                : 'hsl(var(--harbor-primary) / 0.1)',
+                            color:
+                              post.visibility === 'public'
+                                ? 'hsl(var(--harbor-success))'
+                                : 'hsl(var(--harbor-primary))',
+                          }}
+                        >
+                          {post.visibility === 'public' ? 'Public' : 'Contacts only'}
+                        </span>
                       </div>
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                         {formatDate(post.timestamp)}

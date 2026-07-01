@@ -1,8 +1,8 @@
 use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::{
-    BoardService, ContactsService, ContentSyncService, IdentityService, MediaStorageService,
-    MessagingService, PermissionsService, PostsService,
+    BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
+    MediaStorageService, MessagingService, PermissionsService, PostsService,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -76,6 +76,7 @@ pub async fn bootstrap_network(network: State<'_, NetworkState>) -> Result<(), A
 pub struct StartNetworkServices {
     pub identity_service: Arc<IdentityService>,
     pub messaging_service: Arc<MessagingService>,
+    pub calling_service: Arc<CallingService>,
     pub contacts_service: Arc<ContactsService>,
     pub permissions_service: Arc<PermissionsService>,
     pub posts_service: Arc<PostsService>,
@@ -96,6 +97,7 @@ pub async fn start_network(
     network: State<'_, NetworkState>,
     identity_service: State<'_, Arc<IdentityService>>,
     messaging_service: State<'_, Arc<MessagingService>>,
+    calling_service: State<'_, Arc<CallingService>>,
     contacts_service: State<'_, Arc<ContactsService>>,
     permissions_service: State<'_, Arc<PermissionsService>>,
     posts_service: State<'_, Arc<PostsService>>,
@@ -106,6 +108,7 @@ pub async fn start_network(
     let services = StartNetworkServices {
         identity_service: (*identity_service).clone(),
         messaging_service: (*messaging_service).clone(),
+        calling_service: (*calling_service).clone(),
         contacts_service: (*contacts_service).clone(),
         permissions_service: (*permissions_service).clone(),
         posts_service: (*posts_service).clone(),
@@ -170,8 +173,9 @@ async fn start_network_with_services(
     let identity_arc: Arc<IdentityService> = services.identity_service.clone();
     let (mut service, handle, mut event_rx) = NetworkService::new(config, identity_arc, keypair)?;
 
-    // Inject services for message processing, contact storage, permissions, content sync, and boards
+    // Inject services for message processing, contact storage, permissions, content sync, boards, and calls
     service.set_messaging_service(services.messaging_service.clone());
+    service.set_calling_service(services.calling_service.clone());
     service.set_contacts_service(services.contacts_service.clone());
     service.set_permissions_service(services.permissions_service.clone());
     service.set_posts_service(services.posts_service.clone());

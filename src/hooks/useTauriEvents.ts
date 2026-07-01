@@ -170,6 +170,19 @@ export function useTauriEvents() {
         case 'wall_post_deleted_on_relay':
           console.log(`[Network] Wall post deleted on relay: ${event.post_id}`);
           break;
+
+        case 'call_signaling_received':
+          console.log(
+            `[Network] Call signaling ${event.message.payload.type} from ${event.peer_id}`,
+          );
+          window.dispatchEvent(
+            new CustomEvent('harbor:calling-signaling', { detail: event }),
+          );
+          break;
+
+        case 'call_signaling_error':
+          console.warn(`[Network] Call signaling error from ${event.peer_id}: ${event.error}`);
+          break;
       }
     }
 

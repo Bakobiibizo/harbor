@@ -87,6 +87,7 @@ export interface AnswerResult {
 export interface IceResult {
   callId: string;
   senderPeerId: string;
+  targetPeerId: string;
   candidate: string;
   sdpMid: string | null;
   sdpMlineIndex: number | null;
@@ -98,7 +99,22 @@ export interface IceResult {
 export interface HangupResult {
   callId: string;
   senderPeerId: string;
+  targetPeerId: string;
   reason: string;
   timestamp: number;
   signature: number[];
+}
+
+export type SignalingPayload =
+  | { type: 'offer'; payload: OfferResult }
+  | { type: 'answer'; payload: AnswerResult }
+  | { type: 'ice'; payload: Omit<IceResult, 'targetPeerId'> }
+  | { type: 'hangup'; payload: Omit<HangupResult, 'targetPeerId'> }
+  | { type: 'decline'; payload: Omit<HangupResult, 'targetPeerId'> }
+  | { type: 'busy'; payload: Omit<HangupResult, 'targetPeerId'> };
+
+export interface SignalingEnvelope {
+  senderPeerId: string;
+  recipientPeerId: string;
+  payload: SignalingPayload;
 }

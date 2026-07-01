@@ -1,6 +1,23 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { FeedItem } from '../types';
 
+export type WallPreviewPerspective = 'guest' | 'contact' | 'owner';
+
+export interface WallVisibilityStats {
+  totalPosts: number;
+  publicPosts: number;
+  contactsOnlyPosts: number;
+  guestVisible: number;
+  contactVisible: number;
+}
+
+export interface RssFeedConfig {
+  base_url: string;
+  title: string;
+  description: string;
+  max_items: number;
+}
+
 /** Feed service - wraps Tauri commands for feed functionality */
 export const feedService = {
   /** Get the user's feed (posts from contacts) */
@@ -34,5 +51,28 @@ export const feedService = {
   /** Fetch a specific contact's wall from the relay server */
   async fetchContactWall(authorPeerId: string): Promise<void> {
     return invoke<void>('fetch_contact_wall_from_relay', { authorPeerId });
+  },
+
+  /** Preview the local wall as a guest, contact, or owner */
+  async getWallPreview(
+    perspective: WallPreviewPerspective,
+    limit?: number,
+    beforeTimestamp?: number,
+  ): Promise<FeedItem[]> {
+    return invoke<FeedItem[]>('get_wall_preview', {
+      perspective,
+      limit,
+      beforeTimestamp,
+    });
+  },
+
+  /** Get persisted visibility counts for local wall preview summaries */
+  async getWallVisibilityStats(): Promise<WallVisibilityStats> {
+    return invoke<WallVisibilityStats>('get_wall_visibility_stats');
+  },
+
+  /** Generate RSS XML for public local wall posts only */
+  async generateRssFeed(config?: RssFeedConfig): Promise<string> {
+    return invoke<string>('generate_rss_feed', { config });
   },
 };

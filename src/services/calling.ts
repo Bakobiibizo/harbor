@@ -16,12 +16,14 @@ export const callingService = {
   /** Send an ICE candidate */
   async sendIceCandidate(
     callId: string,
+    targetPeerId: string,
     candidate: string,
     sdpMid?: string,
     sdpMlineIndex?: number,
   ): Promise<IceResult> {
     return invoke<IceResult>('send_ice_candidate', {
       callId,
+      targetPeerId,
       candidate,
       sdpMid,
       sdpMlineIndex,
@@ -29,8 +31,22 @@ export const callingService = {
   },
 
   /** Hang up a call */
-  async hangupCall(callId: string, reason?: HangupReason): Promise<HangupResult> {
-    return invoke<HangupResult>('hangup_call', { callId, reason });
+  async hangupCall(
+    callId: string,
+    targetPeerId: string,
+    reason?: HangupReason,
+  ): Promise<HangupResult> {
+    return invoke<HangupResult>('hangup_call', { callId, targetPeerId, reason });
+  },
+
+  /** Decline an incoming call */
+  async declineCall(callId: string, callerPeerId: string): Promise<HangupResult> {
+    return invoke<HangupResult>('decline_call', { callId, callerPeerId });
+  },
+
+  /** Send a busy response for an incoming call */
+  async busyCall(callId: string, callerPeerId: string): Promise<HangupResult> {
+    return invoke<HangupResult>('busy_call', { callId, callerPeerId });
   },
 
   /** Process an incoming offer (validate it) */

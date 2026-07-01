@@ -218,16 +218,6 @@ impl ContentSyncService {
             .verify(sign_data.as_bytes(), &sig)
             .map_err(|_| AppError::Crypto("Invalid fetch request signature".to_string()))?;
 
-        // Check if the requester has WallRead permission from us
-        if !self
-            .permissions_service
-            .peer_has_capability(requester_peer_id, Capability::WallRead)?
-        {
-            return Err(AppError::PermissionDenied(
-                "Requester doesn't have WallRead permission".to_string(),
-            ));
-        }
-
         // Get the post
         let post = PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
@@ -240,10 +230,21 @@ impl ContentSyncService {
             ));
         }
 
-        // Check visibility - for Contacts visibility, requester must be in contacts
-        // (which we already verified above via WallRead permission check)
-        // For Public, anyone with WallRead can access
-        // Note: We don't serve posts with other visibility levels
+        if post.deleted_at.is_some() {
+            return Err(AppError::NotFound(format!("Post {} not found", post_id)));
+        }
+
+        // Contacts-only posts require WallRead permission from us. Public posts
+        // can be fetched by signed requests from known contacts.
+        if post.visibility == PostVisibility::Contacts
+            && !self
+                .permissions_service
+                .peer_has_capability(requester_peer_id, Capability::WallRead)?
+        {
+            return Err(AppError::PermissionDenied(
+                "Requester doesn't have WallRead permission".to_string(),
+            ));
+        }
 
         let stored_media = PostsRepository::get_post_media(&self.db, &post.post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
@@ -319,22 +320,23 @@ impl ContentSyncService {
             ));
         }
 
-        // Check if the requester has WallRead permission from us
-        if !self
+        let can_read_contacts_only = self
             .permissions_service
-            .peer_has_capability(requester_peer_id, Capability::WallRead)?
-        {
-            return Err(AppError::PermissionDenied(
-                "Requester doesn't have WallRead permission".to_string(),
-            ));
-        }
+            .peer_has_capability(requester_peer_id, Capability::WallRead)?;
+        let visibility_filter = if can_read_contacts_only {
+            None
+        } else {
+            Some(PostVisibility::Public)
+        };
 
         // Get our posts that the requester hasn't seen yet
         // The cursor maps our peer_id to the highest lamport clock they've seen
         let our_cursor = cursor.get(&identity.peer_id).copied().unwrap_or(0);
 
-        // Get posts newer than the cursor
-        let posts = self.get_posts_after_cursor(&identity.peer_id, our_cursor, limit)?;
+        // Get posts newer than the cursor, exposing contacts-only entries only
+        // to peers with wall_read.
+        let posts =
+            self.get_posts_after_cursor(&identity.peer_id, our_cursor, visibility_filter, limit)?;
 
         // Build post summaries
         let post_summaries: Vec<PostSummary> = posts
@@ -483,6 +485,13 @@ impl ContentSyncService {
             return Err(AppError::Crypto("Invalid post signature".to_string()));
         }
 
+        let vis = PostVisibility::from_str(visibility).ok_or_else(|| {
+            AppError::Validation(format!(
+                "Invalid visibility '{}': must be 'public' or 'contacts'",
+                visibility
+            ))
+        })?;
+
         let existing_post = PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -503,8 +512,6 @@ impl ContentSyncService {
             }
         } else {
             // Insert new post
-            let vis = PostVisibility::from_str(visibility).unwrap_or(PostVisibility::Contacts);
-
             let post_data = PostData {
                 post_id: post_id.to_string(),
                 author_peer_id: author_peer_id.to_string(),
@@ -600,12 +607,14 @@ impl ContentSyncService {
         &self,
         author_peer_id: &str,
         cursor: u64,
+        visibility: Option<PostVisibility>,
         limit: u32,
     ) -> Result<Vec<crate::db::Post>> {
-        let posts = PostsRepository::get_by_author_after_cursor(
+        let posts = PostsRepository::get_by_author_after_cursor_with_visibility(
             &self.db,
             author_peer_id,
             cursor as i64,
+            visibility,
             limit as i64,
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
@@ -761,6 +770,127 @@ mod tests {
 
         let cursor = service.get_sync_cursor("12D3KooWPeer1").unwrap();
         assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn test_manifest_request_without_wall_read_returns_public_posts_only() {
+        let (service, db, _identity_service, our_peer_id) = create_test_env();
+        let (requester_signing, requester_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let requester_peer_id = "12D3KooWRequester".to_string();
+
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: requester_peer_id.clone(),
+                public_key: requester_verifying.to_bytes().to_vec(),
+                x25519_public: vec![0u8; 32],
+                display_name: "Requester".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+
+        PostsRepository::insert_post(
+            &db,
+            &PostData {
+                post_id: "local-public".to_string(),
+                author_peer_id: our_peer_id.clone(),
+                content_type: "text".to_string(),
+                content_text: Some("Public".to_string()),
+                visibility: PostVisibility::Public,
+                lamport_clock: 1,
+                created_at: 1000,
+                signature: vec![0u8; 64],
+            },
+        )
+        .unwrap();
+        PostsRepository::insert_post(
+            &db,
+            &PostData {
+                post_id: "local-contacts".to_string(),
+                author_peer_id: our_peer_id,
+                content_type: "text".to_string(),
+                content_text: Some("Contacts".to_string()),
+                visibility: PostVisibility::Contacts,
+                lamport_clock: 2,
+                created_at: 2000,
+                signature: vec![0u8; 64],
+            },
+        )
+        .unwrap();
+
+        let cursor = HashMap::new();
+        let timestamp = 1234;
+        let signable = SignableContentManifestRequest {
+            requester_peer_id: requester_peer_id.clone(),
+            cursor: cursor.clone(),
+            limit: 10,
+            timestamp,
+        };
+        let signature = crate::services::sign(&requester_signing, &signable).unwrap();
+
+        let response = service
+            .process_manifest_request(&requester_peer_id, &cursor, 10, timestamp, &signature)
+            .unwrap();
+
+        assert_eq!(response.posts.len(), 1);
+        assert_eq!(response.posts[0].post_id, "local-public");
+    }
+
+    #[test]
+    fn test_store_remote_post_rejects_invalid_visibility() {
+        let (service, db, _identity_service, _peer_id) = create_test_env();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: peer_peer_id.clone(),
+                public_key: peer_verifying.to_bytes().to_vec(),
+                x25519_public: vec![0u8; 32],
+                display_name: "Remote Peer".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+
+        let signable = crate::services::SignablePost {
+            post_id: "remote-invalid-visibility".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Invalid visibility".to_string()),
+            media_hashes: vec![],
+            visibility: "friends".to_string(),
+            lamport_clock: 1,
+            created_at: 1000,
+        };
+        let signature = crate::services::sign(&peer_signing, &signable).unwrap();
+
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-invalid-visibility",
+            author_peer_id: &peer_peer_id,
+            content_type: "text",
+            content_text: Some("Invalid visibility"),
+            visibility: "friends",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &signature,
+            media_hashes: &[],
+            media_items: &[],
+        });
+
+        assert!(
+            matches!(result, Err(AppError::Validation(message)) if message.contains("Invalid visibility"))
+        );
+        assert!(
+            PostsRepository::get_by_post_id(&db, "remote-invalid-visibility")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

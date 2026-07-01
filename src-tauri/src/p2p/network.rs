@@ -29,6 +29,7 @@ use super::protocols::board_sync::{
     BoardSyncRequest as WireBoardSyncRequest, BoardSyncResponse as WireBoardSyncResponse,
 };
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
+use super::protocols::signaling::{SignalingEnvelope, SignalingResponse};
 use super::swarm::build_swarm;
 use super::types::*;
 use crate::db::Capability;
@@ -37,8 +38,8 @@ use crate::services::board_service::StorableBoardPost;
 use crate::services::content_sync_service::RemotePostParams;
 use crate::services::messaging_service::IncomingMessageParams;
 use crate::services::{
-    BoardService, ContactsService, ContentSyncService, IdentityService, MediaStorageService,
-    MessagingService, PermissionsService, PostsService, SignableGetWallPosts,
+    BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
+    MediaStorageService, MessagingService, PermissionsService, PostsService, SignableGetWallPosts,
     SignableWallPostDelete, SignableWallPostSubmit,
 };
 use std::sync::Arc;
@@ -155,6 +156,31 @@ impl NetworkHandle {
             Ok(NetworkResponse::Ok) => Ok(()),
             Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
             _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Send a signed call signaling envelope to a peer and wait for the
+    /// request-response acknowledgement.
+    pub async fn send_signaling(&self, peer_id: PeerId, envelope: SignalingEnvelope) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::SendSignaling {
+                    peer_id,
+                    envelope,
+                    response_tx: tx,
+                },
+                None,
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected signaling response".into())),
         }
     }
 
@@ -575,6 +601,7 @@ pub struct NetworkService {
     config: NetworkConfig,
     identity_service: Arc<IdentityService>,
     messaging_service: Option<Arc<MessagingService>>,
+    calling_service: Option<Arc<CallingService>>,
     contacts_service: Option<Arc<ContactsService>>,
     permissions_service: Option<Arc<PermissionsService>>,
     posts_service: Option<Arc<PostsService>>,
@@ -612,6 +639,9 @@ pub struct NetworkService {
     /// arrives at the relay before RegisterPeer has been processed (which would fail
     /// signature verification since the peer's public key hasn't been stored yet).
     pending_board_registrations: std::collections::HashSet<PeerId>,
+    /// Pending signaling requests waiting for a request-response outcome.
+    pending_signaling_requests:
+        HashMap<request_response::OutboundRequestId, oneshot::Sender<NetworkResponse>>,
 }
 
 impl NetworkService {
@@ -633,6 +663,7 @@ impl NetworkService {
             config,
             identity_service,
             messaging_service: None,
+            calling_service: None,
             contacts_service: None,
             permissions_service: None,
             posts_service: None,
@@ -654,6 +685,7 @@ impl NetworkService {
             pending_community_probes: HashMap::new(),
             community_relays: HashMap::new(),
             pending_board_registrations: std::collections::HashSet::new(),
+            pending_signaling_requests: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -662,6 +694,11 @@ impl NetworkService {
     /// Set the messaging service for processing incoming messages
     pub fn set_messaging_service(&mut self, service: Arc<MessagingService>) {
         self.messaging_service = Some(service);
+    }
+
+    /// Set the calling service for validating incoming signaling.
+    pub fn set_calling_service(&mut self, service: Arc<CallingService>) {
+        self.calling_service = Some(service);
     }
 
     /// Set the contacts service for storing contacts from identity exchange
@@ -1224,6 +1261,10 @@ impl NetworkService {
                 self.handle_media_sync_event(event).await;
             }
 
+            ChatBehaviourEvent::Signaling(event) => {
+                self.handle_signaling_event(event).await;
+            }
+
             ChatBehaviourEvent::RelayClient(event) => {
                 self.handle_relay_client_event(event).await;
             }
@@ -1510,6 +1551,139 @@ impl NetworkService {
                 warn!("Media fetch inbound failure from peer {}: {}", peer, error);
             }
             _ => {}
+        }
+    }
+
+    /// Handle voice-call signaling protocol events.
+    async fn handle_signaling_event(
+        &mut self,
+        event: request_response::Event<SignalingEnvelope, SignalingResponse>,
+    ) {
+        match event {
+            request_response::Event::Message { peer, message, .. } => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    let response = self.handle_signaling_request(peer, request).await;
+                    if let Err(error) = self
+                        .swarm
+                        .behaviour_mut()
+                        .signaling
+                        .send_response(channel, response)
+                    {
+                        warn!("Failed to send signaling response to {}: {:?}", peer, error);
+                    }
+                }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
+                    self.handle_signaling_response(peer, request_id, response)
+                        .await;
+                }
+            },
+            request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            } => {
+                let error_message = format!("SIGNALING_NETWORK_FAILURE: {}", error);
+                warn!("Signaling outbound failure to {}: {}", peer, error);
+                if let Some(response_tx) = self.pending_signaling_requests.remove(&request_id) {
+                    let _ = response_tx.send(NetworkResponse::Error(error_message.clone()));
+                }
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::CallSignalingError {
+                        peer_id: peer.to_string(),
+                        error: error_message,
+                    })
+                    .await;
+            }
+            request_response::Event::InboundFailure { peer, error, .. } => {
+                let error_message = format!("SIGNALING_INBOUND_FAILURE: {}", error);
+                warn!("Signaling inbound failure from {}: {}", peer, error);
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::CallSignalingError {
+                        peer_id: peer.to_string(),
+                        error: error_message,
+                    })
+                    .await;
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_signaling_request(
+        &mut self,
+        peer: PeerId,
+        request: SignalingEnvelope,
+    ) -> SignalingResponse {
+        let call_id = Some(request.call_id().to_string());
+
+        if request.sender_peer_id != peer.to_string() {
+            let error = format!(
+                "sender peer mismatch: envelope sender {} arrived from {}",
+                request.sender_peer_id, peer
+            );
+            warn!("Rejected signaling request: {}", error);
+            return SignalingResponse::rejected(call_id, error);
+        }
+
+        let Some(ref calling_service) = self.calling_service else {
+            let error = "Calling service not available".to_string();
+            warn!("Rejected signaling request from {}: {}", peer, error);
+            return SignalingResponse::rejected(call_id, error);
+        };
+
+        match calling_service.process_incoming_signaling(&request) {
+            Ok(()) => {
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::CallSignalingReceived {
+                        peer_id: peer.to_string(),
+                        message: request.clone(),
+                    })
+                    .await;
+                SignalingResponse::accepted(request.call_id().to_string())
+            }
+            Err(error) => {
+                warn!(
+                    "Rejected signaling request {} from {}: {}",
+                    request.call_id(),
+                    peer,
+                    error
+                );
+                SignalingResponse::rejected(call_id, error.to_string())
+            }
+        }
+    }
+
+    async fn handle_signaling_response(
+        &mut self,
+        peer: PeerId,
+        request_id: request_response::OutboundRequestId,
+        response: SignalingResponse,
+    ) {
+        if let Some(response_tx) = self.pending_signaling_requests.remove(&request_id) {
+            if response.accepted {
+                let _ = response_tx.send(NetworkResponse::Ok);
+            } else {
+                let error = response
+                    .error
+                    .unwrap_or_else(|| "remote peer rejected signaling request".to_string());
+                let _ = response_tx.send(NetworkResponse::Error(format!(
+                    "SIGNALING_REJECTED: {}",
+                    error
+                )));
+            }
+        } else {
+            debug!(
+                "Received signaling response from {} without pending request",
+                peer
+            );
         }
     }
 
@@ -2704,6 +2878,28 @@ impl NetworkService {
                     .behaviour_mut()
                     .messaging
                     .send_request(&peer_id, request);
+                NetworkResponse::Ok
+            }
+
+            NetworkCommand::SendSignaling {
+                peer_id,
+                envelope,
+                response_tx,
+            } => {
+                if !self.connected_peers.contains_key(&peer_id) {
+                    let _ = response_tx.send(NetworkResponse::Error(
+                        "SIGNALING_PEER_OFFLINE: peer is not connected".to_string(),
+                    ));
+                    return NetworkResponse::Ok;
+                }
+
+                let request_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .signaling
+                    .send_request(&peer_id, envelope);
+                self.pending_signaling_requests
+                    .insert(request_id, response_tx);
                 NetworkResponse::Ok
             }
 

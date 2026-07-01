@@ -3,7 +3,8 @@ import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
 import { feedService } from '../services/feed';
 import { createLogger } from '../utils/logger';
-import type { CreatePostMediaInput, Post, PostMedia } from '../types';
+import { useSettingsStore } from './settings';
+import type { CreatePostMediaInput, Post, PostMedia, PostVisibility } from '../types';
 
 const log = createLogger('WallStore');
 
@@ -33,7 +34,7 @@ export interface WallPost {
   sharedFrom?: SharedFrom;
   // Backend data
   authorPeerId: string;
-  visibility: string;
+  visibility: PostVisibility;
   lamportClock: number;
 }
 
@@ -49,6 +50,7 @@ interface WallState {
     content: string,
     contentType?: WallContentType,
     media?: { type: 'image' | 'video' | 'audio'; url: string; file?: File; name?: string }[],
+    visibility?: PostVisibility,
   ) => Promise<void>;
   shareToWall: (comment: string, sharedFrom: SharedFrom) => Promise<void>;
   updatePost: (postId: string, content: string) => Promise<void>;
@@ -165,10 +167,12 @@ export const useWallStore = create<WallState>((set) => ({
     content: string,
     contentType: WallContentType = 'post',
     media?: { type: 'image' | 'video' | 'audio'; url: string; file?: File; name?: string }[],
+    visibility?: PostVisibility,
   ) => {
     try {
       // Map WallContentType to backend content_type string
       const backendContentType = contentType === 'post' ? 'text' : contentType;
+      const selectedVisibility = visibility ?? useSettingsStore.getState().defaultVisibility;
 
       const signedMediaInputs: CreatePostMediaInput[] = [];
       if (media && media.length > 0) {
@@ -207,7 +211,7 @@ export const useWallStore = create<WallState>((set) => ({
       const result = await postsService.createPost(
         backendContentType,
         content,
-        'contacts',
+        selectedVisibility,
         signedMediaInputs.length > 0 ? signedMediaInputs : undefined,
       );
 
@@ -228,7 +232,7 @@ export const useWallStore = create<WallState>((set) => ({
         liked: false,
         media: previewMedia && previewMedia.length > 0 ? previewMedia : undefined,
         authorPeerId: '', // Will be set properly on reload
-        visibility: 'contacts',
+        visibility: selectedVisibility,
         lamportClock: 0,
       };
 
@@ -254,7 +258,8 @@ export const useWallStore = create<WallState>((set) => ({
         ? `${comment.trim()}\n\n[Shared from ${sharedFrom.authorName}]`
         : `[Shared from ${sharedFrom.authorName}]`;
 
-      const result = await postsService.createPost('shared', contentForBackend, 'contacts');
+      const selectedVisibility = useSettingsStore.getState().defaultVisibility;
+      const result = await postsService.createPost('shared', contentForBackend, selectedVisibility);
 
       const newPost: WallPost = {
         postId: result.postId,
@@ -266,7 +271,7 @@ export const useWallStore = create<WallState>((set) => ({
         liked: false,
         sharedFrom,
         authorPeerId: '',
-        visibility: 'contacts',
+        visibility: selectedVisibility,
         lamportClock: 0,
       };
 

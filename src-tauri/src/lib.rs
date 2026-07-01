@@ -353,6 +353,8 @@ pub fn run() {
             commands::answer_call,
             commands::send_ice_candidate,
             commands::hangup_call,
+            commands::decline_call,
+            commands::busy_call,
             commands::process_offer,
             commands::process_answer,
             commands::process_ice_candidate,

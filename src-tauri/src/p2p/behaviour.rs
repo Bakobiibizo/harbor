@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use super::protocols::board_sync::{BoardSyncRequest, BoardSyncResponse, WallPostMediaItem};
 use super::protocols::media_sync::{MediaFetchRequest, MediaFetchResponse, MEDIA_SYNC_PROTOCOL};
+use super::protocols::signaling::{SignalingEnvelope, SignalingResponse};
 use super::protocols::{
     BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL,
+    SIGNALING_PROTOCOL,
 };
 
 // Duration is used in ping configuration
@@ -44,6 +46,8 @@ pub struct ChatBehaviour {
     pub board_sync: request_response::cbor::Behaviour<BoardSyncRequest, BoardSyncResponse>,
     /// Request-response for media sync (P2P media transfer)
     pub media_sync: request_response::cbor::Behaviour<MediaFetchRequest, MediaFetchResponse>,
+    /// Request-response for voice-call signaling
+    pub signaling: request_response::cbor::Behaviour<SignalingEnvelope, SignalingResponse>,
 }
 
 /// Identity exchange request (simplified for request-response)
@@ -226,6 +230,15 @@ impl ChatBehaviour {
             request_response::Config::default().with_request_timeout(Duration::from_secs(60)),
         );
 
+        // Voice-call signaling protocol
+        let signaling = request_response::cbor::Behaviour::new(
+            [(
+                StreamProtocol::new(SIGNALING_PROTOCOL),
+                ProtocolSupport::Full,
+            )],
+            request_response::Config::default().with_request_timeout(Duration::from_secs(15)),
+        );
+
         Self {
             ping,
             identify,
@@ -239,6 +252,7 @@ impl ChatBehaviour {
             content_sync,
             board_sync,
             media_sync,
+            signaling,
         }
     }
 }

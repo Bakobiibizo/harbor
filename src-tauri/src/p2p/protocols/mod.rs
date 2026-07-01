@@ -3,12 +3,14 @@ pub mod content_sync;
 pub mod identity_exchange;
 pub mod media_sync;
 pub mod messaging;
+pub mod signaling;
 
 pub use board_sync::*;
 pub use content_sync::*;
 pub use identity_exchange::*;
 pub use media_sync::*;
 pub use messaging::*;
+pub use signaling::*;
 
 /// Protocol version string for identity exchange
 pub const IDENTITY_PROTOCOL: &str = "/harbor/identity/1.0.0";

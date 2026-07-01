@@ -1,15 +1,22 @@
 //! Voice calling service using WebRTC signaling
 
 use ed25519_dalek::VerifyingKey;
-use std::sync::Arc;
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::db::Capability;
 use crate::error::{AppError, Result};
+use crate::p2p::protocols::signaling::{SignalingEnvelope, SignalingPayload};
 use crate::services::{
-    verify, ContactsService, IdentityService, PermissionsService, SignableSignalingAnswer,
-    SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
+    verify, ContactsService, CryptoService, IdentityService, PermissionsService,
+    SignableSignalingAnswer, SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
 };
+
+const MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS: i64 = 5 * 60;
+const MAX_SDP_BYTES: usize = 256 * 1024;
+const MAX_ICE_CANDIDATE_BYTES: usize = 16 * 1024;
 
 /// Call state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +59,7 @@ pub struct CallingService {
     identity_service: Arc<IdentityService>,
     contacts_service: Arc<ContactsService>,
     permissions_service: Arc<PermissionsService>,
+    seen_signaling: Mutex<HashSet<String>>,
 }
 
 /// An outgoing signaling offer
@@ -81,6 +89,7 @@ pub struct OutgoingAnswer {
 pub struct OutgoingIce {
     pub call_id: String,
     pub sender_peer_id: String,
+    pub target_peer_id: String,
     pub candidate: String,
     pub sdp_mid: Option<String>,
     pub sdp_mline_index: Option<u32>,
@@ -93,6 +102,7 @@ pub struct OutgoingIce {
 pub struct OutgoingHangup {
     pub call_id: String,
     pub sender_peer_id: String,
+    pub target_peer_id: String,
     pub reason: String,
     pub timestamp: i64,
     pub signature: Vec<u8>,
@@ -120,7 +130,131 @@ impl CallingService {
             identity_service,
             contacts_service,
             permissions_service,
+            seen_signaling: Mutex::new(HashSet::new()),
         }
+    }
+
+    fn validate_sdp(sdp: &str) -> Result<()> {
+        let trimmed = sdp.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Validation("SDP must not be empty".to_string()));
+        }
+        if sdp.len() > MAX_SDP_BYTES {
+            return Err(AppError::Validation("SDP is too large".to_string()));
+        }
+        if !trimmed.lines().any(|line| line.trim() == "v=0") {
+            return Err(AppError::Validation(
+                "Invalid SDP: missing v=0 line".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_ice_candidate(candidate: &str) -> Result<()> {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Validation(
+                "ICE candidate must not be empty".to_string(),
+            ));
+        }
+        if candidate.len() > MAX_ICE_CANDIDATE_BYTES {
+            return Err(AppError::Validation(
+                "ICE candidate is too large".to_string(),
+            ));
+        }
+        if !trimmed.starts_with("candidate:") {
+            return Err(AppError::Validation(
+                "Invalid ICE candidate: missing candidate: prefix".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_hangup_reason(reason: &str) -> Result<()> {
+        match reason {
+            "normal" | "busy" | "declined" | "error" => Ok(()),
+            _ => Err(AppError::Validation(format!(
+                "Invalid hangup reason: {}",
+                reason
+            ))),
+        }
+    }
+
+    fn validate_recent_timestamp(timestamp: i64) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        if timestamp < now - MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS
+            || timestamp > now + MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS
+        {
+            return Err(AppError::Validation(
+                "Signaling timestamp is outside the allowed freshness window".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_contact_identity(&self, peer_id: &str) -> Result<()> {
+        if !self.contacts_service.is_contact(peer_id)? {
+            return Err(AppError::NotFound("Sender not in contacts".to_string()));
+        }
+
+        let public_key = self
+            .contacts_service
+            .get_public_key(peer_id)?
+            .ok_or_else(|| AppError::NotFound("Sender public key not found".to_string()))?;
+        let public_key_bytes: [u8; 32] = public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?;
+        let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
+            .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+        let derived_peer_id = CryptoService::derive_peer_id_from_verifying_key(&verifying_key)?;
+        if derived_peer_id != peer_id {
+            return Err(AppError::Crypto(format!(
+                "Contact public key derives peer ID {} but signaling sender claims {}",
+                derived_peer_id, peer_id
+            )));
+        }
+        Ok(())
+    }
+
+    fn has_any_call_grant_with(&self, peer_id: &str) -> Result<bool> {
+        Ok(self
+            .permissions_service
+            .peer_has_capability(peer_id, Capability::Call)?
+            || self
+                .permissions_service
+                .we_have_capability(peer_id, Capability::Call)?)
+    }
+
+    fn require_any_call_grant_with(&self, peer_id: &str) -> Result<()> {
+        if !self.has_any_call_grant_with(peer_id)? {
+            return Err(AppError::PermissionDenied(
+                "No call permission grant with this peer".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn fingerprint_signaling(envelope: &SignalingEnvelope) -> Result<String> {
+        let mut bytes = Vec::new();
+        ciborium::into_writer(envelope, &mut bytes)
+            .map_err(|e| AppError::Serialization(format!("CBOR encoding failed: {}", e)))?;
+        let digest = Sha256::digest(&bytes);
+        Ok(hex::encode(digest))
+    }
+
+    fn record_signaling_once(&self, envelope: &SignalingEnvelope) -> Result<()> {
+        let fingerprint = Self::fingerprint_signaling(envelope)?;
+        let mut seen = self
+            .seen_signaling
+            .lock()
+            .map_err(|_| AppError::Internal("Signaling replay cache poisoned".to_string()))?;
+        if !seen.insert(fingerprint) {
+            return Err(AppError::AlreadyExists(
+                "Duplicate signaling message".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Start a call to a peer
@@ -139,6 +273,7 @@ impl CallingService {
                 "No call permission with this peer".to_string(),
             ));
         }
+        Self::validate_sdp(sdp)?;
 
         let call_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();
@@ -234,6 +369,16 @@ impl CallingService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
+        if !self
+            .permissions_service
+            .we_have_capability(caller_peer_id, Capability::Call)?
+        {
+            return Err(AppError::PermissionDenied(
+                "No call permission from caller".to_string(),
+            ));
+        }
+        Self::validate_sdp(sdp)?;
+
         let timestamp = chrono::Utc::now().timestamp();
 
         let signable = SignableSignalingAnswer {
@@ -302,6 +447,15 @@ impl CallingService {
             return Err(AppError::Crypto("Invalid answer signature".to_string()));
         }
 
+        if !self
+            .permissions_service
+            .peer_has_capability(callee_peer_id, Capability::Call)?
+        {
+            return Err(AppError::PermissionDenied(
+                "Callee doesn't have call permission".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -309,6 +463,7 @@ impl CallingService {
     pub fn create_ice_candidate(
         &self,
         call_id: &str,
+        target_peer_id: &str,
         candidate: &str,
         sdp_mid: Option<&str>,
         sdp_mline_index: Option<u32>,
@@ -317,6 +472,9 @@ impl CallingService {
             .identity_service
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        self.require_any_call_grant_with(target_peer_id)?;
+        Self::validate_ice_candidate(candidate)?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -334,6 +492,7 @@ impl CallingService {
         Ok(OutgoingIce {
             call_id: call_id.to_string(),
             sender_peer_id: identity.peer_id,
+            target_peer_id: target_peer_id.to_string(),
             candidate: candidate.to_string(),
             sdp_mid: sdp_mid.map(String::from),
             sdp_mline_index,
@@ -351,6 +510,7 @@ impl CallingService {
         let sdp_mline_index = params.sdp_mline_index;
         let timestamp = params.timestamp;
         let signature = params.signature;
+        Self::validate_ice_candidate(candidate)?;
         // Verify signature
         let sender_public_key = self
             .contacts_service
@@ -384,11 +544,19 @@ impl CallingService {
     }
 
     /// Hang up a call
-    pub fn create_hangup(&self, call_id: &str, reason: &str) -> Result<OutgoingHangup> {
+    pub fn create_hangup(
+        &self,
+        call_id: &str,
+        target_peer_id: &str,
+        reason: &str,
+    ) -> Result<OutgoingHangup> {
         let identity = self
             .identity_service
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        self.require_any_call_grant_with(target_peer_id)?;
+        Self::validate_hangup_reason(reason)?;
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -404,6 +572,7 @@ impl CallingService {
         Ok(OutgoingHangup {
             call_id: call_id.to_string(),
             sender_peer_id: identity.peer_id,
+            target_peer_id: target_peer_id.to_string(),
             reason: reason.to_string(),
             timestamp,
             signature,
@@ -440,11 +609,164 @@ impl CallingService {
         )
         .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
+        Self::validate_hangup_reason(reason)?;
+
         if !verify(&verifying_key, &signable, signature)? {
             return Err(AppError::Crypto("Invalid hangup signature".to_string()));
         }
 
         Ok(())
+    }
+
+    /// Decline an incoming call using the signed hangup payload with a
+    /// `declined` reason.
+    pub fn create_decline(&self, call_id: &str, caller_peer_id: &str) -> Result<OutgoingHangup> {
+        self.create_hangup(call_id, caller_peer_id, "declined")
+    }
+
+    /// Send a busy response using the signed hangup payload with a `busy` reason.
+    pub fn create_busy(&self, call_id: &str, caller_peer_id: &str) -> Result<OutgoingHangup> {
+        self.create_hangup(call_id, caller_peer_id, "busy")
+    }
+
+    /// Validate a complete incoming signaling envelope from the libp2p transport.
+    ///
+    /// This is the production ingress path used before emitting frontend call
+    /// events.  It verifies the contact key binding, target peer, timestamp
+    /// freshness, signed payload, call grants, and replay cache.
+    pub fn process_incoming_signaling(&self, envelope: &SignalingEnvelope) -> Result<()> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        if envelope.recipient_peer_id != identity.peer_id {
+            return Err(AppError::Validation(
+                "Signaling message not for us".to_string(),
+            ));
+        }
+
+        Self::validate_recent_timestamp(envelope.timestamp())?;
+        self.validate_contact_identity(&envelope.sender_peer_id)?;
+
+        match &envelope.payload {
+            SignalingPayload::Offer(offer) => {
+                if offer.caller_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Offer caller does not match signaling sender".to_string(),
+                    ));
+                }
+                if offer.callee_peer_id != envelope.recipient_peer_id {
+                    return Err(AppError::Validation(
+                        "Offer callee does not match signaling recipient".to_string(),
+                    ));
+                }
+                Self::validate_sdp(&offer.sdp)?;
+                self.process_incoming_offer(
+                    &offer.call_id,
+                    &offer.caller_peer_id,
+                    &offer.callee_peer_id,
+                    &offer.sdp,
+                    offer.timestamp,
+                    &offer.signature,
+                )?;
+            }
+            SignalingPayload::Answer(answer) => {
+                if answer.callee_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Answer callee does not match signaling sender".to_string(),
+                    ));
+                }
+                if answer.caller_peer_id != envelope.recipient_peer_id {
+                    return Err(AppError::Validation(
+                        "Answer caller does not match signaling recipient".to_string(),
+                    ));
+                }
+                Self::validate_sdp(&answer.sdp)?;
+                self.process_incoming_answer(
+                    &answer.call_id,
+                    &answer.caller_peer_id,
+                    &answer.callee_peer_id,
+                    &answer.sdp,
+                    answer.timestamp,
+                    &answer.signature,
+                )?;
+            }
+            SignalingPayload::Ice(ice) => {
+                if ice.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "ICE sender does not match signaling sender".to_string(),
+                    ));
+                }
+                self.require_any_call_grant_with(&ice.sender_peer_id)?;
+                self.process_incoming_ice(&IncomingIceParams {
+                    call_id: &ice.call_id,
+                    sender_peer_id: &ice.sender_peer_id,
+                    candidate: &ice.candidate,
+                    sdp_mid: ice.sdp_mid.as_deref(),
+                    sdp_mline_index: ice.sdp_mline_index,
+                    timestamp: ice.timestamp,
+                    signature: &ice.signature,
+                })?;
+            }
+            SignalingPayload::Hangup(hangup) => {
+                if hangup.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Hangup sender does not match signaling sender".to_string(),
+                    ));
+                }
+                self.require_any_call_grant_with(&hangup.sender_peer_id)?;
+                self.process_incoming_hangup(
+                    &hangup.call_id,
+                    &hangup.sender_peer_id,
+                    &hangup.reason,
+                    hangup.timestamp,
+                    &hangup.signature,
+                )?;
+            }
+            SignalingPayload::Decline(decline) => {
+                if decline.reason != "declined" {
+                    return Err(AppError::Validation(
+                        "Decline signaling must use declined reason".to_string(),
+                    ));
+                }
+                if decline.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Decline sender does not match signaling sender".to_string(),
+                    ));
+                }
+                self.require_any_call_grant_with(&decline.sender_peer_id)?;
+                self.process_incoming_hangup(
+                    &decline.call_id,
+                    &decline.sender_peer_id,
+                    &decline.reason,
+                    decline.timestamp,
+                    &decline.signature,
+                )?;
+            }
+            SignalingPayload::Busy(busy) => {
+                if busy.reason != "busy" {
+                    return Err(AppError::Validation(
+                        "Busy signaling must use busy reason".to_string(),
+                    ));
+                }
+                if busy.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Busy sender does not match signaling sender".to_string(),
+                    ));
+                }
+                self.require_any_call_grant_with(&busy.sender_peer_id)?;
+                self.process_incoming_hangup(
+                    &busy.call_id,
+                    &busy.sender_peer_id,
+                    &busy.reason,
+                    busy.timestamp,
+                    &busy.signature,
+                )?;
+            }
+        }
+
+        self.record_signaling_once(envelope)
     }
 }
 
@@ -455,8 +777,12 @@ mod tests {
         Capability, ContactData, ContactsRepository, GrantData, PermissionsRepository,
     };
     use crate::models::CreateIdentityRequest;
+    use crate::p2p::protocols::signaling::{
+        SignalingEnvelope, SignalingHangup, SignalingIce, SignalingOffer, SignalingPayload,
+    };
     use crate::services::{ContactsService, CryptoService, IdentityService, PermissionsService};
     use crate::Database;
+    use base64::Engine;
     use std::sync::Arc;
 
     fn create_test_env() -> (
@@ -520,6 +846,41 @@ mod tests {
             .unwrap();
     }
 
+    fn add_peer_contact(db: &Database, peer_id: &str, public_key: &[u8]) {
+        let contact_data = ContactData {
+            peer_id: peer_id.to_string(),
+            public_key: public_key.to_vec(),
+            x25519_public: vec![0u8; 32],
+            display_name: "Peer".to_string(),
+            avatar_hash: None,
+            bio: None,
+        };
+        ContactsRepository::add_contact(db, &contact_data).unwrap();
+    }
+
+    fn add_received_call_permission(db: &Database, issuer_peer_id: &str, subject_peer_id: &str) {
+        let grant_data = GrantData {
+            grant_id: format!("grant-call-{}-{}", issuer_peer_id, subject_peer_id),
+            issuer_peer_id: issuer_peer_id.to_string(),
+            subject_peer_id: subject_peer_id.to_string(),
+            capability: "call".to_string(),
+            scope_json: None,
+            lamport_clock: 1,
+            issued_at: chrono::Utc::now().timestamp(),
+            expires_at: None,
+            payload_cbor: vec![0],
+            signature: vec![0],
+        };
+        PermissionsRepository::upsert_grant(db, &grant_data).unwrap();
+    }
+
+    fn identity_public_key(identity: &IdentityService) -> Vec<u8> {
+        let info = identity.get_identity_info().unwrap().unwrap();
+        base64::engine::general_purpose::STANDARD
+            .decode(info.public_key)
+            .unwrap()
+    }
+
     #[test]
     fn test_create_offer_success() {
         let (service, db, _identity, permissions, peer_id) = create_test_env();
@@ -574,10 +935,14 @@ mod tests {
 
     #[test]
     fn test_create_answer_success() {
-        let (service, _db, _identity, _permissions, peer_id) = create_test_env();
+        let (service, db, _identity, _permissions, peer_id) = create_test_env();
+        let (_, caller_verifying) = CryptoService::generate_ed25519_keypair();
+        let caller = "12D3KooWCaller";
+        add_peer_contact(&db, caller, &caller_verifying.to_bytes());
+        add_received_call_permission(&db, caller, &peer_id);
 
         let answer = service
-            .create_answer("call-123", "12D3KooWCaller", "v=0\r\nsdp-answer")
+            .create_answer("call-123", caller, "v=0\r\nsdp-answer")
             .unwrap();
 
         assert_eq!(answer.call_id, "call-123");
@@ -589,10 +954,19 @@ mod tests {
 
     #[test]
     fn test_create_ice_candidate() {
-        let (service, _db, _identity, _permissions, peer_id) = create_test_env();
+        let (service, db, _identity, permissions, peer_id) = create_test_env();
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let target = "12D3KooWPeer";
+        add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
 
         let ice = service
-            .create_ice_candidate("call-123", "candidate:0 1 UDP", Some("audio"), Some(0))
+            .create_ice_candidate(
+                "call-123",
+                target,
+                "candidate:0 1 UDP",
+                Some("audio"),
+                Some(0),
+            )
             .unwrap();
 
         assert_eq!(ice.call_id, "call-123");
@@ -605,10 +979,13 @@ mod tests {
 
     #[test]
     fn test_create_ice_candidate_no_sdp_fields() {
-        let (service, _db, _identity, _permissions, _peer_id) = create_test_env();
+        let (service, db, _identity, permissions, _peer_id) = create_test_env();
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let target = "12D3KooWPeer";
+        add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
 
         let ice = service
-            .create_ice_candidate("call-123", "candidate:0 1 UDP", None, None)
+            .create_ice_candidate("call-123", target, "candidate:0 1 UDP", None, None)
             .unwrap();
 
         assert_eq!(ice.sdp_mid, None);
@@ -617,9 +994,12 @@ mod tests {
 
     #[test]
     fn test_create_hangup() {
-        let (service, _db, _identity, _permissions, peer_id) = create_test_env();
+        let (service, db, _identity, permissions, peer_id) = create_test_env();
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let target = "12D3KooWPeer";
+        add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
 
-        let hangup = service.create_hangup("call-123", "normal").unwrap();
+        let hangup = service.create_hangup("call-123", target, "normal").unwrap();
 
         assert_eq!(hangup.call_id, "call-123");
         assert_eq!(hangup.sender_peer_id, peer_id);
@@ -629,10 +1009,13 @@ mod tests {
 
     #[test]
     fn test_create_hangup_various_reasons() {
-        let (service, _db, _identity, _permissions, _peer_id) = create_test_env();
+        let (service, db, _identity, permissions, _peer_id) = create_test_env();
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let target = "12D3KooWPeer";
+        add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
 
         for reason in &["normal", "busy", "declined", "error"] {
-            let hangup = service.create_hangup("call-123", reason).unwrap();
+            let hangup = service.create_hangup("call-123", target, reason).unwrap();
             assert_eq!(hangup.reason, *reason);
         }
     }
@@ -851,6 +1234,223 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn signed_offer_envelope(
+        caller_identity: &IdentityService,
+        caller_peer_id: &str,
+        callee_peer_id: &str,
+        timestamp: i64,
+    ) -> SignalingEnvelope {
+        let signable = SignableSignalingOffer {
+            call_id: "call-signal-1".to_string(),
+            caller_peer_id: caller_peer_id.to_string(),
+            callee_peer_id: callee_peer_id.to_string(),
+            sdp: "v=0\r\ns=Harbor\r\n".to_string(),
+            timestamp,
+        };
+        let signature = caller_identity.sign(&signable).unwrap();
+        SignalingEnvelope {
+            sender_peer_id: caller_peer_id.to_string(),
+            recipient_peer_id: callee_peer_id.to_string(),
+            payload: SignalingPayload::Offer(SignalingOffer {
+                call_id: signable.call_id,
+                caller_peer_id: signable.caller_peer_id,
+                callee_peer_id: signable.callee_peer_id,
+                sdp: signable.sdp,
+                timestamp: signable.timestamp,
+                signature,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_process_incoming_signaling_valid_offer_then_duplicate_rejected() {
+        let (_caller_service, _caller_db, caller_identity, _caller_permissions, caller_peer_id) =
+            create_test_env();
+        let (callee_service, callee_db, _callee_identity, _callee_permissions, callee_peer_id) =
+            create_test_env();
+
+        add_peer_contact(
+            &callee_db,
+            &caller_peer_id,
+            &identity_public_key(&caller_identity),
+        );
+        add_received_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
+
+        let envelope = signed_offer_envelope(
+            &caller_identity,
+            &caller_peer_id,
+            &callee_peer_id,
+            chrono::Utc::now().timestamp(),
+        );
+
+        assert!(callee_service.process_incoming_signaling(&envelope).is_ok());
+        let duplicate = callee_service.process_incoming_signaling(&envelope);
+        assert!(matches!(duplicate, Err(AppError::AlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_process_incoming_signaling_rejects_wrong_recipient() {
+        let (_caller_service, _caller_db, caller_identity, _caller_permissions, caller_peer_id) =
+            create_test_env();
+        let (callee_service, _callee_db, _callee_identity, _callee_permissions, callee_peer_id) =
+            create_test_env();
+
+        let mut envelope = signed_offer_envelope(
+            &caller_identity,
+            &caller_peer_id,
+            &callee_peer_id,
+            chrono::Utc::now().timestamp(),
+        );
+        envelope.recipient_peer_id = "12D3KooWNotUs".to_string();
+
+        let result = callee_service.process_incoming_signaling(&envelope);
+        assert!(matches!(result, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn test_process_incoming_signaling_rejects_missing_permission() {
+        let (_caller_service, _caller_db, caller_identity, _caller_permissions, caller_peer_id) =
+            create_test_env();
+        let (callee_service, callee_db, _callee_identity, _callee_permissions, callee_peer_id) =
+            create_test_env();
+
+        add_peer_contact(
+            &callee_db,
+            &caller_peer_id,
+            &identity_public_key(&caller_identity),
+        );
+
+        let envelope = signed_offer_envelope(
+            &caller_identity,
+            &caller_peer_id,
+            &callee_peer_id,
+            chrono::Utc::now().timestamp(),
+        );
+
+        let result = callee_service.process_incoming_signaling(&envelope);
+        assert!(matches!(result, Err(AppError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_process_incoming_signaling_rejects_invalid_signature() {
+        let (_caller_service, _caller_db, caller_identity, _caller_permissions, caller_peer_id) =
+            create_test_env();
+        let (callee_service, callee_db, _callee_identity, _callee_permissions, callee_peer_id) =
+            create_test_env();
+
+        add_peer_contact(
+            &callee_db,
+            &caller_peer_id,
+            &identity_public_key(&caller_identity),
+        );
+        add_received_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
+
+        let mut envelope = signed_offer_envelope(
+            &caller_identity,
+            &caller_peer_id,
+            &callee_peer_id,
+            chrono::Utc::now().timestamp(),
+        );
+        if let SignalingPayload::Offer(offer) = &mut envelope.payload {
+            offer.signature = vec![0u8; 64];
+        }
+
+        let result = callee_service.process_incoming_signaling(&envelope);
+        assert!(matches!(result, Err(AppError::Crypto(_))));
+    }
+
+    #[test]
+    fn test_process_incoming_signaling_rejects_stale_timestamp() {
+        let (_caller_service, _caller_db, caller_identity, _caller_permissions, caller_peer_id) =
+            create_test_env();
+        let (callee_service, callee_db, _callee_identity, _callee_permissions, callee_peer_id) =
+            create_test_env();
+
+        add_peer_contact(
+            &callee_db,
+            &caller_peer_id,
+            &identity_public_key(&caller_identity),
+        );
+        add_received_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
+
+        let stale = chrono::Utc::now().timestamp() - MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS - 1;
+        let envelope =
+            signed_offer_envelope(&caller_identity, &caller_peer_id, &callee_peer_id, stale);
+
+        let result = callee_service.process_incoming_signaling(&envelope);
+        assert!(matches!(result, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn test_process_incoming_signaling_valid_ice_and_busy_payloads() {
+        let (_sender_service, _sender_db, sender_identity, _sender_permissions, sender_peer_id) =
+            create_test_env();
+        let (
+            receiver_service,
+            receiver_db,
+            _receiver_identity,
+            receiver_permissions,
+            receiver_peer_id,
+        ) = create_test_env();
+
+        add_peer_with_call_permission(
+            &receiver_db,
+            &receiver_permissions,
+            &sender_peer_id,
+            &identity_public_key(&sender_identity),
+        );
+
+        let timestamp = chrono::Utc::now().timestamp();
+        let ice_signable = SignableSignalingIce {
+            call_id: "call-ice-1".to_string(),
+            sender_peer_id: sender_peer_id.clone(),
+            candidate: "candidate:0 1 UDP".to_string(),
+            sdp_mid: Some("audio".to_string()),
+            sdp_mline_index: Some(0),
+            timestamp,
+        };
+        let ice_signature = sender_identity.sign(&ice_signable).unwrap();
+        let ice_envelope = SignalingEnvelope {
+            sender_peer_id: sender_peer_id.clone(),
+            recipient_peer_id: receiver_peer_id.clone(),
+            payload: SignalingPayload::Ice(SignalingIce {
+                call_id: ice_signable.call_id,
+                sender_peer_id: ice_signable.sender_peer_id,
+                candidate: ice_signable.candidate,
+                sdp_mid: ice_signable.sdp_mid,
+                sdp_mline_index: ice_signable.sdp_mline_index,
+                timestamp: ice_signable.timestamp,
+                signature: ice_signature,
+            }),
+        };
+        assert!(receiver_service
+            .process_incoming_signaling(&ice_envelope)
+            .is_ok());
+
+        let busy_timestamp = chrono::Utc::now().timestamp();
+        let busy_signable = SignableSignalingHangup {
+            call_id: "call-busy-1".to_string(),
+            sender_peer_id: sender_peer_id.clone(),
+            reason: "busy".to_string(),
+            timestamp: busy_timestamp,
+        };
+        let busy_signature = sender_identity.sign(&busy_signable).unwrap();
+        let busy_envelope = SignalingEnvelope {
+            sender_peer_id,
+            recipient_peer_id: receiver_peer_id,
+            payload: SignalingPayload::Busy(SignalingHangup {
+                call_id: busy_signable.call_id,
+                sender_peer_id: busy_signable.sender_peer_id,
+                reason: busy_signable.reason,
+                timestamp: busy_signable.timestamp,
+                signature: busy_signature,
+            }),
+        };
+        assert!(receiver_service
+            .process_incoming_signaling(&busy_envelope)
+            .is_ok());
+    }
+
     #[test]
     fn test_call_state_as_str() {
         assert_eq!(CallState::Ringing.as_str(), "ringing");
@@ -865,7 +1465,7 @@ mod tests {
 
         identity_service.lock();
 
-        let result = service.create_hangup("call-123", "normal");
+        let result = service.create_hangup("call-123", "12D3KooWPeer", "normal");
         assert!(result.is_err());
     }
 }

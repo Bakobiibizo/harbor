@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useWallStore } from './wall';
+import { useSettingsStore } from './settings';
 import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
 
@@ -48,6 +49,7 @@ describe('useWallStore', () => {
       error: null,
       editingPostId: null,
     });
+    useSettingsStore.setState({ defaultVisibility: 'contacts' });
     vi.clearAllMocks();
   });
 
@@ -164,6 +166,49 @@ describe('useWallStore', () => {
       expect(state.posts[0].postId).toBe('new-post-1');
       expect(state.posts[0].content).toBe('New post content');
       expect(state.posts[0].contentType).toBe('post');
+      expect(state.posts[0].visibility).toBe('contacts');
+      expect(postsService.createPost).toHaveBeenCalledWith(
+        'text',
+        'New post content',
+        'contacts',
+        undefined,
+      );
+    });
+
+    it('should use persisted default visibility from settings', async () => {
+      useSettingsStore.setState({ defaultVisibility: 'public' });
+      vi.mocked(postsService.createPost).mockResolvedValue({
+        postId: 'public-post',
+        createdAt: 1700000100,
+      });
+
+      await useWallStore.getState().createPost('Public by default');
+
+      expect(postsService.createPost).toHaveBeenCalledWith(
+        'text',
+        'Public by default',
+        'public',
+        undefined,
+      );
+      expect(useWallStore.getState().posts[0].visibility).toBe('public');
+    });
+
+    it('should allow a per-post visibility override', async () => {
+      useSettingsStore.setState({ defaultVisibility: 'public' });
+      vi.mocked(postsService.createPost).mockResolvedValue({
+        postId: 'contacts-post',
+        createdAt: 1700000100,
+      });
+
+      await useWallStore.getState().createPost('Contacts override', 'post', undefined, 'contacts');
+
+      expect(postsService.createPost).toHaveBeenCalledWith(
+        'text',
+        'Contacts override',
+        'contacts',
+        undefined,
+      );
+      expect(useWallStore.getState().posts[0].visibility).toBe('contacts');
     });
 
     it('should prepend new posts to the beginning', async () => {

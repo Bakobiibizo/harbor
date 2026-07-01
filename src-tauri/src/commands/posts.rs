@@ -102,6 +102,18 @@ pub struct CreatePostMediaInput {
     pub sort_order: i32,
 }
 
+pub(crate) fn parse_visibility_input(visibility: Option<&str>) -> Result<PostVisibility, AppError> {
+    match visibility {
+        None => Ok(PostVisibility::Contacts),
+        Some("contacts") => Ok(PostVisibility::Contacts),
+        Some("public") => Ok(PostVisibility::Public),
+        Some(other) => Err(AppError::Validation(format!(
+            "Invalid visibility '{}': must be 'public' or 'contacts'",
+            other
+        ))),
+    }
+}
+
 /// Create a new post
 #[tauri::command]
 pub async fn create_post(
@@ -112,10 +124,7 @@ pub async fn create_post(
     visibility: Option<String>,
     media: Option<Vec<CreatePostMediaInput>>,
 ) -> Result<CreatePostResult, AppError> {
-    let vis = match visibility.as_deref() {
-        Some("public") => PostVisibility::Public,
-        _ => PostVisibility::Contacts, // Default to contacts-only
-    };
+    let vis = parse_visibility_input(visibility.as_deref())?;
 
     let media = media.unwrap_or_default();
     let media_params: Vec<CreatePostMediaParams<'_>> = media
@@ -324,4 +333,33 @@ pub async fn get_post_media(
 ) -> Result<Vec<PostMediaInfo>, AppError> {
     let media = posts_service.get_post_media(&post_id)?;
     Ok(media.into_iter().map(PostMediaInfo::from).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_visibility_input_accepts_supported_values_and_default() {
+        assert_eq!(
+            parse_visibility_input(None).unwrap(),
+            PostVisibility::Contacts
+        );
+        assert_eq!(
+            parse_visibility_input(Some("contacts")).unwrap(),
+            PostVisibility::Contacts
+        );
+        assert_eq!(
+            parse_visibility_input(Some("public")).unwrap(),
+            PostVisibility::Public
+        );
+    }
+
+    #[test]
+    fn parse_visibility_input_rejects_unknown_values() {
+        let result = parse_visibility_input(Some("friends"));
+        assert!(
+            matches!(result, Err(AppError::Validation(message)) if message.contains("Invalid visibility"))
+        );
+    }
 }
