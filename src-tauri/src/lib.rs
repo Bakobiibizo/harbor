@@ -190,6 +190,7 @@ pub fn run() {
                 contacts_service.clone(),
             ));
             let calling_service = Arc::new(CallingService::new(
+                db.clone(),
                 identity_service.clone(),
                 contacts_service.clone(),
                 permissions_service.clone(),
@@ -349,6 +350,8 @@ pub fn run() {
             commands::delete_comment,
             commands::get_comment_counts,
             // Calling commands
+            commands::get_active_calls,
+            commands::get_call_history,
             commands::start_call,
             commands::answer_call,
             commands::send_ice_candidate,

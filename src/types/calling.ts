@@ -4,6 +4,27 @@ export type CallState = 'ringing' | 'incoming' | 'connected' | 'ended';
 /** Hangup reason */
 export type HangupReason = 'normal' | 'busy' | 'declined' | 'error';
 
+/** Call direction relative to the local account */
+export type CallDirection = 'outgoing' | 'incoming';
+
+/** Persisted call media kind */
+export type CallMediaKind = 'audio' | 'video';
+
+/** Persisted active call/history row */
+export interface CallSession {
+  callId: string;
+  peerId: string;
+  callerPeerId: string | null;
+  calleePeerId: string | null;
+  direction: CallDirection;
+  mediaKind: CallMediaKind;
+  state: CallState;
+  startedAt: number;
+  endedAt: number | null;
+  durationSeconds: number | null;
+  terminalReason: string | null;
+}
+
 /** Supported ICE server URL schemes */
 export type IceServerProtocol = 'stun' | 'stuns' | 'turn' | 'turns';
 

@@ -15,6 +15,7 @@ const MIGRATION_009: &str = include_str!("migrations/009_comments.sql");
 const MIGRATION_010: &str = include_str!("migrations/010_message_edit.sql");
 const MIGRATION_011: &str = include_str!("migrations/011_posts_lamport_index.sql");
 const MIGRATION_012: &str = include_str!("migrations/012_post_media_signature.sql");
+const MIGRATION_013: &str = include_str!("migrations/013_call_history_state.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -76,6 +77,19 @@ impl Database {
             );
             poisoned.into_inner()
         })
+    }
+
+    fn column_exists(conn: &Connection, table: &str, column: &str) -> SqliteResult<bool> {
+        conn.query_row(
+            format!(
+                "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name = ?",
+                table
+            )
+            .as_str(),
+            [column],
+            |row| row.get::<_, i32>(0),
+        )
+        .map(|count| count > 0)
     }
 
     /// Run database migrations
@@ -172,14 +186,8 @@ impl Database {
 
         if version < 12 {
             info!("Running migration 012...");
-            let has_media_signature: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM pragma_table_info('post_media') WHERE name = 'signature'",
-                    [],
-                    |row| row.get::<_, i32>(0),
-                )
-                .map(|count| count > 0)
-                .unwrap_or(false);
+            let has_media_signature =
+                Self::column_exists(&conn, "post_media", "signature").unwrap_or(false);
 
             if has_media_signature {
                 conn.execute(
@@ -195,6 +203,72 @@ impl Database {
                 conn.execute_batch(MIGRATION_012)?;
             }
             info!("Migration 012 complete");
+        }
+
+        if version < 13 {
+            info!("Running migration 013...");
+            if !Self::column_exists(&conn, "call_history", "caller_peer_id")? {
+                conn.execute(
+                    "ALTER TABLE call_history ADD COLUMN caller_peer_id TEXT",
+                    [],
+                )?;
+            }
+            if !Self::column_exists(&conn, "call_history", "callee_peer_id")? {
+                conn.execute(
+                    "ALTER TABLE call_history ADD COLUMN callee_peer_id TEXT",
+                    [],
+                )?;
+            }
+            if !Self::column_exists(&conn, "call_history", "media_kind")? {
+                conn.execute(
+                    "ALTER TABLE call_history ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'audio'",
+                    [],
+                )?;
+            }
+            if !Self::column_exists(&conn, "call_history", "terminal_reason")? {
+                conn.execute(
+                    "ALTER TABLE call_history ADD COLUMN terminal_reason TEXT",
+                    [],
+                )?;
+            }
+            if !Self::column_exists(&conn, "call_history", "updated_at")? {
+                conn.execute("ALTER TABLE call_history ADD COLUMN updated_at INTEGER", [])?;
+            }
+
+            conn.execute(
+                "UPDATE call_history
+                 SET caller_peer_id = COALESCE(
+                         caller_peer_id,
+                         CASE WHEN direction = 'incoming' THEN peer_id ELSE NULL END
+                     ),
+                     callee_peer_id = COALESCE(
+                         callee_peer_id,
+                         CASE WHEN direction = 'outgoing' THEN peer_id ELSE NULL END
+                     ),
+                     media_kind = COALESCE(NULLIF(media_kind, ''), 'audio'),
+                     terminal_reason = CASE
+                         WHEN terminal_reason IS NULL
+                              AND status NOT IN ('ringing', 'incoming', 'connected', 'ended')
+                         THEN status
+                         ELSE terminal_reason
+                     END,
+                     status = CASE
+                         WHEN status IN ('ringing', 'incoming', 'connected', 'ended') THEN status
+                         ELSE 'ended'
+                     END,
+                     updated_at = COALESCE(updated_at, ended_at, started_at, strftime('%s', 'now'))",
+                [],
+            )?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_call_history_active ON call_history(status, updated_at)",
+                [],
+            )?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_call_history_peer ON call_history(peer_id, started_at)",
+                [],
+            )?;
+            conn.execute_batch(MIGRATION_013)?;
+            info!("Migration 013 complete");
         }
 
         Ok(())
@@ -651,5 +725,68 @@ mod tests {
         assert_eq!(cursor.get("12D3KooWAuthor1"), Some(&10));
         assert_eq!(cursor.get("12D3KooWAuthor2"), Some(&20));
         assert_eq!(cursor.get("12D3KooWAuthor3"), Some(&30));
+    }
+
+    #[test]
+    fn test_call_history_migration_preserves_existing_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("legacy.sqlite");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL);
+                 INSERT INTO schema_version (id, version) VALUES (1, 12);
+                 CREATE TABLE call_history (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     call_id TEXT NOT NULL UNIQUE,
+                     peer_id TEXT NOT NULL,
+                     direction TEXT NOT NULL,
+                     status TEXT NOT NULL,
+                     started_at INTEGER,
+                     ended_at INTEGER,
+                     duration_seconds INTEGER
+                 );
+                 INSERT INTO call_history (
+                     call_id, peer_id, direction, status, started_at, ended_at, duration_seconds
+                 ) VALUES ('legacy-call', 'peer-legacy', 'outgoing', 'missed', 100, 130, 30);",
+            )
+            .unwrap();
+        }
+
+        let db = Database::new(db_path).unwrap();
+        db.with_connection(|conn| {
+            let version: i32 = conn.query_row(
+                "SELECT version FROM schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(version, 13);
+
+            let row: (String, String, Option<String>, Option<String>, String, Option<String>) = conn
+                .query_row(
+                    "SELECT call_id, status, caller_peer_id, callee_peer_id, media_kind, terminal_reason
+                     FROM call_history WHERE call_id = 'legacy-call'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
+                )?;
+
+            assert_eq!(row.0, "legacy-call");
+            assert_eq!(row.1, "ended");
+            assert_eq!(row.2, None);
+            assert_eq!(row.3.as_deref(), Some("peer-legacy"));
+            assert_eq!(row.4, "audio");
+            assert_eq!(row.5.as_deref(), Some("missed"));
+            Ok(())
+        })
+        .unwrap();
     }
 }

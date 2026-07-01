@@ -45,12 +45,12 @@ Conclusion: production voice calling is not complete; the app has signed signali
 
 ### Wall host behavior
 
-- `src/stores/wall.ts` creates posts and media, but hard-codes `visibility: 'contacts'` and notes likes/comments are local/defaulted rather than backend-backed.
+- `src/stores/wall.ts` creates posts and media with per-post visibility controls.
 - `src/pages/Wall.tsx` still uses “Comments coming soon!” for wall post comments.
-- `src-tauri/src/commands/feed.rs` includes wall preview commands and `src-tauri/src/commands/rss.rs` includes RSS generation, but source search did not find production UI wrappers using them.
+- `src/pages/Wall.tsx` exposes guest/contact/owner wall preview through `get_wall_preview`, visibility counts through `get_wall_visibility_stats`, public-only RSS copy/export through `generate_rss_feed`, and share links through backend network/feed commands.
 - `src-tauri/src/services/posts_service.rs` signs new posts with `media_hashes: Vec::new()` while media is added afterward, leaving media metadata outside the signed post payload.
 
-Conclusion: host wall posting exists, but visibility controls, social actions, preview/RSS UI, media integrity, and update/delete propagation need release work.
+Conclusion: host wall posting, visibility controls, and preview/RSS/share UI exist, but social actions, media integrity, and update/delete propagation need release work.
 
 ### Wall consumer/feed behavior
 

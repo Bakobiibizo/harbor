@@ -6,41 +6,21 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use crate::db::Capability;
+pub use crate::db::CallState;
+use crate::db::{
+    CallDirection, CallMediaKind, CallSession, CallsRepository, Capability, NewCallSession,
+};
 use crate::error::{AppError, Result};
 use crate::p2p::protocols::signaling::{SignalingEnvelope, SignalingPayload};
 use crate::services::{
     verify, ContactsService, CryptoService, IdentityService, PermissionsService,
     SignableSignalingAnswer, SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
 };
+use crate::Database;
 
 const MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS: i64 = 5 * 60;
 const MAX_SDP_BYTES: usize = 256 * 1024;
 const MAX_ICE_CANDIDATE_BYTES: usize = 16 * 1024;
-
-/// Call state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallState {
-    /// Outgoing call, waiting for answer
-    Ringing,
-    /// Incoming call, not yet answered
-    Incoming,
-    /// Call is connected
-    Connected,
-    /// Call ended
-    Ended,
-}
-
-impl CallState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            CallState::Ringing => "ringing",
-            CallState::Incoming => "incoming",
-            CallState::Connected => "connected",
-            CallState::Ended => "ended",
-        }
-    }
-}
 
 /// An active call
 #[derive(Debug, Clone)]
@@ -56,6 +36,7 @@ pub struct Call {
 
 /// Service for managing voice calls
 pub struct CallingService {
+    db: Arc<Database>,
     identity_service: Arc<IdentityService>,
     contacts_service: Arc<ContactsService>,
     permissions_service: Arc<PermissionsService>,
@@ -122,11 +103,13 @@ pub struct IncomingIceParams<'a> {
 impl CallingService {
     /// Create a new calling service
     pub fn new(
+        db: Arc<Database>,
         identity_service: Arc<IdentityService>,
         contacts_service: Arc<ContactsService>,
         permissions_service: Arc<PermissionsService>,
     ) -> Self {
         Self {
+            db,
             identity_service,
             contacts_service,
             permissions_service,
@@ -257,6 +240,155 @@ impl CallingService {
         Ok(())
     }
 
+    fn require_no_active_call_with_peer(&self, peer_id: &str) -> Result<()> {
+        if CallsRepository::has_active_call_with_peer(&self.db, peer_id)? {
+            return Err(AppError::AlreadyExists(
+                "An active call with this peer already exists".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_call_state(&self, call_id: &str, expected_state: CallState) -> Result<CallSession> {
+        let call = CallsRepository::get_by_call_id(&self.db, call_id)?
+            .ok_or_else(|| AppError::NotFound("Call not found".to_string()))?;
+        if call.state != expected_state {
+            return Err(AppError::Validation(format!(
+                "Invalid call transition from {} (expected {})",
+                call.state.as_str(),
+                expected_state.as_str()
+            )));
+        }
+        Ok(call)
+    }
+
+    fn ensure_call_is_active(&self, call_id: &str) -> Result<CallSession> {
+        let call = CallsRepository::get_by_call_id(&self.db, call_id)?
+            .ok_or_else(|| AppError::NotFound("Call not found".to_string()))?;
+        if call.state.is_terminal() {
+            return Err(AppError::Validation("Call has already ended".to_string()));
+        }
+        Ok(call)
+    }
+
+    fn mark_connected(&self, call_id: &str) -> Result<()> {
+        let updated =
+            CallsRepository::mark_connected(&self.db, call_id, chrono::Utc::now().timestamp())?;
+        if updated == 0 {
+            return Err(AppError::Validation(
+                "Call cannot transition to connected".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn end_active_call(&self, call_id: &str, reason: &str) -> Result<()> {
+        let updated =
+            CallsRepository::mark_ended(&self.db, call_id, reason, chrono::Utc::now().timestamp())?;
+        if updated == 0 {
+            return Err(AppError::Validation("Call cannot be ended".to_string()));
+        }
+        Ok(())
+    }
+
+    fn insert_outgoing_call(
+        &self,
+        call_id: &str,
+        caller_peer_id: &str,
+        callee_peer_id: &str,
+        timestamp: i64,
+    ) -> Result<()> {
+        CallsRepository::insert_session(
+            &self.db,
+            &NewCallSession {
+                call_id: call_id.to_string(),
+                peer_id: callee_peer_id.to_string(),
+                caller_peer_id: caller_peer_id.to_string(),
+                callee_peer_id: callee_peer_id.to_string(),
+                direction: CallDirection::Outgoing,
+                media_kind: CallMediaKind::Audio,
+                state: CallState::Ringing,
+                started_at: timestamp,
+                ended_at: None,
+                duration_seconds: None,
+                terminal_reason: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn insert_incoming_call(
+        &self,
+        call_id: &str,
+        caller_peer_id: &str,
+        callee_peer_id: &str,
+        timestamp: i64,
+    ) -> Result<()> {
+        CallsRepository::insert_session(
+            &self.db,
+            &NewCallSession {
+                call_id: call_id.to_string(),
+                peer_id: caller_peer_id.to_string(),
+                caller_peer_id: caller_peer_id.to_string(),
+                callee_peer_id: callee_peer_id.to_string(),
+                direction: CallDirection::Incoming,
+                media_kind: CallMediaKind::Audio,
+                state: CallState::Incoming,
+                started_at: timestamp,
+                ended_at: None,
+                duration_seconds: None,
+                terminal_reason: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn insert_busy_history_if_unknown(
+        &self,
+        call_id: &str,
+        caller_peer_id: &str,
+        callee_peer_id: &str,
+        timestamp: i64,
+    ) -> Result<()> {
+        if CallsRepository::get_by_call_id(&self.db, call_id)?.is_none() {
+            CallsRepository::insert_session(
+                &self.db,
+                &NewCallSession {
+                    call_id: call_id.to_string(),
+                    peer_id: caller_peer_id.to_string(),
+                    caller_peer_id: caller_peer_id.to_string(),
+                    callee_peer_id: callee_peer_id.to_string(),
+                    direction: CallDirection::Incoming,
+                    media_kind: CallMediaKind::Audio,
+                    state: CallState::Ended,
+                    started_at: timestamp,
+                    ended_at: Some(timestamp),
+                    duration_seconds: Some(0),
+                    terminal_reason: Some("busy".to_string()),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Return persisted active call sessions.
+    pub fn get_active_calls(&self) -> Result<Vec<CallSession>> {
+        Ok(CallsRepository::get_active_calls(&self.db)?)
+    }
+
+    /// Return persisted call history, newest first.
+    pub fn get_call_history(&self, limit: usize) -> Result<Vec<CallSession>> {
+        Ok(CallsRepository::get_call_history(&self.db, limit)?)
+    }
+
+    /// End a call locally after a non-signaling failure, such as transport
+    /// failure while sending an offer/answer. This records terminal metadata
+    /// without creating or persisting any SDP/ICE/media payloads.
+    pub fn end_call_locally(&self, call_id: &str, reason: &str) -> Result<()> {
+        Self::validate_hangup_reason(reason)?;
+        self.end_active_call(call_id, reason)
+    }
+
     /// Start a call to a peer
     pub fn create_offer(&self, callee_peer_id: &str, sdp: &str) -> Result<OutgoingOffer> {
         let identity = self
@@ -274,6 +406,7 @@ impl CallingService {
             ));
         }
         Self::validate_sdp(sdp)?;
+        self.require_no_active_call_with_peer(callee_peer_id)?;
 
         let call_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();
@@ -287,6 +420,7 @@ impl CallingService {
         };
 
         let signature = self.identity_service.sign(&signable)?;
+        self.insert_outgoing_call(&call_id, &identity.peer_id, callee_peer_id, timestamp)?;
 
         Ok(OutgoingOffer {
             call_id,
@@ -354,6 +488,15 @@ impl CallingService {
             ));
         }
 
+        Self::validate_sdp(sdp)?;
+        if CallsRepository::get_by_call_id(&self.db, call_id)?.is_some() {
+            return Err(AppError::AlreadyExists(
+                "Call session already exists".to_string(),
+            ));
+        }
+        self.require_no_active_call_with_peer(caller_peer_id)?;
+        self.insert_incoming_call(call_id, caller_peer_id, callee_peer_id, timestamp)?;
+
         Ok(())
     }
 
@@ -377,6 +520,13 @@ impl CallingService {
                 "No call permission from caller".to_string(),
             ));
         }
+        let call = self.require_call_state(call_id, CallState::Incoming)?;
+        if call.caller_peer_id.as_deref() != Some(caller_peer_id) || call.peer_id != caller_peer_id
+        {
+            return Err(AppError::Validation(
+                "Caller does not match incoming call".to_string(),
+            ));
+        }
         Self::validate_sdp(sdp)?;
 
         let timestamp = chrono::Utc::now().timestamp();
@@ -390,6 +540,7 @@ impl CallingService {
         };
 
         let signature = self.identity_service.sign(&signable)?;
+        self.mark_connected(call_id)?;
 
         Ok(OutgoingAnswer {
             call_id: call_id.to_string(),
@@ -455,6 +606,17 @@ impl CallingService {
                 "Callee doesn't have call permission".to_string(),
             ));
         }
+
+        let call = self.require_call_state(call_id, CallState::Ringing)?;
+        if call.caller_peer_id.as_deref() != Some(caller_peer_id)
+            || call.callee_peer_id.as_deref() != Some(callee_peer_id)
+            || call.peer_id != callee_peer_id
+        {
+            return Err(AppError::Validation(
+                "Answer does not match the outgoing call".to_string(),
+            ));
+        }
+        self.mark_connected(call_id)?;
 
         Ok(())
     }
@@ -557,6 +719,12 @@ impl CallingService {
 
         self.require_any_call_grant_with(target_peer_id)?;
         Self::validate_hangup_reason(reason)?;
+        let call = self.ensure_call_is_active(call_id)?;
+        if call.peer_id != target_peer_id {
+            return Err(AppError::Validation(
+                "Hangup target does not match call peer".to_string(),
+            ));
+        }
 
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -568,6 +736,7 @@ impl CallingService {
         };
 
         let signature = self.identity_service.sign(&signable)?;
+        self.end_active_call(call_id, reason)?;
 
         Ok(OutgoingHangup {
             call_id: call_id.to_string(),
@@ -615,18 +784,89 @@ impl CallingService {
             return Err(AppError::Crypto("Invalid hangup signature".to_string()));
         }
 
+        let call = self.ensure_call_is_active(call_id)?;
+        if call.peer_id != sender_peer_id {
+            return Err(AppError::Validation(
+                "Hangup sender does not match call peer".to_string(),
+            ));
+        }
+        self.end_active_call(call_id, reason)?;
+
         Ok(())
     }
 
     /// Decline an incoming call using the signed hangup payload with a
     /// `declined` reason.
     pub fn create_decline(&self, call_id: &str, caller_peer_id: &str) -> Result<OutgoingHangup> {
+        let call = self.require_call_state(call_id, CallState::Incoming)?;
+        if call.peer_id != caller_peer_id {
+            return Err(AppError::Validation(
+                "Decline target does not match incoming call".to_string(),
+            ));
+        }
         self.create_hangup(call_id, caller_peer_id, "declined")
     }
 
     /// Send a busy response using the signed hangup payload with a `busy` reason.
+    ///
+    /// Busy is the one terminal response allowed for an incoming call ID that
+    /// was not admitted into active state, so duplicate simultaneous offers can
+    /// be explicitly handled without treating the unknown call as a normal
+    /// hangup.
     pub fn create_busy(&self, call_id: &str, caller_peer_id: &str) -> Result<OutgoingHangup> {
-        self.create_hangup(call_id, caller_peer_id, "busy")
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+
+        if !self
+            .permissions_service
+            .we_have_capability(caller_peer_id, Capability::Call)?
+        {
+            return Err(AppError::PermissionDenied(
+                "No call permission from caller".to_string(),
+            ));
+        }
+
+        if let Some(call) = CallsRepository::get_by_call_id(&self.db, call_id)? {
+            if call.state == CallState::Ended {
+                return Err(AppError::Validation("Call has already ended".to_string()));
+            }
+            if call.peer_id != caller_peer_id || call.direction != CallDirection::Incoming {
+                return Err(AppError::Validation(
+                    "Busy target does not match an incoming call".to_string(),
+                ));
+            }
+        }
+
+        let timestamp = chrono::Utc::now().timestamp();
+        let signable = SignableSignalingHangup {
+            call_id: call_id.to_string(),
+            sender_peer_id: identity.peer_id.clone(),
+            reason: "busy".to_string(),
+            timestamp,
+        };
+        let signature = self.identity_service.sign(&signable)?;
+
+        if CallsRepository::get_by_call_id(&self.db, call_id)?.is_some() {
+            self.end_active_call(call_id, "busy")?;
+        } else {
+            self.insert_busy_history_if_unknown(
+                call_id,
+                caller_peer_id,
+                &identity.peer_id,
+                timestamp,
+            )?;
+        }
+
+        Ok(OutgoingHangup {
+            call_id: call_id.to_string(),
+            sender_peer_id: identity.peer_id,
+            target_peer_id: caller_peer_id.to_string(),
+            reason: "busy".to_string(),
+            timestamp,
+            signature,
+        })
     }
 
     /// Validate a complete incoming signaling envelope from the libp2p transport.
@@ -774,7 +1014,8 @@ impl CallingService {
 mod tests {
     use super::*;
     use crate::db::{
-        Capability, ContactData, ContactsRepository, GrantData, PermissionsRepository,
+        CallMediaKind, CallsRepository, Capability, ContactData, ContactsRepository, GrantData,
+        PermissionsRepository,
     };
     use crate::models::CreateIdentityRequest;
     use crate::p2p::protocols::signaling::{
@@ -810,6 +1051,7 @@ mod tests {
             .unwrap();
 
         let service = CallingService::new(
+            db.clone(),
             identity_service.clone(),
             contacts_service,
             permissions_service.clone(),
@@ -881,6 +1123,38 @@ mod tests {
             .unwrap()
     }
 
+    fn insert_incoming_test_call(
+        service: &CallingService,
+        call_id: &str,
+        caller_peer_id: &str,
+        callee_peer_id: &str,
+    ) {
+        service
+            .insert_incoming_call(
+                call_id,
+                caller_peer_id,
+                callee_peer_id,
+                chrono::Utc::now().timestamp(),
+            )
+            .unwrap();
+    }
+
+    fn insert_outgoing_test_call(
+        service: &CallingService,
+        call_id: &str,
+        caller_peer_id: &str,
+        callee_peer_id: &str,
+    ) {
+        service
+            .insert_outgoing_call(
+                call_id,
+                caller_peer_id,
+                callee_peer_id,
+                chrono::Utc::now().timestamp(),
+            )
+            .unwrap();
+    }
+
     #[test]
     fn test_create_offer_success() {
         let (service, db, _identity, permissions, peer_id) = create_test_env();
@@ -896,6 +1170,12 @@ mod tests {
         assert_eq!(offer.callee_peer_id, callee);
         assert_eq!(offer.sdp, "v=0\r\nsdp-data");
         assert!(!offer.signature.is_empty());
+
+        let active = service.get_active_calls().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].call_id, offer.call_id);
+        assert_eq!(active[0].state, CallState::Ringing);
+        assert_eq!(active[0].media_kind, CallMediaKind::Audio);
     }
 
     #[test]
@@ -927,7 +1207,8 @@ mod tests {
             db.clone(),
             identity_service.clone(),
         ));
-        let service = CallingService::new(identity_service, contacts_service, permissions_service);
+        let service =
+            CallingService::new(db, identity_service, contacts_service, permissions_service);
 
         let result = service.create_offer("12D3KooWCallee", "sdp-data");
         assert!(result.is_err());
@@ -940,6 +1221,7 @@ mod tests {
         let caller = "12D3KooWCaller";
         add_peer_contact(&db, caller, &caller_verifying.to_bytes());
         add_received_call_permission(&db, caller, &peer_id);
+        insert_incoming_test_call(&service, "call-123", caller, &peer_id);
 
         let answer = service
             .create_answer("call-123", caller, "v=0\r\nsdp-answer")
@@ -950,6 +1232,119 @@ mod tests {
         assert_eq!(answer.callee_peer_id, peer_id);
         assert_eq!(answer.sdp, "v=0\r\nsdp-answer");
         assert!(!answer.signature.is_empty());
+
+        let call = CallsRepository::get_by_call_id(&db, "call-123")
+            .unwrap()
+            .unwrap();
+        assert_eq!(call.state, CallState::Connected);
+    }
+
+    #[test]
+    fn test_create_answer_rejects_double_answer_and_ended_call() {
+        let (service, db, _identity, _permissions, peer_id) = create_test_env();
+        let (_, caller_verifying) = CryptoService::generate_ed25519_keypair();
+        let caller = "12D3KooWCaller";
+        add_peer_contact(&db, caller, &caller_verifying.to_bytes());
+        add_received_call_permission(&db, caller, &peer_id);
+        insert_incoming_test_call(&service, "call-double", caller, &peer_id);
+
+        service
+            .create_answer("call-double", caller, "v=0\r\nsdp-answer")
+            .unwrap();
+        let double_answer = service.create_answer("call-double", caller, "v=0\r\nsdp-answer");
+        assert!(matches!(double_answer, Err(AppError::Validation(_))));
+
+        service.end_active_call("call-double", "normal").unwrap();
+        let ended_answer = service.create_answer("call-double", caller, "v=0\r\nsdp-answer");
+        assert!(matches!(ended_answer, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn test_hangup_rejects_unknown_call() {
+        let (service, db, _identity, permissions, _peer_id) = create_test_env();
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let target = "12D3KooWPeer";
+        add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
+
+        let result = service.create_hangup("missing-call", target, "normal");
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_process_incoming_offer_rejects_duplicate_active_session() {
+        let (service, db, _identity, _permissions, peer_id) = create_test_env();
+
+        let (caller_signing, caller_verifying) = CryptoService::generate_ed25519_keypair();
+        let caller_id = "12D3KooWCaller123";
+        add_peer_contact(&db, caller_id, &caller_verifying.to_bytes());
+        add_received_call_permission(&db, caller_id, &peer_id);
+        insert_incoming_test_call(&service, "existing-call", caller_id, &peer_id);
+
+        let signable = SignableSignalingOffer {
+            call_id: "new-call".to_string(),
+            caller_peer_id: caller_id.to_string(),
+            callee_peer_id: peer_id.clone(),
+            sdp: "v=0\r\nsdp".to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        let sig = crate::services::sign(&caller_signing, &signable).unwrap();
+
+        let result = service.process_incoming_offer(
+            "new-call",
+            caller_id,
+            &peer_id,
+            "v=0\r\nsdp",
+            signable.timestamp,
+            &sig,
+        );
+
+        assert!(matches!(result, Err(AppError::AlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_create_busy_records_unknown_duplicate_as_terminal_history() {
+        let (service, db, _identity, _permissions, peer_id) = create_test_env();
+        let (_, caller_verifying) = CryptoService::generate_ed25519_keypair();
+        let caller = "12D3KooWCaller";
+        add_peer_contact(&db, caller, &caller_verifying.to_bytes());
+        add_received_call_permission(&db, caller, &peer_id);
+
+        let busy = service.create_busy("duplicate-call", caller).unwrap();
+        assert_eq!(busy.reason, "busy");
+        let record = CallsRepository::get_by_call_id(&db, "duplicate-call")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.state, CallState::Ended);
+        assert_eq!(record.terminal_reason.as_deref(), Some("busy"));
+        assert_eq!(record.duration_seconds, Some(0));
+    }
+
+    #[test]
+    fn test_call_history_available_after_service_restart() {
+        let (service, db, identity_service, permissions, peer_id) = create_test_env();
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let target = "12D3KooWPeer";
+        add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
+        let offer = service.create_offer(target, "v=0\r\nsdp-data").unwrap();
+
+        let restarted_contacts =
+            Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
+        let restarted_permissions = Arc::new(PermissionsService::new(
+            db.clone(),
+            identity_service.clone(),
+        ));
+        let restarted = CallingService::new(
+            db.clone(),
+            identity_service,
+            restarted_contacts,
+            restarted_permissions,
+        );
+
+        let active = restarted.get_active_calls().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].call_id, offer.call_id);
+        assert_eq!(active[0].caller_peer_id.as_deref(), Some(peer_id.as_str()));
+        assert_eq!(active[0].callee_peer_id.as_deref(), Some(target));
     }
 
     #[test]
@@ -998,6 +1393,7 @@ mod tests {
         let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
         let target = "12D3KooWPeer";
         add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
+        insert_outgoing_test_call(&service, "call-123", &peer_id, target);
 
         let hangup = service.create_hangup("call-123", target, "normal").unwrap();
 
@@ -1005,17 +1401,24 @@ mod tests {
         assert_eq!(hangup.sender_peer_id, peer_id);
         assert_eq!(hangup.reason, "normal");
         assert!(!hangup.signature.is_empty());
+        let ended = CallsRepository::get_by_call_id(&db, "call-123")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ended.state, CallState::Ended);
+        assert_eq!(ended.terminal_reason.as_deref(), Some("normal"));
     }
 
     #[test]
     fn test_create_hangup_various_reasons() {
-        let (service, db, _identity, permissions, _peer_id) = create_test_env();
+        let (service, db, _identity, permissions, peer_id) = create_test_env();
         let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
         let target = "12D3KooWPeer";
         add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
 
         for reason in &["normal", "busy", "declined", "error"] {
-            let hangup = service.create_hangup("call-123", target, reason).unwrap();
+            let call_id = format!("call-{}", reason);
+            insert_outgoing_test_call(&service, &call_id, &peer_id, target);
+            let hangup = service.create_hangup(&call_id, target, reason).unwrap();
             assert_eq!(hangup.reason, *reason);
         }
     }
@@ -1177,7 +1580,7 @@ mod tests {
 
     #[test]
     fn test_process_incoming_hangup_valid() {
-        let (service, db, _identity, _permissions, _peer_id) = create_test_env();
+        let (service, db, _identity, _permissions, peer_id) = create_test_env();
 
         let (sender_signing, sender_verifying) = CryptoService::generate_ed25519_keypair();
         let sender_id = "12D3KooWSender123";
@@ -1191,6 +1594,7 @@ mod tests {
             bio: None,
         };
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
+        insert_outgoing_test_call(&service, "call-1", &peer_id, sender_id);
 
         let signable = SignableSignalingHangup {
             call_id: "call-1".to_string(),
@@ -1209,6 +1613,10 @@ mod tests {
         );
 
         assert!(result.is_ok());
+        let ended = CallsRepository::get_by_call_id(&db, "call-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ended.state, CallState::Ended);
     }
 
     #[test]
@@ -1426,6 +1834,13 @@ mod tests {
         assert!(receiver_service
             .process_incoming_signaling(&ice_envelope)
             .is_ok());
+
+        insert_outgoing_test_call(
+            &receiver_service,
+            "call-busy-1",
+            &receiver_peer_id,
+            &sender_peer_id,
+        );
 
         let busy_timestamp = chrono::Utc::now().timestamp();
         let busy_signable = SignableSignalingHangup {

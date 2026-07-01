@@ -1,8 +1,25 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { OfferResult, AnswerResult, IceResult, HangupResult, HangupReason } from '../types';
+import type {
+  OfferResult,
+  AnswerResult,
+  IceResult,
+  HangupResult,
+  HangupReason,
+  CallSession,
+} from '../types';
 
 /** Calling service - wraps Tauri commands for voice calling */
 export const callingService = {
+  /** Get active calls persisted by the backend */
+  async getActiveCalls(): Promise<CallSession[]> {
+    return invoke<CallSession[]>('get_active_calls');
+  },
+
+  /** Get call history persisted by the backend */
+  async getCallHistory(limit = 100): Promise<CallSession[]> {
+    return invoke<CallSession[]>('get_call_history', { limit });
+  },
+
   /** Start a call (create an offer) */
   async startCall(calleePeerId: string, sdp: string): Promise<OfferResult> {
     return invoke<OfferResult>('start_call', { calleePeerId, sdp });

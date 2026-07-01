@@ -110,7 +110,7 @@ Production host wall behavior requires:
 - Preview, RSS, and share surfaces are reachable from production UI and follow the selected visibility contract.
 - Placeholder messages such as “coming soon” are removed from release-claimed host functionality.
 
-Current source status: local post/media authoring exists, but visibility, media signature integrity, social state, preview/RSS UI, and edit/delete sync remain unfinished.
+Current source status: local post/media authoring, visibility controls, and preview/RSS/share UI exist. Media signature integrity, durable social state, and edit/delete sync remain unfinished.
 
 ### Wall consumer views
 
@@ -163,7 +163,7 @@ Every unfinished or placeholder behavior identified in the source-spec is mapped
 | Wall post signatures do not currently bind post media metadata added after creation. | Required for host/consumer media integrity. | `ticket.0302-wall-media-signature-integrity` |
 | Wall edit/delete operations do not propagate as synchronized durable events/tombstones. | Required for host/consumer sync. | `ticket.0303-wall-edit-delete-sync`, `ticket.0503-wall-event-reconciliation-tombstones` |
 | Host wall comments/reactions/like counts are defaulted or local-only. | Required for host wall if social features are release-claimed. | `ticket.0304-wall-author-social-ui`, `ticket.0504-wall-social-event-model` |
-| Preview/RSS/share backend surfaces are not fully exposed as release UI. | Required for host wall if documented. | `ticket.0305-wall-preview-rss-share-ui` |
+| Preview/RSS/share surfaces must remain exposed through production UI with public-only RSS filtering. | Implemented by `ticket.0305-wall-preview-rss-share-ui`; keep covered by release tests/docs. | `ticket.0305-wall-preview-rss-share-ui` |
 | No dedicated contact-wall consumer route/view. | Required for consumer wall. | `ticket.0401-contact-wall-view` |
 | Feed Like/Save/Hide/Snooze interactions are placeholder/local-only where release-claimed. | Required for feed release claim. | `ticket.0402-feed-interactions-real` |
 | Consumer comments/reactions are not syncable production social events. | Required for consumer social behavior. | `ticket.0403-consumer-comments-reactions-ui`, `ticket.0504-wall-social-event-model` |

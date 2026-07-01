@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::network::NetworkState;
+use crate::db::CallSession;
 use crate::error::AppError;
 use crate::p2p::protocols::signaling::{
     SignalingAnswer, SignalingEnvelope, SignalingHangup, SignalingIce, SignalingOffer,
@@ -65,6 +66,41 @@ pub struct HangupResult {
     pub signature: Vec<u8>,
 }
 
+/// Persisted call session/history row for the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallSessionResult {
+    pub call_id: String,
+    pub peer_id: String,
+    pub caller_peer_id: Option<String>,
+    pub callee_peer_id: Option<String>,
+    pub direction: String,
+    pub media_kind: String,
+    pub state: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub duration_seconds: Option<i64>,
+    pub terminal_reason: Option<String>,
+}
+
+impl From<CallSession> for CallSessionResult {
+    fn from(call: CallSession) -> Self {
+        Self {
+            call_id: call.call_id,
+            peer_id: call.peer_id,
+            caller_peer_id: call.caller_peer_id,
+            callee_peer_id: call.callee_peer_id,
+            direction: call.direction.as_str().to_string(),
+            media_kind: call.media_kind.as_str().to_string(),
+            state: call.state.as_str().to_string(),
+            started_at: call.started_at,
+            ended_at: call.ended_at,
+            duration_seconds: call.duration_seconds,
+            terminal_reason: call.terminal_reason,
+        }
+    }
+}
+
 async fn transmit_signaling(
     network: &NetworkState,
     target_peer_id: &str,
@@ -92,6 +128,31 @@ fn map_signaling_transport_error(error: AppError) -> AppError {
     }
 }
 
+/// Get persisted active calls.
+#[tauri::command]
+pub async fn get_active_calls(
+    calling_service: State<'_, Arc<CallingService>>,
+) -> Result<Vec<CallSessionResult>, AppError> {
+    Ok(calling_service
+        .get_active_calls()?
+        .into_iter()
+        .map(CallSessionResult::from)
+        .collect())
+}
+
+/// Get persisted call history.
+#[tauri::command]
+pub async fn get_call_history(
+    calling_service: State<'_, Arc<CallingService>>,
+    limit: Option<u32>,
+) -> Result<Vec<CallSessionResult>, AppError> {
+    Ok(calling_service
+        .get_call_history(limit.unwrap_or(100) as usize)?
+        .into_iter()
+        .map(CallSessionResult::from)
+        .collect())
+}
+
 /// Start a call (create an offer)
 #[tauri::command]
 pub async fn start_call(
@@ -113,7 +174,10 @@ pub async fn start_call(
             signature: offer.signature.clone(),
         }),
     };
-    transmit_signaling(&network, &offer.callee_peer_id, envelope).await?;
+    if let Err(error) = transmit_signaling(&network, &offer.callee_peer_id, envelope).await {
+        let _ = calling_service.end_call_locally(&offer.call_id, "error");
+        return Err(error);
+    }
 
     Ok(OfferResult {
         call_id: offer.call_id,
@@ -147,7 +211,10 @@ pub async fn answer_call(
             signature: answer.signature.clone(),
         }),
     };
-    transmit_signaling(&network, &answer.caller_peer_id, envelope).await?;
+    if let Err(error) = transmit_signaling(&network, &answer.caller_peer_id, envelope).await {
+        let _ = calling_service.end_call_locally(&answer.call_id, "error");
+        return Err(error);
+    }
 
     Ok(AnswerResult {
         call_id: answer.call_id,

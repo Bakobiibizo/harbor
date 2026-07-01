@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
-import type { PostVisibility } from '../types';
+import type { FeedItem, PostVisibility } from '../types';
+import {
+  feedService,
+  type WallPreviewPerspective,
+  type WallVisibilityStats,
+} from '../services/feed';
+import { getShareableContactString } from '../services/network';
 import { WallIcon, EllipsisIcon } from '../components/icons';
 import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
+import { PostMedia } from '../components/common/PostMedia';
 import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
 
@@ -120,6 +128,30 @@ const FILTER_OPTIONS: { type: WallContentType | 'all'; label: string }[] = [
   { type: 'audio', label: 'Audio' },
 ];
 
+const PREVIEW_OPTIONS: {
+  perspective: WallPreviewPerspective;
+  label: string;
+  summary: string;
+}[] = [
+  {
+    perspective: 'guest',
+    label: 'Guest preview',
+    summary: 'Guests see public posts only. Contacts-only posts are hidden.',
+  },
+  {
+    perspective: 'contact',
+    label: 'Contact preview',
+    summary: 'Contacts with WallRead see public and contacts-only posts.',
+  },
+  {
+    perspective: 'owner',
+    label: 'Owner preview',
+    summary: 'You see every non-deleted local wall post regardless of visibility.',
+  },
+];
+
+type ShareAction = 'rss-copy' | 'rss-export' | 'feed-link' | 'contact-link';
+
 /** Get the icon for a content type (for display in post cards) */
 function getContentTypeIcon(contentType: WallContentType) {
   const ct = CONTENT_TYPES.find((c) => c.type === contentType);
@@ -130,6 +162,105 @@ function getContentTypeIcon(contentType: WallContentType) {
 function getContentTypeLabel(contentType: WallContentType) {
   const ct = CONTENT_TYPES.find((c) => c.type === contentType);
   return ct?.label ?? 'Post';
+}
+
+function parseWallContentType(contentType: string): WallContentType {
+  switch (contentType) {
+    case 'thought':
+    case 'image':
+    case 'video':
+    case 'audio':
+      return contentType;
+    case 'post':
+    case 'text':
+    default:
+      return 'post';
+  }
+}
+
+function normalizeVisibility(visibility: string): PostVisibility {
+  return visibility === 'public' ? 'public' : 'contacts';
+}
+
+function formatVisibilityLabel(visibility: string) {
+  return normalizeVisibility(visibility) === 'public' ? 'Public' : 'Contacts only';
+}
+
+function VisibilityBadge({
+  visibility,
+  compact = false,
+}: {
+  visibility: string;
+  compact?: boolean;
+}) {
+  const normalized = normalizeVisibility(visibility);
+  return (
+    <span
+      className={`px-2 py-0.5 rounded-full ${compact ? 'text-[11px]' : 'text-xs'}`}
+      title={`Visibility: ${formatVisibilityLabel(visibility)}`}
+      style={{
+        background:
+          normalized === 'public'
+            ? 'hsl(var(--harbor-success) / 0.1)'
+            : 'hsl(var(--harbor-primary) / 0.1)',
+        color:
+          normalized === 'public' ? 'hsl(var(--harbor-success))' : 'hsl(var(--harbor-primary))',
+      }}
+    >
+      {formatVisibilityLabel(visibility)}
+    </span>
+  );
+}
+
+function buildRssConfig(identity: { peerId: string; displayName: string }) {
+  return {
+    base_url: `harbor://peer/${identity.peerId}`,
+    title: `${identity.displayName}'s Public Harbor Wall`,
+    description:
+      'Locally generated RSS XML containing only posts marked Public on this Harbor wall.',
+    max_items: 50,
+  };
+}
+
+function buildRssFilename(displayName: string) {
+  const safeName = displayName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `harbor-${safeName || 'wall'}-public-rss.xml`;
+}
+
+function getPreviewExplanation(
+  perspective: WallPreviewPerspective,
+  stats: WallVisibilityStats | null,
+) {
+  const publicCount = stats?.publicPosts ?? 0;
+  const contactsOnlyCount = stats?.contactsOnlyPosts ?? 0;
+  const totalCount = stats?.totalPosts ?? 0;
+
+  switch (perspective) {
+    case 'guest':
+      return `Guest preview is loaded from the backend as public-only: ${publicCount} public post${publicCount === 1 ? '' : 's'} are visible; ${contactsOnlyCount} contacts-only post${contactsOnlyCount === 1 ? '' : 's'} are hidden.`;
+    case 'contact':
+      return `Contact preview is loaded from the backend for contacts with WallRead: ${totalCount} post${totalCount === 1 ? '' : 's'} are visible (${publicCount} public + ${contactsOnlyCount} contacts-only).`;
+    case 'owner':
+      return `Owner preview is loaded from the backend and shows all ${totalCount} non-deleted local post${totalCount === 1 ? '' : 's'}, including contacts-only posts.`;
+  }
+
+  return '';
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'application/rss+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function WallPage() {
@@ -150,6 +281,12 @@ export function WallPage() {
   const [isComposing, setIsComposing] = useState(false);
   const [selectedContentType, setSelectedContentType] = useState<WallContentType>('post');
   const [selectedVisibility, setSelectedVisibility] = useState<PostVisibility>(defaultVisibility);
+  const [previewPerspective, setPreviewPerspective] = useState<WallPreviewPerspective>('guest');
+  const [previewPosts, setPreviewPosts] = useState<FeedItem[]>([]);
+  const [visibilityStats, setVisibilityStats] = useState<WallVisibilityStats | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [shareAction, setShareAction] = useState<ShareAction | null>(null);
   const [filterType, setFilterType] = useState<WallContentType | 'all'>('all');
   const [pendingMedia, setPendingMedia] = useState<
     { type: 'image' | 'video' | 'audio'; url: string; name: string; file: File }[]
@@ -177,6 +314,43 @@ export function WallPage() {
       loadPosts();
     }
   }, [identity, loadPosts]);
+
+  // Load the production backend wall preview and visibility counts.
+  useEffect(() => {
+    if (!identity) {
+      setPreviewPosts([]);
+      setVisibilityStats(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsPreviewLoading(true);
+    setPreviewError(null);
+
+    Promise.all([
+      feedService.getWallPreview(previewPerspective, 20),
+      feedService.getWallVisibilityStats(),
+    ])
+      .then(([preview, stats]) => {
+        if (cancelled) return;
+        setPreviewPosts(preview);
+        setVisibilityStats(stats);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        log.error('Failed to load wall preview', err);
+        setPreviewError('Could not load wall preview from the local backend.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [identity, previewPerspective, posts]);
 
   // Keep the composer aligned to the persisted default until the author starts a draft.
   useEffect(() => {
@@ -297,11 +471,95 @@ export function WallPage() {
     setPendingMedia(pendingMedia.filter((_, i) => i !== index));
   };
 
-  const handleShare = (postId: string) => {
+  const handleShare = async (postId: string) => {
     const post = posts.find((p) => p.postId === postId);
-    if (post) {
-      navigator.clipboard.writeText(post.content.slice(0, 100) + '...');
-      toast.success('Post link copied to clipboard');
+    if (!post || !identity) return;
+
+    try {
+      await navigator.clipboard.writeText(`harbor://post/${identity.peerId}/${post.postId}`);
+      toast.success(
+        post.visibility === 'public'
+          ? 'Public post reference copied'
+          : 'Contacts-only post reference copied. Only contacts with WallRead should receive it.',
+      );
+    } catch (err) {
+      log.error('Failed to copy post reference', err);
+      toast.error('Could not copy post reference');
+    }
+  };
+
+  const generatePublicRssXml = async () => {
+    if (!identity) {
+      throw new Error('Identity must be unlocked to generate RSS');
+    }
+    return feedService.generateRssFeed(buildRssConfig(identity));
+  };
+
+  const handleCopyRssXml = async () => {
+    setShareAction('rss-copy');
+    try {
+      const rssXml = await generatePublicRssXml();
+      await navigator.clipboard.writeText(rssXml);
+      toast.success('Public RSS XML copied. Contacts-only posts are excluded by the backend.');
+    } catch (err) {
+      log.error('Failed to copy RSS XML', err);
+      toast.error('Could not copy RSS XML');
+    } finally {
+      setShareAction(null);
+    }
+  };
+
+  const handleExportRssXml = async () => {
+    if (!identity) return;
+
+    setShareAction('rss-export');
+    try {
+      const rssXml = await generatePublicRssXml();
+      const filename = buildRssFilename(identity.displayName);
+      try {
+        const savedPath = await invoke<string>('save_to_downloads', {
+          filename,
+          content: rssXml,
+        });
+        toast.success(`Public RSS XML saved to ${savedPath}`);
+      } catch (saveErr) {
+        log.warn('Tauri save_to_downloads failed, falling back to browser download', saveErr);
+        downloadTextFile(filename, rssXml);
+        toast.success('Public RSS XML downloaded locally');
+      }
+    } catch (err) {
+      log.error('Failed to export RSS XML', err);
+      toast.error('Could not export RSS XML');
+    } finally {
+      setShareAction(null);
+    }
+  };
+
+  const handleCopyFeedUri = async () => {
+    setShareAction('feed-link');
+    try {
+      const feedUri = await feedService.getRssFeedUrl();
+      await navigator.clipboard.writeText(feedUri);
+      toast.success('Harbor public feed URI copied. RSS XML is generated locally, not hosted.');
+    } catch (err) {
+      log.error('Failed to copy public feed URI', err);
+      toast.error('Could not copy public feed URI');
+    } finally {
+      setShareAction(null);
+    }
+  };
+
+  const handleCopyContactInvite = async () => {
+    setShareAction('contact-link');
+    try {
+      const contactString = await getShareableContactString();
+      await navigator.clipboard.writeText(contactString);
+      toast.success('Contact invite copied. It contains public keys and reachable addresses only.');
+    } catch (err) {
+      log.error('Failed to copy contact invite', err);
+      toast.error('Could not copy contact invite. Start networking or connect to a relay first.');
+    } finally {
+      setShareAction(null);
     }
   };
 
@@ -681,6 +939,344 @@ export function WallPage() {
             </div>
           </div>
 
+          {/* Preview, RSS, and sharing surfaces */}
+          <section
+            className="rounded-lg overflow-hidden"
+            aria-labelledby="wall-preview-share-heading"
+            style={{
+              background: 'hsl(var(--harbor-bg-elevated))',
+              border: '1px solid hsl(var(--harbor-border-subtle))',
+            }}
+          >
+            <div
+              className="px-5 py-4 border-b"
+              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+            >
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h2
+                    id="wall-preview-share-heading"
+                    className="text-base font-semibold"
+                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                  >
+                    Preview and share your wall
+                  </h2>
+                  <p
+                    className="text-sm mt-1 max-w-2xl"
+                    style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                  >
+                    Preview modes and RSS are loaded through Harbor backend commands. Public RSS XML
+                    includes only posts marked Public; contacts-only posts are never copied or
+                    exported through the RSS actions.
+                  </p>
+                </div>
+                {visibilityStats && (
+                  <div className="grid grid-cols-3 gap-2 text-center min-w-[15rem]">
+                    <div
+                      className="rounded-lg px-3 py-2"
+                      style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                    >
+                      <p
+                        className="text-lg font-semibold"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        {visibilityStats.totalPosts}
+                      </p>
+                      <p
+                        className="text-[11px] uppercase tracking-wide"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      >
+                        Total
+                      </p>
+                    </div>
+                    <div
+                      className="rounded-lg px-3 py-2"
+                      style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                    >
+                      <p
+                        className="text-lg font-semibold"
+                        style={{ color: 'hsl(var(--harbor-success))' }}
+                      >
+                        {visibilityStats.publicPosts}
+                      </p>
+                      <p
+                        className="text-[11px] uppercase tracking-wide"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      >
+                        Public
+                      </p>
+                    </div>
+                    <div
+                      className="rounded-lg px-3 py-2"
+                      style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                    >
+                      <p
+                        className="text-lg font-semibold"
+                        style={{ color: 'hsl(var(--harbor-primary))' }}
+                      >
+                        {visibilityStats.contactsOnlyPosts}
+                      </p>
+                      <p
+                        className="text-[11px] uppercase tracking-wide"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      >
+                        Contacts
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-5 space-y-5">
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Wall preview mode">
+                  {PREVIEW_OPTIONS.map((option) => {
+                    const isSelected = previewPerspective === option.perspective;
+                    return (
+                      <button
+                        key={option.perspective}
+                        type="button"
+                        role="tab"
+                        aria-selected={isSelected}
+                        onClick={() => setPreviewPerspective(option.perspective)}
+                        className="px-3 py-2 rounded-lg text-left transition-all duration-200"
+                        style={{
+                          background: isSelected
+                            ? 'hsl(var(--harbor-primary) / 0.15)'
+                            : 'hsl(var(--harbor-surface-1))',
+                          border: isSelected
+                            ? '1px solid hsl(var(--harbor-primary) / 0.45)'
+                            : '1px solid hsl(var(--harbor-border-subtle))',
+                          color: isSelected
+                            ? 'hsl(var(--harbor-primary))'
+                            : 'hsl(var(--harbor-text-secondary))',
+                        }}
+                      >
+                        <span className="block text-xs font-semibold">{option.label}</span>
+                        <span
+                          className="block text-[11px] mt-0.5 max-w-[13rem]"
+                          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                        >
+                          {option.summary}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div
+                  className="rounded-lg px-4 py-3 text-sm"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    color: 'hsl(var(--harbor-text-secondary))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                  }}
+                >
+                  {getPreviewExplanation(previewPerspective, visibilityStats)}
+                </div>
+              </div>
+
+              <div
+                className="rounded-lg overflow-hidden"
+                data-testid="wall-preview-panel"
+                style={{ border: '1px solid hsl(var(--harbor-border-subtle))' }}
+              >
+                <div
+                  className="px-4 py-2.5 border-b flex items-center justify-between"
+                  style={{
+                    borderColor: 'hsl(var(--harbor-border-subtle))',
+                    background: 'hsl(var(--harbor-surface-1))',
+                  }}
+                >
+                  <p
+                    className="text-xs font-semibold uppercase tracking-wide"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  >
+                    {PREVIEW_OPTIONS.find((option) => option.perspective === previewPerspective)
+                      ?.label || 'Preview'}
+                  </p>
+                  <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    {previewPosts.length} visible
+                  </span>
+                </div>
+
+                {isPreviewLoading ? (
+                  <div className="px-4 py-8 text-center">
+                    <div
+                      className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin mx-auto mb-3"
+                      style={{
+                        borderColor: 'hsl(var(--harbor-primary))',
+                        borderTopColor: 'transparent',
+                      }}
+                    />
+                    <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                      Loading backend preview...
+                    </p>
+                  </div>
+                ) : previewError ? (
+                  <div className="px-4 py-6 text-sm" style={{ color: 'hsl(var(--harbor-error))' }}>
+                    {previewError}
+                  </div>
+                ) : previewPosts.length === 0 ? (
+                  <div
+                    className="px-4 py-6 text-sm text-center"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  >
+                    No posts are visible from this perspective.
+                  </div>
+                ) : (
+                  <div
+                    className="divide-y"
+                    style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+                  >
+                    {previewPosts.map((post) => {
+                      const contentType = parseWallContentType(post.contentType);
+                      return (
+                        <article
+                          key={post.postId}
+                          className="px-4 py-3"
+                          data-testid="wall-preview-post"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2 mb-1">
+                                <span
+                                  className="text-xs font-medium"
+                                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                                >
+                                  {getContentTypeLabel(contentType)}
+                                </span>
+                                <VisibilityBadge visibility={post.visibility} compact />
+                              </div>
+                              <p
+                                className="text-sm leading-relaxed whitespace-pre-wrap"
+                                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                              >
+                                {post.contentText || 'Media post'}
+                              </p>
+                            </div>
+                            <time
+                              className="text-xs flex-shrink-0"
+                              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                            >
+                              {formatDate(new Date(post.createdAt * 1000))}
+                            </time>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div
+                  className="rounded-lg p-4 space-y-3"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                  }}
+                >
+                  <div>
+                    <h3
+                      className="text-sm font-semibold"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      Public RSS XML
+                    </h3>
+                    <p
+                      className="text-xs mt-1"
+                      style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                    >
+                      Generated locally from public posts. Harbor does not host this as an HTTP URL.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyRssXml}
+                      disabled={!identity || shareAction !== null}
+                      className="px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                      style={{
+                        background: 'hsl(var(--harbor-primary) / 0.15)',
+                        color: 'hsl(var(--harbor-primary))',
+                        border: '1px solid hsl(var(--harbor-primary) / 0.35)',
+                      }}
+                    >
+                      {shareAction === 'rss-copy' ? 'Copying...' : 'Copy RSS XML'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportRssXml}
+                      disabled={!identity || shareAction !== null}
+                      className="px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                      style={{
+                        background: 'hsl(var(--harbor-surface-2))',
+                        color: 'hsl(var(--harbor-text-secondary))',
+                        border: '1px solid hsl(var(--harbor-border-subtle))',
+                      }}
+                    >
+                      {shareAction === 'rss-export' ? 'Exporting...' : 'Export .xml'}
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  className="rounded-lg p-4 space-y-3"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                  }}
+                >
+                  <div>
+                    <h3
+                      className="text-sm font-semibold"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      Shareable Harbor links
+                    </h3>
+                    <p
+                      className="text-xs mt-1"
+                      style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                    >
+                      Feed URIs identify your public wall. Contact invites include only public keys
+                      and reachable addresses, never private keys or backups.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyFeedUri}
+                      disabled={!identity || shareAction !== null}
+                      className="px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                      style={{
+                        background: 'hsl(var(--harbor-surface-2))',
+                        color: 'hsl(var(--harbor-text-secondary))',
+                        border: '1px solid hsl(var(--harbor-border-subtle))',
+                      }}
+                    >
+                      {shareAction === 'feed-link' ? 'Copying...' : 'Copy public feed URI'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyContactInvite}
+                      disabled={!identity || shareAction !== null}
+                      className="px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                      style={{
+                        background: 'hsl(var(--harbor-surface-2))',
+                        color: 'hsl(var(--harbor-text-secondary))',
+                        border: '1px solid hsl(var(--harbor-border-subtle))',
+                      }}
+                    >
+                      {shareAction === 'contact-link' ? 'Copying...' : 'Copy contact invite'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           {/* Filter bar */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
             <span
@@ -849,22 +1445,7 @@ export function WallPage() {
                             {getContentTypeLabel(post.contentType)}
                           </span>
                         )}
-                        <span
-                          className="px-2 py-0.5 rounded-full text-xs"
-                          title={`Visibility: ${post.visibility === 'public' ? 'Public' : 'Contacts only'}`}
-                          style={{
-                            background:
-                              post.visibility === 'public'
-                                ? 'hsl(var(--harbor-success) / 0.1)'
-                                : 'hsl(var(--harbor-primary) / 0.1)',
-                            color:
-                              post.visibility === 'public'
-                                ? 'hsl(var(--harbor-success))'
-                                : 'hsl(var(--harbor-primary))',
-                          }}
-                        >
-                          {post.visibility === 'public' ? 'Public' : 'Contacts only'}
-                        </span>
+                        <VisibilityBadge visibility={post.visibility} />
                       </div>
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                         {formatDate(post.timestamp)}
@@ -1024,29 +1605,7 @@ export function WallPage() {
                   )}
 
                   {/* Post media */}
-                  {post.media && post.media.length > 0 && (
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      {post.media.map((media, index) => (
-                        <div
-                          key={index}
-                          className="rounded-lg overflow-hidden"
-                          style={{ background: 'hsl(var(--harbor-surface-1))' }}
-                        >
-                          {media.type === 'image' ? (
-                            <img
-                              src={media.url}
-                              alt={media.name || 'Image'}
-                              className="max-w-full max-h-96 object-contain"
-                            />
-                          ) : media.type === 'video' ? (
-                            <video src={media.url} controls className="max-w-full max-h-96" />
-                          ) : (
-                            <audio src={media.url} controls className="w-72 max-w-full" />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {post.media && post.media.length > 0 && <PostMedia media={post.media} />}
                 </div>
 
                 {/* Post actions */}

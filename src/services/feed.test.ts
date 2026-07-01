@@ -92,5 +92,13 @@ describe('feedService', () => {
         },
       });
     });
+
+    it('should request the shareable Harbor feed URI without treating it as hosted RSS', async () => {
+      vi.mocked(invoke).mockResolvedValue('harbor://feed/peer-me');
+
+      await expect(feedService.getRssFeedUrl()).resolves.toBe('harbor://feed/peer-me');
+
+      expect(invoke).toHaveBeenCalledWith('get_rss_feed_url');
+    });
   });
 });

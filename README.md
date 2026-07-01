@@ -85,10 +85,13 @@ npm run tauri build
 
 ### Posting to Your Wall
 
-1. Go to the **My Wall** tab
-2. Use the composer at the top to create a post
+1. Go to the **Wall** tab
+2. Use the composer at the top to create a post and choose **Public** or **Contacts only** visibility
 3. You can add images and videos to your posts
-4. Posts are stored locally and shared with contacts who have permission
+4. Use **Preview and share your wall** to view guest/contact/owner perspectives, copy/export public-only RSS XML, copy your public feed URI, or copy a contact invite
+5. Posts are stored locally and shared with contacts who have permission
+
+RSS XML is generated locally from public posts only; Harbor does not currently host RSS over HTTP. See [Wall preview, RSS, and share surfaces](docs/wall-preview-rss-share.md) for the exact visibility behavior.
 
 ### Viewing Your Feed
 

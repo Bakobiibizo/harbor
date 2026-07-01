@@ -1,5 +1,6 @@
 export { useAccountsStore } from './accounts';
 export { useBoardsStore } from './boards';
+export { useCallingStore } from './calling';
 export { useIdentityStore } from './identity';
 export { useNetworkStore } from './network';
 export { useMessagingStore } from './messaging';

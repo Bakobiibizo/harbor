@@ -75,4 +75,9 @@ export const feedService = {
   async generateRssFeed(config?: RssFeedConfig): Promise<string> {
     return invoke<string>('generate_rss_feed', { config });
   },
+
+  /** Get the Harbor app feed URI for sharing; this is not a hosted RSS URL. */
+  async getRssFeedUrl(): Promise<string> {
+    return invoke<string>('get_rss_feed_url');
+  },
 };

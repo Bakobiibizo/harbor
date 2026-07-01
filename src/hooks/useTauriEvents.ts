@@ -2,7 +2,13 @@ import { useEffect, useRef } from 'react';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import toast from 'react-hot-toast';
 import type { NetworkEvent } from '../types';
-import { useNetworkStore, useContactsStore, useMessagingStore, useFeedStore } from '../stores';
+import {
+  useNetworkStore,
+  useContactsStore,
+  useMessagingStore,
+  useFeedStore,
+  useCallingStore,
+} from '../stores';
 import { mediaService } from '../services/media';
 
 /**
@@ -175,9 +181,13 @@ export function useTauriEvents() {
           console.log(
             `[Network] Call signaling ${event.message.payload.type} from ${event.peer_id}`,
           );
-          window.dispatchEvent(
-            new CustomEvent('harbor:calling-signaling', { detail: event }),
-          );
+          useCallingStore
+            .getState()
+            .handleBackendEvent(event)
+            .catch((error) => {
+              console.warn('[Network] Failed to refresh call state after signaling event:', error);
+            });
+          window.dispatchEvent(new CustomEvent('harbor:calling-signaling', { detail: event }));
           break;
 
         case 'call_signaling_error':
