@@ -98,6 +98,22 @@ pub struct PostSummaryProto {
     pub created_at: i64,
 }
 
+/// Signed wall social event carried by direct content sync.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WallSocialEventProto {
+    pub event_id: String,
+    pub event_type: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub author_name: Option<String>,
+    pub comment_id: Option<String>,
+    pub content: Option<String>,
+    pub reaction_type: Option<String>,
+    pub timestamp: i64,
+    pub payload_cbor: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
 /// Content sync request (wire protocol)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -114,6 +130,15 @@ pub enum ContentSyncRequest {
     FetchPost {
         post_id: String,
         include_media: bool,
+        requester_peer_id: String,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
+    /// Fetch signed social events for a set of posts after a timestamp cursor.
+    FetchSocialEvents {
+        post_ids: Vec<String>,
+        after_timestamp: i64,
+        limit: u32,
         requester_peer_id: String,
         timestamp: i64,
         signature: Vec<u8>,
@@ -145,6 +170,15 @@ pub enum ContentSyncResponse {
         signature: Vec<u8>,
         media_hashes: Vec<String>,
         media_items: Vec<WallPostMediaItem>,
+    },
+    /// Signed wall social events authorized for the requester.
+    SocialEvents {
+        responder_peer_id: String,
+        events: Vec<WallSocialEventProto>,
+        has_more: bool,
+        next_timestamp: i64,
+        timestamp: i64,
+        signature: Vec<u8>,
     },
     /// Error response
     Error { error: String },

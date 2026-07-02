@@ -2,9 +2,18 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| Version | Supported |
+| ------- | --------- |
+| 1.3.x   | :white_check_mark: |
+| < 1.3   | :x: |
+
+## Calls, Relay, and Wall Sync Security Notes
+
+- Call signaling is signed with the local Ed25519 identity and transported through Harbor/libp2p paths. WebRTC media remains DTLS-SRTP encrypted between peers.
+- Harbor/libp2p relays are not WebRTC TURN/SFU/MCU media relays. Strict/symmetric NAT media connectivity requires explicit operator-configured TURN; static TURN credentials must not be committed or shipped in client binaries.
+- Group-call claims are limited by ADR-0001 to a 4-participant relay-assisted mesh. Larger rooms, SFU/MCU routing, recording, and screen sharing require new implementation, validation, and security review before release claims.
+- Wall sync must enforce signed visibility and `WallRead` grants for contacts-only posts across direct and relay paths. Mock peers/walls are demo fixtures and are not security validation evidence.
+- Release readiness requires the automated gates plus the multi-profile validation artifacts referenced from `README.md`; do not treat unit tests alone as proof of production call or wall-sync security.
 
 ## Known Vulnerabilities
 

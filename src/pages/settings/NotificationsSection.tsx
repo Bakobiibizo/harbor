@@ -22,10 +22,7 @@ export function NotificationsSection() {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        title="Notifications"
-        description="Control sound alerts for incoming events"
-      />
+      <SectionHeader title="Notifications" description="Control sound alerts for incoming events" />
 
       <SettingsCard>
         <div className="flex items-center justify-between">
@@ -77,8 +74,8 @@ export function NotificationsSection() {
               style={{ background: 'hsl(var(--harbor-success))' }}
             />
             <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Board posts</span> —
-              muted when viewing that board
+              <span style={{ color: 'hsl(var(--harbor-text-primary))' }}>Board posts</span> — muted
+              when viewing that board
             </p>
           </div>
         </div>

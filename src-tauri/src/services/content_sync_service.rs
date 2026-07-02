@@ -14,7 +14,7 @@ use crate::services::posts_service::{
 use crate::services::{
     verify, ContactsService, IdentityService, PermissionsService, PostSummary,
     SignableContentManifestRequest, SignableContentManifestResponse, SignablePost,
-    SignedPostMediaMetadata,
+    SignablePostDelete, SignedPostMediaMetadata,
 };
 
 /// Service for syncing content between peers
@@ -440,13 +440,78 @@ impl ContentSyncService {
             posts_to_fetch.push(summary.post_id.clone());
         }
 
-        // Store the cursor for future requests
-        self.store_sync_cursor(responder_peer_id, next_cursor)?;
+        // The caller advances durable cursors only after any required post/media
+        // metadata storage succeeds. If no fetch is required, the signed manifest
+        // response is already locally satisfied and can advance immediately.
+        if posts_to_fetch.is_empty() {
+            self.store_sync_cursor(responder_peer_id, next_cursor)?;
+        }
 
         Ok(posts_to_fetch)
     }
 
     /// Store a post received from a peer
+    pub fn store_remote_post_delete(
+        &self,
+        post_id: &str,
+        author_peer_id: &str,
+        lamport_clock: u64,
+        deleted_at: i64,
+        signature: &[u8],
+    ) -> Result<()> {
+        let author_public_key = self
+            .contacts_service
+            .get_public_key(author_peer_id)?
+            .ok_or_else(|| AppError::NotFound("Author not in contacts".to_string()))?;
+
+        let signable = SignablePostDelete {
+            post_id: post_id.to_string(),
+            author_peer_id: author_peer_id.to_string(),
+            lamport_clock,
+            deleted_at,
+        };
+
+        let verifying_key = VerifyingKey::from_bytes(
+            author_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+
+        if !verify(&verifying_key, &signable, signature)? {
+            return Err(AppError::Crypto(
+                "Invalid post delete signature".to_string(),
+            ));
+        }
+
+        self.db
+            .update_lamport_clock(author_peer_id, lamport_clock as i64)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+
+        if !PostsRepository::delete_post_with_tombstone(
+            &self.db,
+            post_id,
+            deleted_at,
+            lamport_clock as i64,
+            signature,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?
+        {
+            PostsRepository::insert_remote_tombstone(
+                &self.db,
+                post_id,
+                author_peer_id,
+                lamport_clock as i64,
+                deleted_at,
+                signature,
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
     pub fn store_remote_post(&self, params: &RemotePostParams<'_>) -> Result<()> {
         let post_id = params.post_id;
         let author_peer_id = params.author_peer_id;
@@ -491,6 +556,22 @@ impl ContentSyncService {
                 visibility
             ))
         })?;
+
+        let local_peer_id = self
+            .identity_service
+            .get_identity_info()?
+            .map(|identity| identity.peer_id)
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+        if vis == PostVisibility::Contacts
+            && author_peer_id != local_peer_id
+            && !self
+                .permissions_service
+                .we_have_capability(author_peer_id, Capability::WallRead)?
+        {
+            return Err(AppError::PermissionDenied(
+                "Rejected contacts-only post without WallRead permission".to_string(),
+            ));
+        }
 
         let existing_post = PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
@@ -623,7 +704,7 @@ impl ContentSyncService {
     }
 
     /// Store sync cursor for a peer
-    fn store_sync_cursor(&self, peer_id: &str, cursor: &HashMap<String, u64>) -> Result<()> {
+    pub fn store_sync_cursor(&self, peer_id: &str, cursor: &HashMap<String, u64>) -> Result<()> {
         let identity = self
             .identity_service
             .get_identity()?
@@ -644,6 +725,18 @@ impl ContentSyncService {
         }
 
         Ok(())
+    }
+
+    /// Store one author cursor after verified post/media metadata storage.
+    pub fn store_author_sync_cursor(
+        &self,
+        source_peer_id: &str,
+        author_peer_id: &str,
+        lamport_clock: u64,
+    ) -> Result<()> {
+        self.db
+            .update_sync_cursor(source_peer_id, "posts", author_peer_id, lamport_clock)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))
     }
 
     /// Get stored sync cursor for a peer
@@ -837,6 +930,60 @@ mod tests {
 
         assert_eq!(response.posts.len(), 1);
         assert_eq!(response.posts[0].post_id, "local-public");
+    }
+
+    #[test]
+    fn test_store_remote_contacts_post_without_wall_read_is_rejected() {
+        let (service, db, _identity_service, _peer_id) = create_test_env();
+        let (peer_signing, peer_verifying) =
+            crate::services::CryptoService::generate_ed25519_keypair();
+        let peer_peer_id = "12D3KooWRemotePeer".to_string();
+        ContactsRepository::add_contact(
+            &db,
+            &ContactData {
+                peer_id: peer_peer_id.clone(),
+                public_key: peer_verifying.to_bytes().to_vec(),
+                x25519_public: vec![0u8; 32],
+                display_name: "Remote Peer".to_string(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+
+        let signable = crate::services::SignablePost {
+            post_id: "remote-contacts-no-grant".to_string(),
+            author_peer_id: peer_peer_id.clone(),
+            content_type: "text".to_string(),
+            content_text: Some("Contacts only".to_string()),
+            media_hashes: vec![],
+            visibility: "contacts".to_string(),
+            lamport_clock: 1,
+            created_at: 1000,
+        };
+        let signature = crate::services::sign(&peer_signing, &signable).unwrap();
+
+        let result = service.store_remote_post(&RemotePostParams {
+            post_id: "remote-contacts-no-grant",
+            author_peer_id: &peer_peer_id,
+            content_type: "text",
+            content_text: Some("Contacts only"),
+            visibility: "contacts",
+            lamport_clock: 1,
+            created_at: 1000,
+            signature: &signature,
+            media_hashes: &[],
+            media_items: &[],
+        });
+
+        assert!(
+            matches!(result, Err(AppError::PermissionDenied(message)) if message.contains("WallRead"))
+        );
+        assert!(
+            PostsRepository::get_by_post_id(&db, "remote-contacts-no-grant")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

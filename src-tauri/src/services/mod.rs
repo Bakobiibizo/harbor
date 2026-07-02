@@ -11,6 +11,7 @@ pub mod messaging_service;
 pub mod permissions_service;
 pub mod posts_service;
 pub mod signing;
+pub mod wall_social_service;
 
 pub use accounts_service::AccountsService;
 pub use board_service::BoardService;
@@ -48,6 +49,7 @@ pub use signing::{
     SignableDirectMessage,
     // Wall post relay sync
     SignableGetWallPosts,
+    SignableGetWallSocialEvents,
     // Identity messages
     SignableIdentityRequest,
     SignableIdentityResponse,
@@ -69,7 +71,13 @@ pub use signing::{
     SignableSignalingIce,
     // Signaling messages (voice calls)
     SignableSignalingOffer,
+    SignableWallCommentCreate,
+    SignableWallCommentDelete,
     SignableWallPostDelete,
     SignableWallPostSubmit,
+    SignableWallReactionAdd,
+    SignableWallReactionRemove,
+    SignableWallSocialEventSubmit,
     SignedPostMediaMetadata,
 };
+pub use wall_social_service::{IncomingWallSocialEventParams, WallSocialService};

@@ -228,7 +228,9 @@ export const useMessagingStore = create<MessagingState>()(
           // Refresh conversations list
           get()
             .loadConversations()
-            .catch((err) => log.error('Failed to refresh conversations after clearing history', err));
+            .catch((err) =>
+              log.error('Failed to refresh conversations after clearing history', err),
+            );
         } catch (error) {
           log.error('Failed to clear conversation history', error);
           throw error;

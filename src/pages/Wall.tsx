@@ -15,6 +15,7 @@ import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
 import { PostMedia } from '../components/common/PostMedia';
 import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
+import type { Comment } from '../services/comments';
 
 const log = createLogger('Wall');
 
@@ -263,16 +264,151 @@ function downloadTextFile(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
+function formatCommentDate(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function WallCommentsSection({
+  comments,
+  isLoading,
+  currentPeerId,
+  draft,
+  isSubmitting,
+  onDraftChange,
+  onSubmit,
+  onDelete,
+}: {
+  comments: Comment[];
+  isLoading: boolean;
+  currentPeerId?: string;
+  draft: string;
+  isSubmitting: boolean;
+  onDraftChange: (value: string) => void;
+  onSubmit: () => void;
+  onDelete: (commentId: string) => void;
+}) {
+  return (
+    <div
+      className="px-5 py-4 border-t space-y-4"
+      style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+    >
+      <div className="flex gap-3">
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          rows={2}
+          placeholder="Add a comment..."
+          className="flex-1 resize-none rounded-lg px-3 py-2 text-sm"
+          style={{
+            background: 'hsl(var(--harbor-surface-1))',
+            border: '1px solid hsl(var(--harbor-border-subtle))',
+            color: 'hsl(var(--harbor-text-primary))',
+            outline: 'none',
+          }}
+        />
+        <button
+          type="button"
+          disabled={isSubmitting || !draft.trim()}
+          onClick={onSubmit}
+          className="self-end px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{
+            background:
+              'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+            color: 'white',
+          }}
+        >
+          {isSubmitting ? 'Posting...' : 'Comment'}
+        </button>
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+          Loading comments...
+        </p>
+      ) : comments.length === 0 ? (
+        <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+          No comments yet.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {comments.map((comment) => (
+            <div key={comment.commentId} className="flex gap-3">
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0"
+                style={{
+                  background:
+                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                }}
+              >
+                {comment.authorName
+                  .split(' ')
+                  .map((part) => part[0])
+                  .join('')
+                  .toUpperCase()
+                  .slice(0, 2) || '??'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className="text-sm font-medium"
+                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                  >
+                    {comment.authorName}
+                  </span>
+                  <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    {formatCommentDate(comment.createdAt)}
+                  </span>
+                  {comment.authorPeerId === currentPeerId && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(comment.commentId)}
+                      className="text-xs hover:underline"
+                      style={{ color: 'hsl(var(--harbor-error))' }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+                <p
+                  className="text-sm whitespace-pre-wrap break-words mt-1"
+                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                >
+                  {comment.content}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WallPage() {
   const { state } = useIdentityStore();
   const {
     posts,
     isLoading,
+    isSyncingRelay,
+    lastSyncAt,
+    syncError,
+    syncStatus,
     loadPosts,
     createPost,
     updatePost,
     deletePost,
     likePost,
+    commentsByPost,
+    expandedComments,
+    loadingComments,
+    toggleComments,
+    addComment,
+    deleteComment,
     editingPostId,
     setEditingPost,
   } = useWallStore();
@@ -293,6 +429,8 @@ export function WallPage() {
   >([]);
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [submittingComments, setSubmittingComments] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaTypeRef = useRef<'image' | 'video' | 'audio'>('image');
 
@@ -412,8 +550,13 @@ export function WallPage() {
     }
   };
 
-  const handleLike = (postId: string) => {
-    likePost(postId);
+  const handleLike = async (postId: string) => {
+    try {
+      await likePost(postId);
+    } catch (err) {
+      log.error('Failed to update reaction', err);
+      toast.error('Could not update reaction');
+    }
   };
 
   const handleAddMedia = (type: 'image' | 'video' | 'audio') => {
@@ -600,6 +743,37 @@ export function WallPage() {
     }
   };
 
+  const handleSubmitComment = async (postId: string) => {
+    const content = commentDrafts[postId]?.trim() ?? '';
+    if (!content) return;
+
+    setSubmittingComments((current) => new Set(current).add(postId));
+    try {
+      await addComment(postId, content);
+      setCommentDrafts((current) => ({ ...current, [postId]: '' }));
+      toast.success('Comment added');
+    } catch (err) {
+      log.error('Failed to add comment', err);
+      toast.error('Could not add comment');
+    } finally {
+      setSubmittingComments((current) => {
+        const next = new Set(current);
+        next.delete(postId);
+        return next;
+      });
+    }
+  };
+
+  const handleDeleteComment = async (postId: string, commentId: string) => {
+    try {
+      await deleteComment(postId, commentId);
+      toast.success('Comment deleted');
+    } catch (err) {
+      log.error('Failed to delete comment', err);
+      toast.error('Could not delete comment');
+    }
+  };
+
   return (
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       <input
@@ -621,6 +795,13 @@ export function WallPage() {
           </h1>
           <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
             Your personal space for thoughts and creations
+          </p>
+          <p className="text-xs mt-1" style={{ color: syncStatus === 'partial_failure' ? 'hsl(var(--harbor-warning))' : 'hsl(var(--harbor-text-tertiary))' }}>
+            {isSyncingRelay
+              ? 'Syncing to relay… local posts are already saved.'
+              : lastSyncAt
+                ? `Last relay sync ${formatDate(new Date(lastSyncAt * 1000))}${syncError ? ' · Partial sync failure, retry by posting or manual sync.' : ''}`
+                : 'Not synced to relay yet. Local posts remain available.'}
           </p>
         </div>
       </header>
@@ -1639,9 +1820,13 @@ export function WallPage() {
                   </button>
 
                   <button
-                    onClick={() => toast('Comments coming soon!')}
+                    onClick={() => toggleComments(post.postId)}
                     className="flex items-center gap-2 transition-colors duration-200"
-                    style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    style={{
+                      color: expandedComments.has(post.postId)
+                        ? 'hsl(var(--harbor-primary))'
+                        : 'hsl(var(--harbor-text-secondary))',
+                    }}
                   >
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path
@@ -1670,6 +1855,21 @@ export function WallPage() {
                     <span className="text-sm">Share</span>
                   </button>
                 </div>
+
+                {expandedComments.has(post.postId) && (
+                  <WallCommentsSection
+                    comments={commentsByPost[post.postId] || []}
+                    isLoading={loadingComments.has(post.postId)}
+                    currentPeerId={identity?.peerId}
+                    draft={commentDrafts[post.postId] || ''}
+                    isSubmitting={submittingComments.has(post.postId)}
+                    onDraftChange={(value) =>
+                      setCommentDrafts((current) => ({ ...current, [post.postId]: value }))
+                    }
+                    onSubmit={() => handleSubmitComment(post.postId)}
+                    onDelete={(commentId) => handleDeleteComment(post.postId, commentId)}
+                  />
+                )}
               </article>
             ))
           )}

@@ -3,6 +3,9 @@ import { useWallStore } from './wall';
 import { useSettingsStore } from './settings';
 import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
+import { commentsService } from '../services/comments';
+import { feedService } from '../services/feed';
+import { likesService } from '../services/likes';
 
 vi.mock('../services/posts', () => ({
   postsService: {
@@ -22,9 +25,28 @@ vi.mock('../services/media', () => ({
   },
 }));
 
+vi.mock('../services/comments', () => ({
+  commentsService: {
+    getCommentCounts: vi.fn(),
+    getComments: vi.fn(),
+    addComment: vi.fn(),
+    deleteComment: vi.fn(),
+  },
+}));
+
+vi.mock('../services/likes', () => ({
+  likesService: {
+    getPostsLikesBatch: vi.fn(),
+    likePost: vi.fn(),
+    unlikePost: vi.fn(),
+  },
+}));
+
 vi.mock('../services/feed', () => ({
   feedService: {
     syncWallToRelay: vi.fn(() => Promise.resolve()),
+    syncWallSocialEventsToRelay: vi.fn(() => Promise.resolve(0)),
+    fetchWallSocialEvents: vi.fn(() => Promise.resolve()),
   },
 }));
 
@@ -48,9 +70,18 @@ describe('useWallStore', () => {
       isLoading: false,
       error: null,
       editingPostId: null,
+      commentsByPost: {},
+      expandedComments: new Set(),
+      loadingComments: new Set(),
     });
     useSettingsStore.setState({ defaultVisibility: 'contacts' });
     vi.clearAllMocks();
+    vi.mocked(commentsService.getCommentCounts).mockResolvedValue([]);
+    vi.mocked(commentsService.getComments).mockResolvedValue([]);
+    vi.mocked(likesService.getPostsLikesBatch).mockResolvedValue([]);
+    vi.mocked(feedService.syncWallToRelay).mockResolvedValue(undefined);
+    vi.mocked(feedService.syncWallSocialEventsToRelay).mockResolvedValue(0);
+    vi.mocked(feedService.fetchWallSocialEvents).mockResolvedValue(undefined);
   });
 
   describe('loadPosts', () => {
@@ -67,6 +98,7 @@ describe('useWallStore', () => {
       expect(state.posts[0].content).toBe('Hello world');
       expect(state.posts[0].contentType).toBe('post'); // 'text' maps to 'post'
       expect(state.posts[0].likes).toBe(0);
+      expect(state.posts[0].comments).toBe(0);
       expect(state.posts[0].liked).toBe(false);
     });
 
@@ -149,6 +181,28 @@ describe('useWallStore', () => {
       // Should still load the post, just without media
       expect(useWallStore.getState().posts).toHaveLength(1);
       expect(useWallStore.getState().posts[0].media).toBeUndefined();
+    });
+
+    it('should load persisted backend comment and like counts', async () => {
+      vi.mocked(postsService.getMyPosts).mockResolvedValue([mockBackendPost]);
+      vi.mocked(postsService.getPostMedia).mockResolvedValue([]);
+      vi.mocked(likesService.getPostsLikesBatch).mockResolvedValue([
+        { postId: 'post-1', totalLikes: 3, userHasLiked: true },
+      ]);
+      vi.mocked(commentsService.getCommentCounts).mockResolvedValue([
+        { postId: 'post-1', count: 2 },
+      ]);
+
+      await useWallStore.getState().loadPosts();
+
+      expect(likesService.getPostsLikesBatch).toHaveBeenCalledWith(['post-1']);
+      expect(commentsService.getCommentCounts).toHaveBeenCalledWith(['post-1']);
+      expect(feedService.fetchWallSocialEvents).toHaveBeenCalledWith('peer-abc', ['post-1']);
+      expect(useWallStore.getState().posts[0]).toMatchObject({
+        likes: 3,
+        liked: true,
+        comments: 2,
+      });
     });
   });
 
@@ -420,36 +474,138 @@ describe('useWallStore', () => {
       lamportClock: 0,
     });
 
-    it('should toggle like status on', () => {
+    it('should toggle like status on using backend reaction state', async () => {
       useWallStore.setState({ posts: [makePost('post-1', false, 0)] });
+      vi.mocked(likesService.likePost).mockResolvedValue({
+        postId: 'post-1',
+        totalLikes: 1,
+        userHasLiked: true,
+      });
 
-      useWallStore.getState().likePost('post-1');
+      await useWallStore.getState().likePost('post-1');
 
+      expect(likesService.likePost).toHaveBeenCalledWith('post-1');
+      expect(feedService.syncWallSocialEventsToRelay).toHaveBeenCalledTimes(1);
       const post = useWallStore.getState().posts[0];
       expect(post.liked).toBe(true);
       expect(post.likes).toBe(1);
     });
 
-    it('should toggle like status off', () => {
+    it('should toggle like status off using backend reaction state', async () => {
       useWallStore.setState({ posts: [makePost('post-1', true, 1)] });
+      vi.mocked(likesService.unlikePost).mockResolvedValue({
+        postId: 'post-1',
+        totalLikes: 0,
+        userHasLiked: false,
+      });
 
-      useWallStore.getState().likePost('post-1');
+      await useWallStore.getState().likePost('post-1');
 
+      expect(likesService.unlikePost).toHaveBeenCalledWith('post-1');
+      expect(feedService.syncWallSocialEventsToRelay).toHaveBeenCalledTimes(1);
       const post = useWallStore.getState().posts[0];
       expect(post.liked).toBe(false);
       expect(post.likes).toBe(0);
     });
 
-    it('should only affect the target post', () => {
+    it('should only affect the target post', async () => {
       useWallStore.setState({
         posts: [makePost('post-1', false, 0), makePost('post-2', false, 0)],
       });
+      vi.mocked(likesService.likePost).mockResolvedValue({
+        postId: 'post-1',
+        totalLikes: 1,
+        userHasLiked: true,
+      });
 
-      useWallStore.getState().likePost('post-1');
+      await useWallStore.getState().likePost('post-1');
 
       const posts = useWallStore.getState().posts;
       expect(posts[0].liked).toBe(true);
       expect(posts[1].liked).toBe(false);
+    });
+  });
+
+  describe('comments', () => {
+    const makePost = (postId: string, comments = 0) => ({
+      postId,
+      content: 'test',
+      contentType: 'post' as const,
+      timestamp: new Date(),
+      likes: 0,
+      comments,
+      liked: false,
+      authorPeerId: 'peer-abc',
+      visibility: 'contacts' as const,
+      lamportClock: 0,
+    });
+
+    it('should expand comments and load thread from backend', () => {
+      vi.mocked(commentsService.getComments).mockResolvedValue([]);
+
+      useWallStore.getState().toggleComments('post-1');
+
+      expect(useWallStore.getState().expandedComments.has('post-1')).toBe(true);
+      expect(commentsService.getComments).toHaveBeenCalledWith('post-1');
+    });
+
+    it('should add comments and update counts', async () => {
+      useWallStore.setState({ posts: [makePost('post-1')] });
+      const comment = {
+        id: 1,
+        commentId: 'comment-1',
+        postId: 'post-1',
+        authorPeerId: 'peer-abc',
+        authorName: 'Alice',
+        content: 'Great post',
+        createdAt: 1700000000,
+        deletedAt: null,
+      };
+      vi.mocked(commentsService.addComment).mockResolvedValue(comment);
+
+      await useWallStore.getState().addComment('post-1', 'Great post');
+
+      expect(commentsService.addComment).toHaveBeenCalledWith('post-1', 'Great post');
+      expect(feedService.syncWallSocialEventsToRelay).toHaveBeenCalledTimes(1);
+      expect(useWallStore.getState().commentsByPost['post-1']).toEqual([comment]);
+      expect(useWallStore.getState().posts[0].comments).toBe(1);
+    });
+
+    it('should delete comments and update counts', async () => {
+      useWallStore.setState({
+        posts: [makePost('post-1', 2)],
+        commentsByPost: {
+          'post-1': [
+            {
+              id: 1,
+              commentId: 'comment-1',
+              postId: 'post-1',
+              authorPeerId: 'peer-abc',
+              authorName: 'Alice',
+              content: 'First',
+              createdAt: 1700000000,
+              deletedAt: null,
+            },
+            {
+              id: 2,
+              commentId: 'comment-2',
+              postId: 'post-1',
+              authorPeerId: 'peer-def',
+              authorName: 'Bob',
+              content: 'Second',
+              createdAt: 1700000100,
+              deletedAt: null,
+            },
+          ],
+        },
+      });
+      vi.mocked(commentsService.deleteComment).mockResolvedValue(true);
+
+      await useWallStore.getState().deleteComment('post-1', 'comment-1');
+
+      expect(commentsService.deleteComment).toHaveBeenCalledWith('comment-1');
+      expect(useWallStore.getState().commentsByPost['post-1']).toHaveLength(1);
+      expect(useWallStore.getState().posts[0].comments).toBe(1);
     });
   });
 

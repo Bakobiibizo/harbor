@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FeedIcon, EllipsisIcon } from '../components/icons';
-import type { PostMediaItem } from '../components/common/PostMedia';
+import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
 import { useFeedStore, useContactsStore, useWallStore } from '../stores';
 import { postsService } from '../services/posts';
 import { createLogger } from '../utils/logger';
@@ -180,7 +181,10 @@ function ShareModal({
           className="px-5 py-4 flex items-center justify-between border-b"
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
-          <h3 className="text-lg font-semibold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+          <h3
+            className="text-lg font-semibold"
+            style={{ color: 'hsl(var(--harbor-text-primary))' }}
+          >
             Share to Wall
           </h3>
           <button
@@ -189,7 +193,12 @@ function ShareModal({
             style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -232,7 +241,10 @@ function ShareModal({
                   .slice(0, 2)}
               </div>
               <div>
-                <p className="font-medium text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                <p
+                  className="font-medium text-sm"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
                   {post.author.name}
                 </p>
               </div>
@@ -265,7 +277,8 @@ function ShareModal({
             disabled={isSharing}
             className="px-5 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-60"
             style={{
-              background: 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+              background:
+                'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
               color: 'white',
               boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
             }}
@@ -325,10 +338,7 @@ function CommentsSection({
   };
 
   return (
-    <div
-      className="border-t"
-      style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-    >
+    <div className="border-t" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
       {/* Comments list */}
       <div className="px-5 pt-3 pb-1">
         {isLoading ? (
@@ -340,10 +350,7 @@ function CommentsSection({
                 borderTopColor: 'hsl(var(--harbor-primary))',
               }}
             />
-            <span
-              className="ml-2 text-xs"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
+            <span className="ml-2 text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               Loading comments...
             </span>
           </div>
@@ -478,8 +485,12 @@ interface UnifiedPost {
 type FeedTab = 'all' | 'saved';
 
 export function FeedPage() {
+  const navigate = useNavigate();
   const {
     feedItems,
+    savedPostIds,
+    hiddenPostIds,
+    snoozedAuthors,
     loadFeed,
     refreshFeed,
     comments,
@@ -491,84 +502,99 @@ export function FeedPage() {
     deleteComment,
     syncFromRelay,
     isSyncingRelay,
-} = useFeedStore();
-const { contacts, loadContacts } = useContactsStore();
-const { shareToWall } = useWallStore();
-const identityState = useIdentityStore((s) => s.state);
-const currentPeerId =
-  identityState.status === 'unlocked' || identityState.status === 'locked'
-    ? identityState.identity.peerId
-    : '';
-const [isRefreshing, setIsRefreshing] = useState(false);
-const [activeTab, setActiveTab] = useState<FeedTab>('all');
-const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-const [sharingPost, setSharingPost] = useState<UnifiedPost | null>(null);
+    lastSyncAt,
+    syncError,
+    syncStatus,
+    getSavedFeedItems,
+    toggleLike,
+    toggleSave,
+    isPostSaved,
+    hidePost,
+    unhidePost,
+    snoozeAuthor,
+    unsnoozeAuthor,
+    clearHiddenPosts,
+    clearSnoozedAuthors,
+  } = useFeedStore();
+  const { contacts, loadContacts } = useContactsStore();
+  const { shareToWall } = useWallStore();
+  const identityState = useIdentityStore((s) => s.state);
+  const currentPeerId =
+    identityState.status === 'unlocked' || identityState.status === 'locked'
+      ? identityState.identity.peerId
+      : '';
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<FeedTab>('all');
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [sharingPost, setSharingPost] = useState<UnifiedPost | null>(null);
 
-// Load real feed and contacts on mount, plus trigger relay sync
-useEffect(() => {
-  loadFeed().catch((err) => log.error('Failed to load feed', err));
-  loadContacts().catch((err) => log.error('Failed to load contacts', err));
-  // Best-effort relay sync on mount
-  syncFromRelay().catch((err) => log.warn('Relay sync on mount failed', err));
-}, [loadFeed, loadContacts, syncFromRelay]);
+  // Load real feed and contacts on mount, plus trigger relay sync
+  useEffect(() => {
+    loadFeed().catch((err) => log.error('Failed to load feed', err));
+    loadContacts().catch((err) => log.error('Failed to load contacts', err));
+    // Best-effort relay sync on mount
+    syncFromRelay().catch((err) => log.warn('Relay sync on mount failed', err));
+  }, [loadFeed, loadContacts, syncFromRelay]);
 
-// Poll relay for new posts every 30 seconds
-useEffect(() => {
-  const interval = setInterval(() => {
-    syncFromRelay().catch((err) => log.warn('Periodic relay sync failed', err));
-  }, RELAY_SYNC_INTERVAL_MS);
-  return () => clearInterval(interval);
-}, [syncFromRelay]);
+  // Poll relay for new posts every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      syncFromRelay().catch((err) => log.warn('Periodic relay sync failed', err));
+    }, RELAY_SYNC_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [syncFromRelay]);
 
-// Track media for feed posts (fetched asynchronously)
-const [postMediaMap, setPostMediaMap] = useState<Record<string, PostMediaItem[]>>({});
+  // Track media for feed posts (fetched asynchronously)
+  const [postMediaMap, setPostMediaMap] = useState<Record<string, PostMediaItem[]>>({});
 
-// Fetch media for all feed items when they change
-useEffect(() => {
-  let cancelled = false;
-  const fetchMedia = async () => {
-    const mediaMap: Record<string, PostMediaItem[]> = {};
-    await Promise.allSettled(
-      feedItems.map(async (item) => {
-        try {
-          const mediaList = await postsService.getPostMedia(item.postId);
-          if (mediaList.length > 0 && !cancelled) {
-            mediaMap[item.postId] = mediaList.map((m) => ({
-              type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as 'image' | 'video' | 'audio',
-              url: m.mediaHash,
-              name: m.fileName,
-            }));
+  // Fetch media for all feed items when they change
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMedia = async () => {
+      const mediaMap: Record<string, PostMediaItem[]> = {};
+      await Promise.allSettled(
+        feedItems.map(async (item) => {
+          try {
+            const mediaList = await postsService.getPostMedia(item.postId);
+            if (mediaList.length > 0 && !cancelled) {
+              mediaMap[item.postId] = mediaList.map((m) => ({
+                type: (m.mediaType === 'video'
+                  ? 'video'
+                  : m.mediaType === 'audio'
+                    ? 'audio'
+                    : 'image') as 'image' | 'video' | 'audio',
+                url: m.mediaHash,
+                name: m.fileName,
+              }));
+            }
+          } catch {
+            // Media fetch is best-effort
           }
-        } catch {
-          // Media fetch is best-effort
-        }
-      }),
-    );
-    if (!cancelled) {
-      setPostMediaMap(mediaMap);
+        }),
+      );
+      if (!cancelled) {
+        setPostMediaMap(mediaMap);
+      }
+    };
+    if (feedItems.length > 0) {
+      fetchMedia();
     }
-  };
-  if (feedItems.length > 0) {
-    fetchMedia();
-  }
-  return () => {
-    cancelled = true;
-  };
-}, [feedItems]);
+    return () => {
+      cancelled = true;
+    };
+  }, [feedItems]);
 
-// Convert real feed items to unified format
-const allPosts: UnifiedPost[] = useMemo(() => {
-  return feedItems
-    .map((item: FeedItem): UnifiedPost => {
+  const toUnifiedPost = useCallback(
+    (item: FeedItem): UnifiedPost => {
       const contact = contacts.find((c) => c.peerId === item.authorPeerId);
       return {
         id: `real-${item.postId}`,
         postId: item.postId,
         content: item.contentText || '',
         timestamp: new Date(item.createdAt * 1000),
-        likes: 0,
+        likes: item.likes ?? 0,
         comments: commentCounts[item.postId] || 0,
-        likedByUser: false,
+        likedByUser: item.likedByUser ?? false,
         author: {
           peerId: item.authorPeerId,
           name: item.authorDisplayName || contact?.displayName || 'Unknown',
@@ -577,471 +603,594 @@ const allPosts: UnifiedPost[] = useMemo(() => {
         isReal: true,
         media: postMediaMap[item.postId],
       };
-    })
-    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-}, [feedItems, contacts, commentCounts, postMediaMap]);
+    },
+    [contacts, commentCounts, postMediaMap],
+  );
 
-// Select posts based on active tab (saved tab placeholder for future)
-const posts: UnifiedPost[] = activeTab === 'saved' ? [] : allPosts;
+  // Convert real feed items to unified format
+  const allPosts: UnifiedPost[] = useMemo(() => {
+    return feedItems
+      .map((item: FeedItem): UnifiedPost => {
+        const contact = contacts.find((c) => c.peerId === item.authorPeerId);
+        return {
+          id: `real-${item.postId}`,
+          postId: item.postId,
+          content: item.contentText || '',
+          timestamp: new Date(item.createdAt * 1000),
+          likes: item.likes ?? 0,
+          comments: commentCounts[item.postId] || 0,
+          likedByUser: item.likedByUser ?? false,
+          author: {
+            peerId: item.authorPeerId,
+            name: item.authorDisplayName || contact?.displayName || 'Unknown',
+            avatarGradient: getContactColor(item.authorPeerId),
+          },
+          isReal: true,
+          media: postMediaMap[item.postId],
+        };
+      })
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }, [feedItems, contacts, commentCounts, postMediaMap]);
 
-const handleRefresh = useCallback(async () => {
-  setIsRefreshing(true);
-  try {
-    // Run both P2P sync and relay sync in parallel
-    await Promise.allSettled([refreshFeed(), syncFromRelay()]);
-    toast.success('Feed refreshed!');
-  } catch {
-    toast.error('Failed to refresh feed');
-  } finally {
-    setIsRefreshing(false);
-  }
-}, [refreshFeed, syncFromRelay]);
+  const savedPosts: UnifiedPost[] = useMemo(() => {
+    return getSavedFeedItems()
+      .map(toUnifiedPost)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }, [getSavedFeedItems, toUnifiedPost, savedPostIds, feedItems]);
 
-const handleLike = (_post: UnifiedPost) => {
-  toast('Likes coming soon!');
-};
+  // Select posts based on active tab
+  const posts: UnifiedPost[] = activeTab === 'saved' ? savedPosts : allPosts;
 
-const handleSave = (_post: UnifiedPost) => {
-  toast('Saving posts coming soon!');
-};
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      // Run both P2P sync and relay sync in parallel
+      await Promise.allSettled([refreshFeed(), syncFromRelay()]);
+      toast.success('Feed refreshed!');
+    } catch {
+      toast.error('Failed to refresh feed');
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refreshFeed, syncFromRelay]);
 
-const isSaved = (_post: UnifiedPost): boolean => {
-  return false;
-};
-
-const handleHidePost = (_post: UnifiedPost) => {
-  toast('Hiding posts coming soon!');
-};
-
-const handleSnoozeUser = (_post: UnifiedPost, _hours: number) => {
-  toast('Snoozing contacts coming soon!');
-};
-
-const handleShareToWall = async (post: UnifiedPost, comment: string) => {
-  const sharedFromData: SharedFrom = {
-    authorName: post.author.name,
-    authorPeerId: post.author.peerId,
-    avatarGradient: post.author.avatarGradient,
-    originalContent: post.content,
-    originalPostId: post.id,
+  const handleLike = async (post: UnifiedPost) => {
+    try {
+      await toggleLike(post.postId);
+    } catch (error) {
+      log.error('Failed to update feed reaction', error);
+      toast.error('Could not update reaction');
+    }
   };
 
-  try {
-    await shareToWall(comment, sharedFromData);
-    setSharingPost(null);
-    toast.success('Shared to your Wall!');
-  } catch {
-    toast.error('Failed to share post');
-  }
-};
+  const handleSave = (post: UnifiedPost) => {
+    const wasSaved = isPostSaved(post.postId);
+    toggleSave(post.postId);
+    toast.success(wasSaved ? 'Removed from saved posts' : 'Post saved');
+  };
 
-return (
-  <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-    {/* Header */}
-    <header
-      className="px-6 py-4 border-b flex-shrink-0"
-      style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-    >
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1
-              className="text-2xl font-bold"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
-              Feed
-            </h1>
-            <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              {activeTab === 'saved' ? 'Your saved posts' : 'Updates from your contacts'}
-            </p>
+  const isSaved = (post: UnifiedPost): boolean => {
+    return isPostSaved(post.postId);
+  };
+
+  const handleHidePost = (post: UnifiedPost) => {
+    hidePost(post.postId);
+    toast.success(
+      (t) => (
+        <span>
+          Post hidden{' '}
+          <button
+            onClick={() => {
+              unhidePost(post.postId);
+              toast.dismiss(t.id);
+            }}
+            className="font-semibold underline"
+          >
+            Undo
+          </button>
+        </span>
+      ),
+      { duration: 6000 },
+    );
+  };
+
+  const handleSnoozeUser = (post: UnifiedPost, hours: number) => {
+    snoozeAuthor(post.author.peerId, hours);
+    toast.success(
+      (t) => (
+        <span>
+          Snoozed {post.author.name}{' '}
+          <button
+            onClick={() => {
+              unsnoozeAuthor(post.author.peerId);
+              toast.dismiss(t.id);
+            }}
+            className="font-semibold underline"
+          >
+            Undo
+          </button>
+        </span>
+      ),
+      { duration: 6000 },
+    );
+  };
+
+  const handleShareToWall = async (post: UnifiedPost, comment: string) => {
+    const sharedFromData: SharedFrom = {
+      authorName: post.author.name,
+      authorPeerId: post.author.peerId,
+      avatarGradient: post.author.avatarGradient,
+      originalContent: post.content,
+      originalPostId: post.id,
+    };
+
+    try {
+      await shareToWall(comment, sharedFromData);
+      setSharingPost(null);
+      toast.success('Shared to your Wall!');
+    } catch {
+      toast.error('Failed to share post');
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
+      {/* Header */}
+      <header
+        className="px-6 py-4 border-b flex-shrink-0"
+        style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+      >
+        <div className="max-w-3xl mx-auto">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1
+                className="text-2xl font-bold"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              >
+                Feed
+              </h1>
+              <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                {activeTab === 'saved' ? 'Your saved posts' : 'Updates from your contacts'}
+              </p>
+              <p className="text-xs mt-1" style={{ color: syncStatus === 'partial_failure' ? 'hsl(var(--harbor-warning))' : 'hsl(var(--harbor-text-tertiary))' }}>
+                {syncStatus === 'in_progress'
+                  ? 'Sync in progress… local feed remains available.'
+                  : lastSyncAt
+                    ? `Last synced ${formatDate(new Date(lastSyncAt * 1000))}${syncError ? ' · Partial sync failure, retry available.' : ''}`
+                    : 'Not synced yet. Local feed remains available.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {isSyncingRelay && (
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin"
+                    style={{
+                      borderColor: 'hsl(var(--harbor-primary))',
+                      borderTopColor: 'transparent',
+                    }}
+                  />
+                  <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                    Syncing...
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={handleRefresh}
+                disabled={isRefreshing || activeTab === 'saved'}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+                style={{
+                  background: 'hsl(var(--harbor-surface-1))',
+                  color: 'hsl(var(--harbor-text-secondary))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                  opacity: isRefreshing || activeTab === 'saved' ? 0.6 : 1,
+                }}
+              >
+                {isRefreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {isSyncingRelay && (
-              <div className="flex items-center gap-2">
-                <div
-                  className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin"
-                  style={{
-                    borderColor: 'hsl(var(--harbor-primary))',
-                    borderTopColor: 'transparent',
-                  }}
-                />
-                <span
-                  className="text-xs"
-                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                >
-                  Syncing...
-                </span>
-              </div>
-            )}
+          {/* Tabs */}
+          <div
+            className="flex gap-1 p-1 rounded-lg"
+            style={{ background: 'hsl(var(--harbor-surface-1))' }}
+          >
             <button
-              onClick={handleRefresh}
-              disabled={isRefreshing || activeTab === 'saved'}
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+              onClick={() => setActiveTab('all')}
+              className="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
+              style={{
+                background:
+                  activeTab === 'all'
+                    ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                    : 'transparent',
+                color: activeTab === 'all' ? 'white' : 'hsl(var(--harbor-text-secondary))',
+                boxShadow:
+                  activeTab === 'all' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
+              }}
+            >
+              All Posts
+            </button>
+            <button
+              onClick={() => setActiveTab('saved')}
+              className="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2"
+              style={{
+                background:
+                  activeTab === 'saved'
+                    ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                    : 'transparent',
+                color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-text-secondary))',
+                boxShadow:
+                  activeTab === 'saved' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
+                />
+              </svg>
+              Saved
+              {savedPostIds.length > 0 && (
+                <span
+                  className="px-1.5 py-0.5 rounded-full text-xs"
+                  style={{
+                    background:
+                      activeTab === 'saved'
+                        ? 'rgba(255,255,255,0.2)'
+                        : 'hsl(var(--harbor-primary) / 0.15)',
+                    color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-primary))',
+                  }}
+                >
+                  {savedPostIds.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {(hiddenPostIds.length > 0 || snoozedAuthors.length > 0) && (
+            <div
+              className="mt-3 rounded-lg p-3 text-xs flex flex-wrap items-center gap-3"
               style={{
                 background: 'hsl(var(--harbor-surface-1))',
                 color: 'hsl(var(--harbor-text-secondary))',
                 border: '1px solid hsl(var(--harbor-border-subtle))',
-                opacity: isRefreshing || activeTab === 'saved' ? 0.6 : 1,
               }}
             >
-              {isRefreshing ? 'Refreshing...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
-
-        {/* Tabs */}
-        <div
-          className="flex gap-1 p-1 rounded-lg"
-          style={{ background: 'hsl(var(--harbor-surface-1))' }}
-        >
-          <button
-            onClick={() => setActiveTab('all')}
-            className="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200"
-            style={{
-              background:
-                activeTab === 'all'
-                  ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                  : 'transparent',
-              color: activeTab === 'all' ? 'white' : 'hsl(var(--harbor-text-secondary))',
-              boxShadow:
-                activeTab === 'all' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
-            }}
-          >
-            All Posts
-          </button>
-          <button
-            onClick={() => setActiveTab('saved')}
-            className="flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2"
-            style={{
-              background:
-                activeTab === 'saved'
-                  ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                  : 'transparent',
-              color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-text-secondary))',
-              boxShadow:
-                activeTab === 'saved' ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
-            }}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
-              />
-            </svg>
-            Saved
-            {[].length > 0 && (
-              <span
-                className="px-1.5 py-0.5 rounded-full text-xs"
-                style={{
-                  background:
-                    activeTab === 'saved'
-                      ? 'rgba(255,255,255,0.2)'
-                      : 'hsl(var(--harbor-primary) / 0.15)',
-                  color: activeTab === 'saved' ? 'white' : 'hsl(var(--harbor-primary))',
-                }}
-              >
-                {[].length}
+              <span>
+                Feed filters: {hiddenPostIds.length} hidden post
+                {hiddenPostIds.length === 1 ? '' : 's'}, {snoozedAuthors.length} snoozed contact
+                {snoozedAuthors.length === 1 ? '' : 's'}
               </span>
-            )}
-          </button>
-        </div>
-      </div>
-    </header>
-
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-3xl mx-auto space-y-8">
-        {posts.length === 0 ? (
-          <div className="text-center py-16">
-            <div
-              className="w-20 h-20 rounded-lg flex items-center justify-center mx-auto mb-4"
-              style={{ background: 'hsl(var(--harbor-surface-1))' }}
-            >
-              {activeTab === 'saved' ? (
-                <svg
-                  className="w-10 h-10"
-                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+              {hiddenPostIds.length > 0 && (
+                <button
+                  onClick={() => {
+                    clearHiddenPosts();
+                    toast.success('Hidden posts restored');
+                  }}
+                  className="font-semibold underline"
+                  style={{ color: 'hsl(var(--harbor-primary))' }}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
-                  />
-                </svg>
-              ) : (
-                <FeedIcon
-                  className="w-10 h-10"
-                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                />
+                  Restore hidden
+                </button>
+              )}
+              {snoozedAuthors.length > 0 && (
+                <button
+                  onClick={() => {
+                    clearSnoozedAuthors();
+                    toast.success('Snoozed contacts restored');
+                  }}
+                  className="font-semibold underline"
+                  style={{ color: 'hsl(var(--harbor-primary))' }}
+                >
+                  Unsnooze all
+                </button>
               )}
             </div>
-            <h3
-              className="text-lg font-semibold mb-2"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
-              {activeTab === 'saved' ? 'No saved posts' : 'Your feed is empty'}
-            </h3>
-            <p
-              className="text-sm max-w-xs mx-auto mb-4"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
-              {activeTab === 'saved'
-                ? 'Save posts from your feed to view them here later.'
-                : "When your contacts share posts and grant you permission to view them, they'll appear here."}
-            </p>
-            {activeTab === 'saved' ? (
-              <button
-                onClick={() => setActiveTab('all')}
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-                style={{
-                  background:
-                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                  color: 'white',
-                  boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
-                }}
-              >
-                Browse Feed
-              </button>
-            ) : (
-              <button
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-                style={{
-                  background:
-                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                  color: 'white',
-                  boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
-                }}
-              >
-                Find Contacts
-              </button>
-            )}
-          </div>
-        ) : (
-          posts.map((post) => {
-            const saved = isSaved(post);
+          )}
+        </div>
+      </header>
 
-            return (
-              <article
-                key={post.id}
-                className="rounded-lg overflow-hidden"
-                style={{
-                  background: 'hsl(var(--harbor-bg-elevated))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-3xl mx-auto space-y-8">
+          {posts.length === 0 ? (
+            <div className="text-center py-16">
+              <div
+                className="w-20 h-20 rounded-lg flex items-center justify-center mx-auto mb-4"
+                style={{ background: 'hsl(var(--harbor-surface-1))' }}
               >
-                {/* Post header */}
-                <div
-                  className="px-5 py-4 flex items-center justify-between border-b"
-                  style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white"
-                      style={{
-                        background: post.author.avatarGradient,
-                      }}
-                    >
-                      {getInitials(post.author.name)}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p
-                          className="font-semibold text-sm"
-                          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                        >
-                          {post.author.name}
-                        </p>
-                        <span
-                          className="text-[10px] px-1.5 py-0.5 rounded"
-                          style={{
-                            background: 'hsl(var(--harbor-success) / 0.15)',
-                            color: 'hsl(var(--harbor-success))',
-                          }}
-                        >
-                          P2P
-                        </span>
-                      </div>
-                      <p
-                        className="text-xs"
-                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                      >
-                        {formatDate(post.timestamp)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="relative">
-                    <button
-                      onClick={() => setOpenMenuId(openMenuId === post.id ? null : post.id)}
-                      className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/5"
-                      style={{
-                        color: 'hsl(var(--harbor-text-tertiary))',
-                      }}
-                    >
-                      <EllipsisIcon className="w-5 h-5" />
-                    </button>
-                    <PostMenu
-                      isOpen={openMenuId === post.id}
-                      onClose={() => setOpenMenuId(null)}
-                      onHide={() => handleHidePost(post)}
-                      onSnooze={(hours) => handleSnoozeUser(post, hours)}
-                      authorName={post.author.name}
+                {activeTab === 'saved' ? (
+                  <svg
+                    className="w-10 h-10"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
                     />
-                  </div>
-                </div>
-
-                {/* Post content */}
-                <div className="px-5 py-5">
-                  <p
-                    className="text-base leading-relaxed whitespace-pre-wrap"
-                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                  >
-                    {post.content}
-                  </p>
-                </div>
-
-                {/* Post actions */}
-                <div
-                  className="px-5 py-3 flex items-center gap-6 border-t"
-                  style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-                >
-                  <button
-                    onClick={() => handleLike(post)}
-                    className="flex items-center gap-2 transition-colors duration-200"
-                    style={{
-                      color: post.likedByUser
-                        ? 'hsl(var(--harbor-error))'
-                        : 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill={post.likedByUser ? 'currentColor' : 'none'}
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"
-                      />
-                    </svg>
-                    <span className="text-sm">{post.likes}</span>
-                  </button>
-
-                  <button
-                    onClick={() => toggleComments(post.postId)}
-                    className="flex items-center gap-2 transition-colors duration-200"
-                    style={{
-                      color: expandedComments.has(post.postId)
-                        ? 'hsl(var(--harbor-primary))'
-                        : 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                      />
-                    </svg>
-                    <span className="text-sm">
-                      {post.comments > 0
-                        ? `Comments (${post.comments})`
-                        : 'Comment'}
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => setSharingPost(post)}
-                    className="flex items-center gap-2 transition-colors duration-200"
-                    style={{
-                      color: 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                      />
-                    </svg>
-                    <span className="text-sm">Share</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleSave(post)}
-                    className="flex items-center gap-2 transition-colors duration-200 ml-auto"
-                    style={{
-                      color: saved
-                        ? 'hsl(var(--harbor-primary))'
-                        : 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill={saved ? 'currentColor' : 'none'}
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
-                      />
-                    </svg>
-                    <span className="text-sm">{saved ? 'Saved' : 'Save'}</span>
-                  </button>
-                </div>
-
-                {/* Comments section (expandable) */}
-                {expandedComments.has(post.postId) && (
-                  <CommentsSection
-                    postId={post.postId}
-                    comments={comments[post.postId] || []}
-                    isLoading={loadingComments.has(post.postId)}
-                    onAddComment={addComment}
-                    onDeleteComment={deleteComment}
-                    currentPeerId={currentPeerId}
-                    formatDate={formatDate}
-                    getInitials={getInitials}
+                  </svg>
+                ) : (
+                  <FeedIcon
+                    className="w-10 h-10"
+                    style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                   />
                 )}
-              </article>
-            );
-          })
-        )}
-      </div>
-    </div>
+              </div>
+              <h3
+                className="text-lg font-semibold mb-2"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              >
+                {activeTab === 'saved' ? 'No saved posts' : 'Your feed is empty'}
+              </h3>
+              <p
+                className="text-sm max-w-xs mx-auto mb-4"
+                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+              >
+                {activeTab === 'saved'
+                  ? 'Save posts from your feed to view them here later.'
+                  : "When your contacts share posts and grant you permission to view them, they'll appear here."}
+              </p>
+              {activeTab === 'saved' ? (
+                <button
+                  onClick={() => setActiveTab('all')}
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+                  style={{
+                    background:
+                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                    color: 'white',
+                    boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
+                  }}
+                >
+                  Browse Feed
+                </button>
+              ) : (
+                <button
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+                  style={{
+                    background:
+                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                    color: 'white',
+                    boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
+                  }}
+                >
+                  Find Contacts
+                </button>
+              )}
+            </div>
+          ) : (
+            posts.map((post) => {
+              const saved = isSaved(post);
 
-    {/* Share modal */}
-    {sharingPost && (
-      <ShareModal
-        post={sharingPost}
-        onClose={() => setSharingPost(null)}
-        onShare={(comment) => handleShareToWall(sharingPost, comment)}
-      />
-    )}
-  </div>
-);
+              return (
+                <article
+                  key={post.id}
+                  className="rounded-lg overflow-hidden"
+                  style={{
+                    background: 'hsl(var(--harbor-bg-elevated))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                  }}
+                >
+                  {/* Post header */}
+                  <div
+                    className="px-5 py-4 flex items-center justify-between border-b"
+                    style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white"
+                        style={{
+                          background: post.author.avatarGradient,
+                        }}
+                      >
+                        {getInitials(post.author.name)}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => navigate(`/contacts/${encodeURIComponent(post.author.peerId)}/wall`)}
+                            className="font-semibold text-sm text-left hover:underline"
+                            style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                            title={`Open ${post.author.name}'s wall`}
+                          >
+                            {post.author.name}
+                          </button>
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded"
+                            style={{
+                              background: 'hsl(var(--harbor-success) / 0.15)',
+                              color: 'hsl(var(--harbor-success))',
+                            }}
+                          >
+                            P2P
+                          </span>
+                        </div>
+                        <p
+                          className="text-xs"
+                          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                        >
+                          {formatDate(post.timestamp)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      <button
+                        onClick={() => setOpenMenuId(openMenuId === post.id ? null : post.id)}
+                        className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/5"
+                        style={{
+                          color: 'hsl(var(--harbor-text-tertiary))',
+                        }}
+                      >
+                        <EllipsisIcon className="w-5 h-5" />
+                      </button>
+                      <PostMenu
+                        isOpen={openMenuId === post.id}
+                        onClose={() => setOpenMenuId(null)}
+                        onHide={() => handleHidePost(post)}
+                        onSnooze={(hours) => handleSnoozeUser(post, hours)}
+                        authorName={post.author.name}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Post content */}
+                  <div className="px-5 py-5">
+                    <p
+                      className="text-base leading-relaxed whitespace-pre-wrap"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      {post.content}
+                    </p>
+                  </div>
+
+                  {post.media && post.media.length > 0 && (
+                    <div className="px-5 pb-5">
+                      <PostMedia media={post.media} />
+                    </div>
+                  )}
+
+                  {/* Post actions */}
+                  <div
+                    className="px-5 py-3 flex items-center gap-6 border-t"
+                    style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+                  >
+                    <button
+                      onClick={() => handleLike(post)}
+                      className="flex items-center gap-2 transition-colors duration-200"
+                      style={{
+                        color: post.likedByUser
+                          ? 'hsl(var(--harbor-error))'
+                          : 'hsl(var(--harbor-text-secondary))',
+                      }}
+                    >
+                      <svg
+                        className="w-5 h-5"
+                        fill={post.likedByUser ? 'currentColor' : 'none'}
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"
+                        />
+                      </svg>
+                      <span className="text-sm">{post.likes}</span>
+                    </button>
+
+                    <button
+                      onClick={() => toggleComments(post.postId)}
+                      className="flex items-center gap-2 transition-colors duration-200"
+                      style={{
+                        color: expandedComments.has(post.postId)
+                          ? 'hsl(var(--harbor-primary))'
+                          : 'hsl(var(--harbor-text-secondary))',
+                      }}
+                    >
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                        />
+                      </svg>
+                      <span className="text-sm">
+                        {post.comments > 0 ? `Comments (${post.comments})` : 'Comment'}
+                      </span>
+                    </button>
+
+                    <button
+                      onClick={() => setSharingPost(post)}
+                      className="flex items-center gap-2 transition-colors duration-200"
+                      style={{
+                        color: 'hsl(var(--harbor-text-secondary))',
+                      }}
+                    >
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                        />
+                      </svg>
+                      <span className="text-sm">Share</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleSave(post)}
+                      className="flex items-center gap-2 transition-colors duration-200 ml-auto"
+                      style={{
+                        color: saved
+                          ? 'hsl(var(--harbor-primary))'
+                          : 'hsl(var(--harbor-text-secondary))',
+                      }}
+                    >
+                      <svg
+                        className="w-5 h-5"
+                        fill={saved ? 'currentColor' : 'none'}
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
+                        />
+                      </svg>
+                      <span className="text-sm">{saved ? 'Saved' : 'Save'}</span>
+                    </button>
+                  </div>
+
+                  {/* Comments section (expandable) */}
+                  {expandedComments.has(post.postId) && (
+                    <CommentsSection
+                      postId={post.postId}
+                      comments={comments[post.postId] || []}
+                      isLoading={loadingComments.has(post.postId)}
+                      onAddComment={addComment}
+                      onDeleteComment={deleteComment}
+                      currentPeerId={currentPeerId}
+                      formatDate={formatDate}
+                      getInitials={getInitials}
+                    />
+                  )}
+                </article>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Share modal */}
+      {sharingPost && (
+        <ShareModal
+          post={sharingPost}
+          onClose={() => setSharingPost(null)}
+          onShare={(comment) => handleShareToWall(sharingPost, comment)}
+        />
+      )}
+    </div>
+  );
 }

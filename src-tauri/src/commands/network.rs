@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::{
     BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
-    MediaStorageService, MessagingService, PermissionsService, PostsService,
+    MediaStorageService, MessagingService, PermissionsService, PostsService, WallSocialService,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -81,6 +81,7 @@ pub struct StartNetworkServices {
     pub permissions_service: Arc<PermissionsService>,
     pub posts_service: Arc<PostsService>,
     pub content_sync_service: Arc<ContentSyncService>,
+    pub wall_social_service: Arc<WallSocialService>,
     pub board_service: Arc<BoardService>,
     pub media_service: Arc<MediaStorageService>,
 }
@@ -102,6 +103,7 @@ pub async fn start_network(
     permissions_service: State<'_, Arc<PermissionsService>>,
     posts_service: State<'_, Arc<PostsService>>,
     content_sync_service: State<'_, Arc<ContentSyncService>>,
+    wall_social_service: State<'_, Arc<WallSocialService>>,
     board_service: State<'_, Arc<BoardService>>,
     media_service: State<'_, Arc<MediaStorageService>>,
 ) -> Result<(), AppError> {
@@ -113,6 +115,7 @@ pub async fn start_network(
         permissions_service: (*permissions_service).clone(),
         posts_service: (*posts_service).clone(),
         content_sync_service: (*content_sync_service).clone(),
+        wall_social_service: (*wall_social_service).clone(),
         board_service: (*board_service).clone(),
         media_service: (*media_service).clone(),
     };
@@ -180,6 +183,7 @@ async fn start_network_with_services(
     service.set_permissions_service(services.permissions_service.clone());
     service.set_posts_service(services.posts_service.clone());
     service.set_content_sync_service(services.content_sync_service.clone());
+    service.set_wall_social_service(services.wall_social_service.clone());
     service.set_board_service(services.board_service.clone());
     service.set_media_service(services.media_service.clone());
 

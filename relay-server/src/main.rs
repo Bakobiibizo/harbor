@@ -6,7 +6,7 @@
 mod board_service;
 mod db;
 
-use board_service::BoardService;
+use board_service::{BoardService, WallReadGrantProof};
 use clap::Parser;
 use db::RelayDatabase;
 use futures::StreamExt;
@@ -179,10 +179,37 @@ pub enum BoardSyncRequest {
         limit: u32,
         timestamp: i64,
         signature: Vec<u8>,
+        #[serde(default)]
+        grant_proof: Option<WallReadGrantProof>,
+    },
+    RegisterWallReadGrant {
+        grant: WallReadGrantProof,
+    },
+    RevokeWallReadGrant {
+        grant_id: String,
+        issuer_peer_id: String,
+        lamport_clock: u64,
+        revoked_at: i64,
+        signature: Vec<u8>,
     },
     DeleteWallPost {
         author_peer_id: String,
         post_id: String,
+        lamport_clock: u64,
+        deleted_at: i64,
+        signature: Vec<u8>,
+    },
+    SubmitWallSocialEvent {
+        event: WallSocialEventItemProto,
+        timestamp: i64,
+        request_signature: Vec<u8>,
+    },
+    GetWallSocialEvents {
+        requester_peer_id: String,
+        author_peer_id: String,
+        post_ids: Vec<String>,
+        after_timestamp: i64,
+        limit: u32,
         timestamp: i64,
         signature: Vec<u8>,
     },
@@ -237,12 +264,28 @@ pub struct WallPostData {
     pub visibility: String,
     pub lamport_clock: i64,
     pub created_at: i64,
+    pub deleted_at: Option<i64>,
     pub signature: Vec<u8>,
     #[serde(default)]
     pub media_hashes: Vec<String>,
     pub stored_at: i64,
     #[serde(default)]
     pub media_items: Vec<WallPostMediaItemProto>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WallSocialEventItemProto {
+    pub event_id: String,
+    pub event_type: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub author_name: Option<String>,
+    pub comment_id: Option<String>,
+    pub content: Option<String>,
+    pub reaction_type: Option<String>,
+    pub timestamp: i64,
+    pub payload_cbor: Vec<u8>,
+    pub signature: Vec<u8>,
 }
 
 /// Board sync response (wire protocol)
@@ -276,6 +319,20 @@ pub enum BoardSyncResponse {
     },
     WallPostDeleted {
         post_id: String,
+    },
+    WallReadGrantStored {
+        grant_id: String,
+    },
+    WallReadGrantRevoked {
+        grant_id: String,
+    },
+    WallSocialEventStored {
+        event_id: String,
+    },
+    WallSocialEvents {
+        events: Vec<WallSocialEventItemProto>,
+        has_more: bool,
+        next_timestamp: i64,
     },
     Error {
         error: String,
@@ -811,6 +868,7 @@ fn handle_board_request(
             limit,
             timestamp,
             signature,
+            grant_proof,
         } => {
             match service.process_get_wall_posts(
                 &requester_peer_id,
@@ -819,6 +877,7 @@ fn handle_board_request(
                 limit,
                 timestamp,
                 &signature,
+                grant_proof.as_ref(),
             ) {
                 Ok((posts, has_more, media_map)) => {
                     // Build a lookup from post_id -> media items
@@ -863,6 +922,7 @@ fn handle_board_request(
                                     visibility: p.visibility,
                                     lamport_clock: p.lamport_clock,
                                     created_at: p.created_at,
+                                    deleted_at: p.deleted_at,
                                     signature: p.signature,
                                     media_hashes,
                                     stored_at: p.stored_at,
@@ -876,10 +936,34 @@ fn handle_board_request(
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
         }
+        BoardSyncRequest::RegisterWallReadGrant { grant } => {
+            let grant_id = grant.grant_id.clone();
+            match service.process_wall_read_grant(&grant) {
+                Ok(()) => BoardSyncResponse::WallReadGrantStored { grant_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
+        BoardSyncRequest::RevokeWallReadGrant {
+            grant_id,
+            issuer_peer_id,
+            lamport_clock,
+            revoked_at,
+            signature,
+        } => match service.process_wall_read_revoke(
+            &grant_id,
+            &issuer_peer_id,
+            lamport_clock,
+            revoked_at,
+            &signature,
+        ) {
+            Ok(()) => BoardSyncResponse::WallReadGrantRevoked { grant_id },
+            Err(e) => BoardSyncResponse::Error { error: e },
+        },
         BoardSyncRequest::DeleteWallPost {
             author_peer_id,
             post_id,
-            timestamp,
+            lamport_clock,
+            deleted_at,
             signature,
         } => {
             if author_peer_id != peer.to_string() {
@@ -887,9 +971,71 @@ fn handle_board_request(
                     error: "author_peer_id mismatch".to_string(),
                 };
             }
-            match service.process_delete_wall_post(&author_peer_id, &post_id, timestamp, &signature)
-            {
+            match service.process_delete_wall_post(
+                &author_peer_id,
+                &post_id,
+                lamport_clock,
+                deleted_at,
+                &signature,
+            ) {
                 Ok(()) => BoardSyncResponse::WallPostDeleted { post_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
+        BoardSyncRequest::SubmitWallSocialEvent {
+            event,
+            timestamp,
+            request_signature,
+        } => {
+            if event.actor_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "actor_peer_id mismatch".to_string(),
+                };
+            }
+            let event_id = event.event_id.clone();
+            match service.process_submit_wall_social_event(&event, timestamp, &request_signature) {
+                Ok(()) => BoardSyncResponse::WallSocialEventStored { event_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
+        BoardSyncRequest::GetWallSocialEvents {
+            requester_peer_id,
+            author_peer_id,
+            post_ids,
+            after_timestamp,
+            limit,
+            timestamp,
+            signature,
+        } => {
+            match service.process_get_wall_social_events(
+                &requester_peer_id,
+                &author_peer_id,
+                &post_ids,
+                after_timestamp,
+                limit,
+                timestamp,
+                &signature,
+            ) {
+                Ok((rows, has_more, next_timestamp)) => BoardSyncResponse::WallSocialEvents {
+                    events: rows
+                        .into_iter()
+                        .map(|e| WallSocialEventItemProto {
+                            event_id: e.event_id,
+                            event_type: e.event_type,
+                            post_id: e.post_id,
+                            actor_peer_id: e.actor_peer_id,
+                            author_name: e.author_name,
+                            comment_id: e.comment_id,
+                            content: e.content,
+                            reaction_type: e.reaction_type,
+                            timestamp: e.timestamp,
+                            payload_cbor: e.payload_cbor,
+                            signature: e.signature,
+                        })
+                        .collect(),
+                    has_more,
+                    next_timestamp,
+                },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
         }

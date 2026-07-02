@@ -3,6 +3,15 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './App.css';
 
+console.info(
+  '[harbor-webrtc-diagnostic]',
+  JSON.stringify({
+    hasRTCPeerConnection: typeof RTCPeerConnection !== 'undefined',
+    hasMediaDevices: typeof navigator.mediaDevices !== 'undefined',
+    hasGetUserMedia: typeof navigator.mediaDevices?.getUserMedia === 'function',
+  }),
+);
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <App />

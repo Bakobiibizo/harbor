@@ -23,15 +23,16 @@ pub struct SyncStatus {
 #[tauri::command]
 pub async fn request_content_manifest(
     network_state: State<'_, NetworkState>,
+    content_sync_service: State<'_, Arc<ContentSyncService>>,
     peer_id: String,
     limit: Option<u32>,
 ) -> Result<(), AppError> {
     let handle = network_state.get_handle().await?;
+    let cursor = content_sync_service.get_sync_cursor(&peer_id)?;
     let peer_id = peer_id
         .parse()
         .map_err(|_| AppError::InvalidData("Invalid peer ID".to_string()))?;
 
-    let cursor: HashMap<String, u64> = HashMap::new();
     let limit = limit.unwrap_or(50);
 
     handle
@@ -92,6 +93,7 @@ pub async fn get_sync_cursor(
 #[tauri::command]
 pub async fn sync_with_all_peers(
     network_state: State<'_, NetworkState>,
+    content_sync_service: State<'_, Arc<ContentSyncService>>,
 ) -> Result<Vec<String>, AppError> {
     let handle = network_state.get_handle().await?;
 
@@ -105,7 +107,7 @@ pub async fn sync_with_all_peers(
             .parse()
             .map_err(|_| AppError::InvalidData("Invalid peer ID".to_string()))?;
 
-        let cursor: HashMap<String, u64> = HashMap::new();
+        let cursor = content_sync_service.get_sync_cursor(&peer.peer_id)?;
 
         // Request manifest from each peer (async, don't wait for response)
         match handle.request_content_manifest(peer_id, cursor, 50).await {

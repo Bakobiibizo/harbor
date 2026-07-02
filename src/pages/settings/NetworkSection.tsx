@@ -50,16 +50,10 @@ export function NetworkSection() {
       <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
-            <h4
-              className="font-medium"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               Auto-start network
             </h4>
-            <p
-              className="text-sm mt-0.5"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               Automatically connect to the peer-to-peer network on launch
             </p>
           </div>
@@ -78,16 +72,10 @@ export function NetworkSection() {
       <SettingsCard>
         <div className="flex items-center justify-between">
           <div>
-            <h4
-              className="font-medium"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
+            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               Local discovery (mDNS)
             </h4>
-            <p
-              className="text-sm mt-0.5"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
+            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               Discover peers on your local network automatically
             </p>
           </div>
@@ -103,10 +91,7 @@ export function NetworkSection() {
 
       {/* Relay / Bootstrap nodes */}
       <SettingsCard>
-        <h4
-          className="font-medium mb-2"
-          style={{ color: 'hsl(var(--harbor-text-primary))' }}
-        >
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           Relay Nodes
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>

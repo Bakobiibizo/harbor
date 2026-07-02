@@ -5,6 +5,7 @@ export { useIdentityStore } from './identity';
 export { useNetworkStore } from './network';
 export { useMessagingStore } from './messaging';
 export { useContactsStore } from './contacts';
+export { useContactWallStore } from './contactWall';
 export { useFeedStore } from './feed';
 export type { Comment } from './feed';
 export { useMockPeersStore } from './mockPeers';

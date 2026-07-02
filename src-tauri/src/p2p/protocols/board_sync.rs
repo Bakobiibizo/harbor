@@ -22,6 +22,22 @@ pub struct WallPostMediaItem {
     pub signature: Vec<u8>,
 }
 
+/// Signed wall social event stored or returned by a relay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WallSocialEventItem {
+    pub event_id: String,
+    pub event_type: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub author_name: Option<String>,
+    pub comment_id: Option<String>,
+    pub content: Option<String>,
+    pub reaction_type: Option<String>,
+    pub timestamp: i64,
+    pub payload_cbor: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
 /// Board sync request (wire protocol)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -97,6 +113,23 @@ pub enum BoardSyncRequest {
     DeleteWallPost {
         author_peer_id: String,
         post_id: String,
+        lamport_clock: u64,
+        deleted_at: i64,
+        signature: Vec<u8>,
+    },
+    /// Submit a signed wall social event to the relay.
+    SubmitWallSocialEvent {
+        event: WallSocialEventItem,
+        timestamp: i64,
+        request_signature: Vec<u8>,
+    },
+    /// Get signed wall social events for posts visible to requester.
+    GetWallSocialEvents {
+        requester_peer_id: String,
+        author_peer_id: String,
+        post_ids: Vec<String>,
+        after_timestamp: i64,
+        limit: u32,
         timestamp: i64,
         signature: Vec<u8>,
     },
@@ -136,6 +169,7 @@ pub struct WallPostData {
     pub visibility: String,
     pub lamport_clock: i64,
     pub created_at: i64,
+    pub deleted_at: Option<i64>,
     pub signature: Vec<u8>,
     #[serde(default)]
     pub media_hashes: Vec<String>,
@@ -174,6 +208,14 @@ pub enum BoardSyncResponse {
     WallPostStored { post_id: String },
     /// Wall post was deleted from the relay
     WallPostDeleted { post_id: String },
+    /// Wall social event was stored on the relay
+    WallSocialEventStored { event_id: String },
+    /// Wall social events visible to the requester
+    WallSocialEvents {
+        events: Vec<WallSocialEventItem>,
+        has_more: bool,
+        next_timestamp: i64,
+    },
     /// Error response
     Error { error: String },
 }
@@ -268,6 +310,7 @@ mod tests {
                 visibility: "public".to_string(),
                 lamport_clock: 1,
                 created_at: 1234567890,
+                deleted_at: None,
                 signature: vec![4; 64],
                 media_hashes: media_hashes.clone(),
                 stored_at: 1234567892,

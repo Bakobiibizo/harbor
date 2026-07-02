@@ -21,15 +21,24 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: install dev
-        run: .dev/bin/dev install
+      - name: install frontend tooling
+        run: .dev/bin/dev install typescript
 
-      - name: run ci
-        run: .dev/bin/dev ci
+      - name: run frontend ci
+        run: .dev/bin/dev ci --language typescript
 
   backend:
     name: Backend CI
@@ -45,8 +54,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: install dev
-        run: .dev/bin/dev language set rust && .dev/bin/dev install
+      - name: install rust tooling
+        run: .dev/bin/dev install rust
 
-      - name: run ci
-        run: .dev/bin/dev ci
+      - name: run backend ci
+        run: .dev/bin/dev ci --language rust
+
+  relay:
+    name: Relay CI
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check relay formatting
+        run: cargo fmt --manifest-path relay-server/Cargo.toml -- --check
+
+      - name: Check relay build
+        run: cargo check --manifest-path relay-server/Cargo.toml
+
+      - name: Lint relay
+        run: cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings
+
+      - name: Test relay
+        run: cargo test --manifest-path relay-server/Cargo.toml

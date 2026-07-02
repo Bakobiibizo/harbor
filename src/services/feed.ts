@@ -53,6 +53,16 @@ export const feedService = {
     return invoke<void>('fetch_contact_wall_from_relay', { authorPeerId });
   },
 
+  /** Push signed local wall comments/reactions to the relay server */
+  async syncWallSocialEventsToRelay(): Promise<number> {
+    return invoke<number>('sync_wall_social_events_to_relay');
+  },
+
+  /** Fetch signed comments/reactions for visible wall posts from the relay server */
+  async fetchWallSocialEvents(authorPeerId: string, postIds: string[]): Promise<void> {
+    return invoke<void>('fetch_wall_social_events_from_relay', { authorPeerId, postIds });
+  },
+
   /** Preview the local wall as a guest, contact, or owner */
   async getWallPreview(
     perspective: WallPreviewPerspective,

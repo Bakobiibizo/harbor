@@ -7,6 +7,8 @@ import {
   useContactsStore,
   useMessagingStore,
   useFeedStore,
+  useContactWallStore,
+  useWallStore,
   useCallingStore,
 } from '../stores';
 import { mediaService } from '../services/media';
@@ -57,6 +59,7 @@ export function useTauriEvents() {
 
         case 'peer_disconnected':
           console.log(`[Network] Peer disconnected: ${event.peer_id}`);
+          useCallingStore.getState().handlePeerDisconnected(event.peer_id);
           refreshPeers();
           refreshStats();
           break;
@@ -155,12 +158,44 @@ export function useTauriEvents() {
           console.warn(`[Network] Content sync error from ${event.peer_id}: ${event.error}`);
           break;
 
+        case 'wall_sync_status': {
+          console.log(`[Network] Wall sync ${event.scope}/${event.phase}: ${event.status}`);
+          const status =
+            event.status === 'success' || event.status === 'partial_failure'
+              ? event.status
+              : 'in_progress';
+          const patch = {
+            lastSyncAt: event.occurred_at,
+            syncStatus: status,
+            syncError: event.error,
+          } as const;
+          if (event.scope === 'author_wall') {
+            useWallStore.setState({
+              ...patch,
+              isSyncingRelay: status === 'in_progress',
+            });
+          } else if (event.scope === 'contact_wall') {
+            useContactWallStore.setState({
+              ...patch,
+              isSyncing: status === 'in_progress',
+            });
+          } else if (event.scope === 'feed') {
+            useFeedStore.setState({
+              ...patch,
+              isSyncingRelay: status === 'in_progress',
+            });
+          }
+          break;
+        }
+
         case 'wall_post_synced':
           console.log(`[Network] Wall post synced to relay: ${event.post_id}`);
           break;
 
         case 'wall_posts_received':
-          console.log(`[Network] Wall posts received from relay (author: ${event.author_peer_id}, count: ${event.post_count})`);
+          console.log(
+            `[Network] Wall posts received from relay (author: ${event.author_peer_id}, count: ${event.post_count})`,
+          );
           // Reload feed to show newly received posts
           useFeedStore.getState().loadFeed();
           // Trigger background media preloader (fire-and-forget)
@@ -192,6 +227,11 @@ export function useTauriEvents() {
 
         case 'call_signaling_error':
           console.warn(`[Network] Call signaling error from ${event.peer_id}: ${event.error}`);
+          useCallingStore
+            .getState()
+            .hydrateCalls()
+            .catch(() => {});
+          toast.error(`Call signaling failed: ${event.error}`);
           break;
       }
     }

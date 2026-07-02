@@ -14,6 +14,116 @@ use crate::services::{
     SignablePostDelete, SignablePostMedia, SignablePostUpdate, SignedPostMediaMetadata,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WallPostEventKind {
+    Snapshot,
+    Update,
+    Delete,
+}
+
+impl WallPostEventKind {
+    fn precedence(self) -> u8 {
+        match self {
+            Self::Snapshot => 0,
+            Self::Update => 1,
+            Self::Delete => 2,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Snapshot => "snapshot",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WallPostReconcileDecision {
+    Apply,
+    Ignore,
+}
+
+fn existing_post_event_kind(post: &Post) -> WallPostEventKind {
+    if post.deleted_at.is_some() {
+        WallPostEventKind::Delete
+    } else if post.updated_at > post.created_at {
+        WallPostEventKind::Update
+    } else {
+        WallPostEventKind::Snapshot
+    }
+}
+
+fn reconcile_wall_post_event(
+    existing: Option<&Post>,
+    post_id: &str,
+    author_peer_id: &str,
+    incoming_kind: WallPostEventKind,
+    incoming_lamport: u64,
+    incoming_timestamp: i64,
+) -> Result<WallPostReconcileDecision> {
+    let Some(existing) = existing else {
+        return Ok(WallPostReconcileDecision::Apply);
+    };
+
+    if existing.author_peer_id != author_peer_id {
+        tracing::warn!(
+            post_id = %post_id,
+            existing_author = %existing.author_peer_id,
+            incoming_author = %author_peer_id,
+            event_type = incoming_kind.as_str(),
+            "Rejected wall post event with mismatched author for existing object"
+        );
+        return Err(AppError::Validation(
+            "Wall post event author does not match existing post author".to_string(),
+        ));
+    }
+
+    let existing_kind = existing_post_event_kind(existing);
+    let existing_lamport = existing.lamport_clock as u64;
+    let existing_timestamp = existing.deleted_at.unwrap_or(existing.updated_at);
+
+    // Tombstones are final for a post id: once a delete has been observed,
+    // older or conflicting create/update snapshots must not resurrect the row.
+    if existing_kind == WallPostEventKind::Delete && incoming_kind != WallPostEventKind::Delete {
+        tracing::warn!(
+            post_id = %post_id,
+            author_peer_id = %author_peer_id,
+            incoming_lamport,
+            existing_lamport,
+            incoming_timestamp,
+            existing_timestamp,
+            event_type = incoming_kind.as_str(),
+            "Ignored wall post event because a tombstone is already stored"
+        );
+        return Ok(WallPostReconcileDecision::Ignore);
+    }
+
+    let should_apply = incoming_lamport > existing_lamport
+        || (incoming_lamport == existing_lamport
+            && (incoming_timestamp > existing_timestamp
+                || (incoming_timestamp == existing_timestamp
+                    && incoming_kind.precedence() > existing_kind.precedence())));
+
+    if should_apply {
+        Ok(WallPostReconcileDecision::Apply)
+    } else {
+        tracing::debug!(
+            post_id = %post_id,
+            author_peer_id = %author_peer_id,
+            incoming_lamport,
+            existing_lamport,
+            incoming_timestamp,
+            existing_timestamp,
+            incoming_event_type = incoming_kind.as_str(),
+            existing_event_type = existing_kind.as_str(),
+            "Ignored stale or duplicate wall post event"
+        );
+        Ok(WallPostReconcileDecision::Ignore)
+    }
+}
+
 /// Maximum size for a single wall media attachment (10 MiB).
 pub const MAX_POST_MEDIA_BYTES: i64 = 10 * 1024 * 1024;
 
@@ -385,7 +495,7 @@ impl PostsService {
                 .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let updated_at = chrono::Utc::now().timestamp();
 
-        // Create signable
+        // Create and sign the update event.
         let signable = SignablePostUpdate {
             post_id: post_id.to_string(),
             author_peer_id: identity.peer_id.clone(),
@@ -396,13 +506,31 @@ impl PostsService {
 
         let signature = self.identity_service.sign(&signable)?;
 
-        // Update locally
-        PostsRepository::update_post(
+        // Also materialize a current-state post signature so relay snapshots and
+        // direct fetches can be verified by consumers that did not see the
+        // original create event in this session.
+        let media_hashes = PostsRepository::get_media_hashes(&self.db, post_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let current_post_signable = SignablePost {
+            post_id: post_id.to_string(),
+            author_peer_id: identity.peer_id.clone(),
+            content_type: post.content_type.clone(),
+            content_text: content_text.map(String::from),
+            media_hashes,
+            visibility: post.visibility.to_string(),
+            lamport_clock,
+            created_at: post.created_at,
+        };
+        let current_post_signature = self.identity_service.sign(&current_post_signable)?;
+
+        // Update locally with the current-state signature.
+        PostsRepository::update_post_with_signature(
             &self.db,
             post_id,
             content_text,
             updated_at,
             lamport_clock as i64,
+            &current_post_signature,
         )
         .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
@@ -468,9 +596,16 @@ impl PostsService {
 
         let signature = self.identity_service.sign(&signable)?;
 
-        // Delete locally
-        PostsRepository::delete_post(&self.db, post_id, deleted_at)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        // Delete locally and retain the tombstone lamport/signature so stale
+        // creates or updates cannot resurrect the post.
+        PostsRepository::delete_post_with_tombstone(
+            &self.db,
+            post_id,
+            deleted_at,
+            lamport_clock as i64,
+            &signature,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
         // Record event
         let event_id = format!("deleted:{}", post_id);
@@ -693,14 +828,18 @@ impl PostsService {
             return Err(AppError::Crypto("Invalid post signature".to_string()));
         }
 
-        // Check if we already have this post
-        if let Some(existing) = PostsRepository::get_by_post_id(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?
+        let existing = PostsRepository::get_by_post_id(&self.db, post_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        if reconcile_wall_post_event(
+            existing.as_ref(),
+            post_id,
+            author_peer_id,
+            WallPostEventKind::Snapshot,
+            lamport_clock,
+            created_at,
+        )? == WallPostReconcileDecision::Ignore
         {
-            // Accept if higher lamport clock
-            if lamport_clock <= existing.lamport_clock as u64 {
-                return Ok(()); // Already have newer or same version
-            }
+            return Ok(());
         }
 
         // Update lamport clock
@@ -733,10 +872,7 @@ impl PostsService {
         };
 
         // Use upsert behavior
-        if PostsRepository::get_by_post_id(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?
-            .is_some()
-        {
+        if existing.is_some() {
             // Update existing - use update_post but with full content
             PostsRepository::update_post(
                 &self.db,
@@ -811,13 +947,21 @@ impl PostsService {
             ));
         }
 
-        // Check we have the post and it's older
+        // Check we have the post and reconcile against the materialized state.
         let existing = PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
 
-        if lamport_clock <= existing.lamport_clock as u64 {
-            return Ok(()); // Already have newer or same version
+        if reconcile_wall_post_event(
+            Some(&existing),
+            post_id,
+            author_peer_id,
+            WallPostEventKind::Update,
+            lamport_clock,
+            updated_at,
+        )? == WallPostReconcileDecision::Ignore
+        {
+            return Ok(());
         }
 
         // Update lamport clock
@@ -899,14 +1043,20 @@ impl PostsService {
             ));
         }
 
-        // Check we have the post
+        // Reconcile against an existing post or tombstone.
         let existing = PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        if let Some(post) = existing {
-            if lamport_clock <= post.lamport_clock as u64 {
-                return Ok(()); // Already have newer or same version
-            }
+        if reconcile_wall_post_event(
+            existing.as_ref(),
+            post_id,
+            author_peer_id,
+            WallPostEventKind::Delete,
+            lamport_clock,
+            deleted_at,
+        )? == WallPostReconcileDecision::Ignore
+        {
+            return Ok(());
         }
 
         // Update lamport clock
@@ -914,9 +1064,29 @@ impl PostsService {
             .update_lamport_clock(author_peer_id, lamport_clock as i64)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
-        // Delete post
-        PostsRepository::delete_post(&self.db, post_id, deleted_at)
+        // Delete post or persist a tombstone if this peer learned about the
+        // delete before it ever saw the create/update snapshot.
+        if PostsRepository::delete_post_with_tombstone(
+            &self.db,
+            post_id,
+            deleted_at,
+            lamport_clock as i64,
+            signature,
+        )
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?
+        {
+            // existing row tombstoned
+        } else {
+            PostsRepository::insert_remote_tombstone(
+                &self.db,
+                post_id,
+                author_peer_id,
+                lamport_clock as i64,
+                deleted_at,
+                signature,
+            )
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        }
 
         // Record event
         let event_id = format!("deleted:{}", post_id);
@@ -944,7 +1114,9 @@ impl PostsService {
 mod tests {
     use super::*;
     use crate::models::CreateIdentityRequest;
-    use crate::services::{ContactsService, PermissionsService};
+    use crate::services::{sign, ContactsService, PermissionsService};
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
     use std::sync::Arc;
 
     /// Create a full test environment with identity service that has a created+unlocked identity.
@@ -990,6 +1162,56 @@ mod tests {
             posts_service,
             peer_id,
         )
+    }
+
+    fn add_remote_author(contacts: &ContactsService, peer_id: &str) -> SigningKey {
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        contacts
+            .add_contact(
+                peer_id,
+                signing_key.verifying_key().as_bytes(),
+                &[7u8; 32],
+                "Remote Author",
+                None,
+                None,
+            )
+            .unwrap();
+        signing_key
+    }
+
+    fn signed_remote_post(
+        signing_key: &SigningKey,
+        post_id: &str,
+        author_peer_id: &str,
+        content_text: &str,
+        lamport_clock: u64,
+        created_at: i64,
+    ) -> (IncomingPostParams<'static>, Vec<String>, Vec<u8>) {
+        let media_hashes = Vec::new();
+        let signable = SignablePost {
+            post_id: post_id.to_string(),
+            author_peer_id: author_peer_id.to_string(),
+            content_type: "text".to_string(),
+            content_text: Some(content_text.to_string()),
+            media_hashes: media_hashes.clone(),
+            visibility: "public".to_string(),
+            lamport_clock,
+            created_at,
+        };
+        let signature = sign(signing_key, &signable).unwrap();
+        let params = IncomingPostParams {
+            post_id: Box::leak(post_id.to_string().into_boxed_str()),
+            author_peer_id: Box::leak(author_peer_id.to_string().into_boxed_str()),
+            content_type: "text",
+            content_text: Some(Box::leak(content_text.to_string().into_boxed_str())),
+            media_hashes: Box::leak(Box::new(media_hashes.clone())),
+            visibility: "public",
+            lamport_clock,
+            created_at,
+            signature: Box::leak(signature.clone().into_boxed_slice()),
+        };
+        (params, media_hashes, signature)
     }
 
     #[test]
@@ -1161,7 +1383,7 @@ mod tests {
 
     #[test]
     fn test_update_post() {
-        let (_db, _identity, _contacts, _perms, service, _peer_id) = create_test_env();
+        let (_db, identity, _contacts, _perms, service, _peer_id) = create_test_env();
 
         let created = service
             .create_post("text", Some("Original"), PostVisibility::Public)
@@ -1178,6 +1400,25 @@ mod tests {
         // Verify in DB
         let stored = service.get_post(&created.post_id).unwrap().unwrap();
         assert_eq!(stored.content_text, Some("Updated content".to_string()));
+        assert_eq!(stored.lamport_clock, updated.lamport_clock as i64);
+
+        // The materialized post signature is a current-state signature for
+        // relay/direct-sync snapshots, not the update-event signature.
+        let identity_info = identity.get_identity().unwrap().unwrap();
+        let verifying_key =
+            VerifyingKey::from_bytes(identity_info.public_key.as_slice().try_into().unwrap())
+                .unwrap();
+        let signable = SignablePost {
+            post_id: stored.post_id.clone(),
+            author_peer_id: stored.author_peer_id.clone(),
+            content_type: stored.content_type.clone(),
+            content_text: stored.content_text.clone(),
+            media_hashes: Vec::new(),
+            visibility: stored.visibility.to_string(),
+            lamport_clock: stored.lamport_clock as u64,
+            created_at: stored.created_at,
+        };
+        assert!(verify(&verifying_key, &signable, &stored.signature).unwrap());
     }
 
     #[test]
@@ -1201,9 +1442,11 @@ mod tests {
         assert_eq!(deleted.post_id, created.post_id);
         assert!(deleted.lamport_clock > created.lamport_clock);
 
-        // Post should still exist but be soft-deleted
+        // Post should still exist but be soft-deleted with tombstone state.
         let stored = service.get_post(&created.post_id).unwrap().unwrap();
         assert!(stored.deleted_at.is_some());
+        assert_eq!(stored.lamport_clock, deleted.lamport_clock as i64);
+        assert_eq!(stored.signature, deleted.signature);
 
         // Should not appear in my posts list
         let my_posts = service.get_my_posts(10, None).unwrap();
@@ -1216,6 +1459,166 @@ mod tests {
 
         let result = service.delete_post("nonexistent");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_incoming_delete_tombstone_blocks_stale_and_newer_snapshots() {
+        let (db, _identity, contacts, _perms, service, _peer_id) = create_test_env();
+        let author = "remote-author-delete";
+        let signing_key = add_remote_author(&contacts, author);
+        let post_id = "remote-post-delete";
+
+        let create = signed_remote_post(&signing_key, post_id, author, "original", 1, 1000).0;
+        service.process_incoming_post(&create).unwrap();
+
+        let delete_signable = SignablePostDelete {
+            post_id: post_id.to_string(),
+            author_peer_id: author.to_string(),
+            lamport_clock: 2,
+            deleted_at: 2000,
+        };
+        let delete_signature = sign(&signing_key, &delete_signable).unwrap();
+        service
+            .process_incoming_post_delete(post_id, author, 2, 2000, &delete_signature)
+            .unwrap();
+
+        let stale = signed_remote_post(&signing_key, post_id, author, "stale", 1, 1000).0;
+        service.process_incoming_post(&stale).unwrap();
+        let newer_snapshot =
+            signed_remote_post(&signing_key, post_id, author, "resurrect", 3, 3000).0;
+        service.process_incoming_post(&newer_snapshot).unwrap();
+
+        let stored = PostsRepository::get_by_post_id(&db, post_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.deleted_at, Some(2000));
+        assert_eq!(stored.lamport_clock, 2);
+        assert_eq!(stored.content_text, Some("original".to_string()));
+    }
+
+    #[test]
+    fn test_incoming_delete_same_lamport_wins_by_event_precedence() {
+        let (db, _identity, contacts, _perms, service, _peer_id) = create_test_env();
+        let author = "remote-author-same-lamport";
+        let signing_key = add_remote_author(&contacts, author);
+        let post_id = "remote-post-same-lamport";
+
+        let create = signed_remote_post(&signing_key, post_id, author, "original", 1, 1000).0;
+        service.process_incoming_post(&create).unwrap();
+
+        let update_signable = SignablePostUpdate {
+            post_id: post_id.to_string(),
+            author_peer_id: author.to_string(),
+            content_text: Some("updated".to_string()),
+            lamport_clock: 2,
+            updated_at: 2000,
+        };
+        let update_signature = sign(&signing_key, &update_signable).unwrap();
+        service
+            .process_incoming_post_update(
+                post_id,
+                author,
+                Some("updated"),
+                2,
+                2000,
+                &update_signature,
+            )
+            .unwrap();
+
+        let delete_signable = SignablePostDelete {
+            post_id: post_id.to_string(),
+            author_peer_id: author.to_string(),
+            lamport_clock: 2,
+            deleted_at: 2000,
+        };
+        let delete_signature = sign(&signing_key, &delete_signable).unwrap();
+        service
+            .process_incoming_post_delete(post_id, author, 2, 2000, &delete_signature)
+            .unwrap();
+
+        let stored = PostsRepository::get_by_post_id(&db, post_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.deleted_at, Some(2000));
+        assert_eq!(stored.lamport_clock, 2);
+    }
+
+    #[test]
+    fn test_incoming_delete_before_create_preserves_remote_tombstone() {
+        let (db, _identity, contacts, _perms, service, _peer_id) = create_test_env();
+        let author = "remote-author-offline-delete";
+        let signing_key = add_remote_author(&contacts, author);
+        let post_id = "remote-post-offline-delete";
+
+        let delete_signable = SignablePostDelete {
+            post_id: post_id.to_string(),
+            author_peer_id: author.to_string(),
+            lamport_clock: 5,
+            deleted_at: 5000,
+        };
+        let delete_signature = sign(&signing_key, &delete_signable).unwrap();
+        service
+            .process_incoming_post_delete(post_id, author, 5, 5000, &delete_signature)
+            .unwrap();
+
+        let older_create = signed_remote_post(&signing_key, post_id, author, "old", 1, 1000).0;
+        service.process_incoming_post(&older_create).unwrap();
+
+        let stored = PostsRepository::get_by_post_id(&db, post_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.deleted_at, Some(5000));
+        assert_eq!(stored.lamport_clock, 5);
+        assert_eq!(stored.content_type, "deleted");
+    }
+
+    #[test]
+    fn test_incoming_duplicate_and_forged_author_are_not_applied() {
+        let (db, _identity, contacts, _perms, service, _peer_id) = create_test_env();
+        let author = "remote-author-forgery";
+        let signing_key = add_remote_author(&contacts, author);
+        let post_id = "remote-post-forgery";
+
+        let create = signed_remote_post(&signing_key, post_id, author, "original", 1, 1000).0;
+        service.process_incoming_post(&create).unwrap();
+        let duplicate = signed_remote_post(&signing_key, post_id, author, "duplicate", 1, 1000).0;
+        service.process_incoming_post(&duplicate).unwrap();
+        assert_eq!(
+            PostsRepository::get_by_post_id(&db, post_id)
+                .unwrap()
+                .unwrap()
+                .content_text,
+            Some("original".to_string())
+        );
+
+        let forged_author = "remote-author-forged";
+        let forged_key = add_remote_author(&contacts, forged_author);
+        let forged = signed_remote_post(&forged_key, post_id, forged_author, "forged", 2, 2000).0;
+        let result = service.process_incoming_post(&forged);
+        assert!(result.is_err());
+        assert_eq!(
+            PostsRepository::get_by_post_id(&db, post_id)
+                .unwrap()
+                .unwrap()
+                .content_text,
+            Some("original".to_string())
+        );
+    }
+
+    #[test]
+    fn test_incoming_invalid_signature_is_rejected() {
+        let (db, _identity, contacts, _perms, service, _peer_id) = create_test_env();
+        let author = "remote-author-invalid-signature";
+        let signing_key = add_remote_author(&contacts, author);
+        let post_id = "remote-post-invalid-signature";
+        let mut create = signed_remote_post(&signing_key, post_id, author, "original", 1, 1000).0;
+        create.signature = &[0u8; 64];
+
+        let result = service.process_incoming_post(&create);
+        assert!(result.is_err());
+        assert!(PostsRepository::get_by_post_id(&db, post_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -10,8 +10,9 @@ A decentralized peer-to-peer chat application with local-first data storage, end
 - **End-to-End Encryption**: AES-256-GCM with HKDF-derived conversation keys
 - **Permission System**: Signed capability grants for content access (Chat, WallRead, Call)
 - **Event Sourcing**: Append-only logs with lamport clocks for conflict-free sync
-- **One-to-One Voice Calling**: signed WebRTC signaling through libp2p (best-effort, works on LAN/most NATs)
-- **Group-Call Topology Contract**: first production group calls use the [ADR-0001 relay-assisted small-group mesh](docs/architecture/adr-0001-group-call-topology.md) with a hard 4-participant limit
+- **One-to-One Voice Calling**: signed libp2p signaling, WebRTC audio runtime, persisted call history, and configurable ICE/STUN/TURN settings; release readiness still requires the two-profile evidence in [`docs/voice-call-e2e-validation.md`](docs/voice-call-e2e-validation.md)
+- **Wall and Feed Sync**: local-first wall posts with visibility controls, media, preview/RSS/share surfaces, contact-wall/feed reads, signed comments/reactions, edit/delete reconciliation, and direct/relay sync; release readiness still requires the three-profile evidence in [`docs/wall-sync-multi-profile-validation.md`](docs/wall-sync-multi-profile-validation.md)
+- **Group-Call Topology Contract**: first production group calls use the [ADR-0001 relay-assisted small-group mesh](docs/architecture/adr-0001-group-call-topology.md) with a hard 4-participant limit; video/group claims require [`docs/video-group-call-validation.md`](docs/video-group-call-validation.md)
 
 ## Quick Start
 
@@ -32,17 +33,17 @@ git clone https://github.com/Bakobiibizo/harbor.git
 cd harbor
 
 # Install frontend dependencies
-npm install
+pnpm install
 
 # Run in development mode
-npm run tauri dev
+pnpm tauri dev
 ```
 
 ### Building for Production
 
 ```bash
 # Build the application
-npm run tauri build
+pnpm tauri build
 
 # The executable will be in src-tauri/target/release/
 ```
@@ -96,8 +97,8 @@ RSS XML is generated locally from public posts only; Harbor does not currently h
 ### Viewing Your Feed
 
 1. Go to the **Feed** tab
-2. See posts from contacts who have granted you WallRead permission
-3. Like and comment on posts (when implemented)
+2. See posts from contacts whose public posts are available or who have granted you WallRead permission for contacts-only posts
+3. Like/react, comment, save, hide, snooze, and share through the production feed/contact-wall surfaces where the current build exposes those controls; relay and multi-profile release evidence is tracked in `docs/wall-sync-multi-profile-validation.md`
 
 ### Settings
 
@@ -250,7 +251,7 @@ struct PermissionGrant {
 - `MediaChunkRequest/Response` - Transfer media files
 
 ### Calling
-One-to-one voice signaling is implemented today. Any group audio/video/screen-share signaling must follow [ADR-0001](docs/architecture/adr-0001-group-call-topology.md): relay-assisted small-group full mesh, maximum 4 total participants, signed roster-bound messages, and no SFU/MCU behavior without a replacement ADR.
+One-to-one voice signaling and WebRTC call runtime paths are implemented, but release notes must be gated by the two-profile validation checklist. Group audio/video signaling must follow [ADR-0001](docs/architecture/adr-0001-group-call-topology.md): relay-assisted small-group full mesh, maximum 4 total participants, signed roster-bound messages, and no SFU/MCU behavior without a replacement ADR. Screen sharing remains deferred until implementation and validation land.
 
 - `SignalingOffer/Answer` - WebRTC SDP exchange
 - `SignalingIce` - ICE candidate exchange
@@ -277,11 +278,22 @@ Manual validation checklist for call networking changes:
 ### Running Tests
 
 ```bash
-# Rust tests
-cd src-tauri && cargo test
+# Rust/Tauri release gate
+.dev/bin/dev ci --language rust
 
-# TypeScript type check
-npm run typecheck
+# Frontend TypeScript release gate
+.dev/bin/dev ci --language typescript
+
+# Relay release gate
+cargo fmt --manifest-path relay-server/Cargo.toml -- --check
+cargo check --manifest-path relay-server/Cargo.toml
+cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings
+cargo test --manifest-path relay-server/Cargo.toml
+
+# Interactive release evidence (desktop/WebView required)
+# See docs/release-gates-calls-wall-sync.md,
+# docs/voice-call-e2e-validation.md, docs/video-group-call-validation.md,
+# and docs/wall-sync-multi-profile-validation.md.
 ```
 
 ### Code Structure
@@ -302,16 +314,17 @@ The codebase follows these patterns:
 - [x] Direct messaging (encrypted)
 - [x] Wall/blog posts with media
 - [x] Feed aggregation
-- [x] Voice calling (signaling)
+- [x] Voice calling implementation paths (signaling/runtime/UI) with automated coverage; two-profile release evidence remains a required gate
+- [x] Wall/feed sync implementation paths with automated coverage; three-profile release evidence remains a required gate
 - [x] Modern, polished UI
 
 ### Future (Stretch Goals)
 - [ ] Double-ratchet for forward secrecy
-- [ ] Video calling + screen sharing within the ADR-0001 small-group mesh contract
-- [ ] Group video calls capped at 4 total participants by ADR-0001
+- [ ] Screen sharing within the ADR-0001 small-group mesh contract
+- [ ] Larger group rooms beyond the 4-participant ADR-0001 cap
 - [ ] Group chats
 - [ ] Mobile app (iOS/Android via Tauri)
-- [ ] Operator-configurable TURN for strict-NAT call support
+- [ ] Production TURN deployment/credential rotation guide for strict-NAT support
 - [ ] Profile photo uploads
 - [ ] Read receipts
 - [ ] Typing indicators

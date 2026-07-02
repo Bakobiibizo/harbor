@@ -16,7 +16,7 @@ import {
   PencilIcon,
   CheckIcon,
 } from '../components/icons';
-import { useContactsStore, useMessagingStore } from '../stores';
+import { useCallingStore, useContactsStore, useMessagingStore } from '../stores';
 import { getInitials, getContactColor, formatRelativeTime } from '../utils/formatting';
 import { EmojiPicker } from '../components/common/EmojiPicker';
 
@@ -672,7 +672,7 @@ export function ChatPage() {
     confirmLabel: string;
     confirmDestructive?: boolean;
     onConfirm: () => void;
-  }>({ isOpen: false, title: '', message: '', confirmLabel: '', onConfirm: () => { } });
+  }>({ isOpen: false, title: '', message: '', confirmLabel: '', onConfirm: () => {} });
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
 
   // Attachment state
@@ -918,7 +918,9 @@ export function ChatPage() {
 
     try {
       await sendRealMessage(selectedConv.peerId, content, contentType);
-      loadMessages(selectedConv.peerId).catch((err) => log.error('Failed to reload messages after send', err));
+      loadMessages(selectedConv.peerId).catch((err) =>
+        log.error('Failed to reload messages after send', err),
+      );
     } catch (error) {
       log.error('Failed to send message', error);
       toast.error('Failed to send message');
@@ -989,17 +991,61 @@ export function ChatPage() {
     [messageInput],
   );
 
-  const handleCall = () => {
-    if (selectedConv) {
-      if (selectedConv.online) {
-        toast(`Calling ${selectedConv.name}...`, {
-          icon: '\u{1F4DE}',
+  const handleCall = (video = false) => {
+    if (!selectedConv) return;
+    if (!selectedConv.online) {
+      toast.error(`${selectedConv.name} is offline`);
+      return;
+    }
+
+    useCallingStore
+      .getState()
+      .startOutgoingCall(selectedConv.peerId, { video })
+      .then(() => {
+        toast(`${video ? 'Video c' : 'C'}alling ${selectedConv.name}...`, {
+          icon: video ? '\u{1F4F9}' : '\u{1F4DE}',
           duration: 3000,
         });
-      } else {
-        toast.error(`${selectedConv.name} is offline`);
-      }
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error(`Could not start call: ${message}`);
+      });
+  };
+
+  const handleGroupCall = (video = true) => {
+    if (!selectedConv) return;
+    const peerIds = [
+      selectedConv.peerId,
+      ...activeConversations
+        .filter(
+          (conversation) => conversation.peerId !== selectedConv.peerId && conversation.online,
+        )
+        .slice(0, 2)
+        .map((conversation) => conversation.peerId),
+    ];
+
+    if (peerIds.length < 2) {
+      toast.error('Group calls need at least two remote participants. Add another contact first.');
+      return;
     }
+
+    useCallingStore
+      .getState()
+      .startOutgoingGroupCall(peerIds, { video })
+      .then(() => {
+        toast(
+          `Starting group ${video ? 'video' : 'voice'} call with ${peerIds.length} contacts...`,
+          {
+            icon: video ? '\u{1F465}' : '\u{1F4DE}',
+            duration: 3000,
+          },
+        );
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error(`Could not start group call: ${message}`);
+      });
   };
 
   const handleNewConversation = () => {
@@ -1398,6 +1444,19 @@ export function ChatPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {selectedConv!.isReal && (
+            <button
+              onClick={() => navigate(`/contacts/${encodeURIComponent(selectedConv!.peerId)}/wall`)}
+              className="px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
+              style={{
+                background: 'hsl(var(--harbor-surface-1))',
+                color: 'hsl(var(--harbor-text-secondary))',
+              }}
+              title={`Open ${selectedConv!.name}'s wall`}
+            >
+              Wall
+            </button>
+          )}
           <button
             onClick={() => {
               setShowMessageSearch(!showMessageSearch);
@@ -1419,14 +1478,41 @@ export function ChatPage() {
             <SearchIcon className="w-5 h-5" />
           </button>
           <button
-            onClick={handleCall}
+            onClick={() => handleCall(false)}
             className="p-2 rounded-lg transition-colors duration-200"
             style={{
               background: 'hsl(var(--harbor-success) / 0.15)',
               color: 'hsl(var(--harbor-success))',
             }}
+            title="Start voice call"
           >
             <PhoneIcon className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => handleCall(true)}
+            className="p-2 rounded-lg transition-colors duration-200"
+            style={{
+              background: 'hsl(var(--harbor-primary) / 0.15)',
+              color: 'hsl(var(--harbor-primary))',
+            }}
+            title="Start video call"
+          >
+            <span aria-hidden="true" className="text-lg leading-none">
+              📹
+            </span>
+          </button>
+          <button
+            onClick={() => handleGroupCall(true)}
+            className="p-2 rounded-lg transition-colors duration-200"
+            style={{
+              background: 'hsl(var(--harbor-accent) / 0.15)',
+              color: 'hsl(var(--harbor-accent))',
+            }}
+            title="Start group video call (up to 4 total participants)"
+          >
+            <span aria-hidden="true" className="text-lg leading-none">
+              👥
+            </span>
           </button>
           <div className="relative">
             <button

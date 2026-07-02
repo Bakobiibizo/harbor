@@ -133,6 +133,17 @@ impl CallingService {
         Ok(())
     }
 
+    fn media_kind_from_sdp(sdp: &str) -> CallMediaKind {
+        if sdp
+            .lines()
+            .any(|line| line.trim_start().starts_with("m=video"))
+        {
+            CallMediaKind::Video
+        } else {
+            CallMediaKind::Audio
+        }
+    }
+
     fn validate_ice_candidate(candidate: &str) -> Result<()> {
         let trimmed = candidate.trim();
         if trimmed.is_empty() {
@@ -297,6 +308,7 @@ impl CallingService {
         caller_peer_id: &str,
         callee_peer_id: &str,
         timestamp: i64,
+        media_kind: CallMediaKind,
     ) -> Result<()> {
         CallsRepository::insert_session(
             &self.db,
@@ -306,7 +318,7 @@ impl CallingService {
                 caller_peer_id: caller_peer_id.to_string(),
                 callee_peer_id: callee_peer_id.to_string(),
                 direction: CallDirection::Outgoing,
-                media_kind: CallMediaKind::Audio,
+                media_kind,
                 state: CallState::Ringing,
                 started_at: timestamp,
                 ended_at: None,
@@ -323,6 +335,7 @@ impl CallingService {
         caller_peer_id: &str,
         callee_peer_id: &str,
         timestamp: i64,
+        media_kind: CallMediaKind,
     ) -> Result<()> {
         CallsRepository::insert_session(
             &self.db,
@@ -332,7 +345,7 @@ impl CallingService {
                 caller_peer_id: caller_peer_id.to_string(),
                 callee_peer_id: callee_peer_id.to_string(),
                 direction: CallDirection::Incoming,
-                media_kind: CallMediaKind::Audio,
+                media_kind,
                 state: CallState::Incoming,
                 started_at: timestamp,
                 ended_at: None,
@@ -420,7 +433,13 @@ impl CallingService {
         };
 
         let signature = self.identity_service.sign(&signable)?;
-        self.insert_outgoing_call(&call_id, &identity.peer_id, callee_peer_id, timestamp)?;
+        self.insert_outgoing_call(
+            &call_id,
+            &identity.peer_id,
+            callee_peer_id,
+            timestamp,
+            Self::media_kind_from_sdp(sdp),
+        )?;
 
         Ok(OutgoingOffer {
             call_id,
@@ -495,7 +514,13 @@ impl CallingService {
             ));
         }
         self.require_no_active_call_with_peer(caller_peer_id)?;
-        self.insert_incoming_call(call_id, caller_peer_id, callee_peer_id, timestamp)?;
+        self.insert_incoming_call(
+            call_id,
+            caller_peer_id,
+            callee_peer_id,
+            timestamp,
+            Self::media_kind_from_sdp(sdp),
+        )?;
 
         Ok(())
     }
@@ -1135,6 +1160,7 @@ mod tests {
                 caller_peer_id,
                 callee_peer_id,
                 chrono::Utc::now().timestamp(),
+                CallMediaKind::Audio,
             )
             .unwrap();
     }
@@ -1151,6 +1177,7 @@ mod tests {
                 caller_peer_id,
                 callee_peer_id,
                 chrono::Utc::now().timestamp(),
+                CallMediaKind::Audio,
             )
             .unwrap();
     }
@@ -1176,6 +1203,26 @@ mod tests {
         assert_eq!(active[0].call_id, offer.call_id);
         assert_eq!(active[0].state, CallState::Ringing);
         assert_eq!(active[0].media_kind, CallMediaKind::Audio);
+    }
+
+    #[test]
+    fn test_create_video_offer_persists_video_media_kind() {
+        let (service, db, _identity, permissions, _peer_id) = create_test_env();
+
+        let (_, peer_verifying) = CryptoService::generate_ed25519_keypair();
+        let callee = "12D3KooWCalleeVideo";
+        add_peer_with_call_permission(&db, &permissions, callee, &peer_verifying.to_bytes());
+
+        let offer = service
+            .create_offer(
+                callee,
+                "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=video 9 UDP/TLS/RTP/SAVPF 96",
+            )
+            .unwrap();
+
+        let active = service.get_active_calls().unwrap();
+        assert_eq!(active[0].call_id, offer.call_id);
+        assert_eq!(active[0].media_kind, CallMediaKind::Video);
     }
 
     #[test]

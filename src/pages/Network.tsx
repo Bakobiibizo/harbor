@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
@@ -176,6 +177,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 export function NetworkPage() {
+  const navigate = useNavigate();
   const { state } = useIdentityStore();
   const {
     isRunning,
@@ -830,12 +832,7 @@ export function NetworkPage() {
                       toast.success('Link copied! Share it with your friends.');
                     }}
                   >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
@@ -1293,6 +1290,14 @@ export function NetworkPage() {
                           {contact.bio}
                         </p>
                       )}
+                      <button
+                        className="px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 text-xs font-medium"
+                        style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                        title={`Open ${contact.displayName}'s wall`}
+                        onClick={() => navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)}
+                      >
+                        View wall
+                      </button>
                       <button
                         className="p-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}

@@ -267,6 +267,88 @@ pub struct SignablePostLike {
 
 impl Signable for SignablePostLike {}
 
+/// Canonical signed wall comment creation payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallCommentCreate {
+    pub event_id: String,
+    pub post_id: String,
+    pub comment_id: String,
+    pub actor_peer_id: String,
+    pub author_name: String,
+    pub content: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallCommentCreate {}
+
+/// Canonical signed wall comment deletion payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallCommentDelete {
+    pub event_id: String,
+    pub post_id: String,
+    pub comment_id: String,
+    pub actor_peer_id: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallCommentDelete {}
+
+/// Canonical signed wall reaction add payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallReactionAdd {
+    pub event_id: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub reaction_type: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallReactionAdd {}
+
+/// Canonical signed wall reaction removal payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallReactionRemove {
+    pub event_id: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub reaction_type: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableWallReactionRemove {}
+
+/// Request signature wrapper for submitting one signed wall social event to a relay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableWallSocialEventSubmit {
+    pub event_id: String,
+    pub event_type: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub author_name: Option<String>,
+    pub comment_id: Option<String>,
+    pub content: Option<String>,
+    pub reaction_type: Option<String>,
+    pub timestamp: i64,
+    pub payload_cbor: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub request_timestamp: i64,
+}
+
+impl Signable for SignableWallSocialEventSubmit {}
+
+/// Signed wall social event fetch request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableGetWallSocialEvents {
+    pub requester_peer_id: String,
+    pub author_peer_id: String,
+    pub post_ids: Vec<String>,
+    pub after_timestamp: i64,
+    pub limit: u32,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableGetWallSocialEvents {}
+
 // ============================================================
 // BOARD MESSAGES
 // ============================================================
@@ -362,9 +444,10 @@ impl Signable for SignableGetWallPosts {}
 /// Signable version of a wall post delete request (excludes signature)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignableWallPostDelete {
-    pub author_peer_id: String,
     pub post_id: String,
-    pub timestamp: i64,
+    pub author_peer_id: String,
+    pub lamport_clock: u64,
+    pub deleted_at: i64,
 }
 
 impl Signable for SignableWallPostDelete {}

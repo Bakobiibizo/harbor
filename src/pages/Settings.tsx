@@ -540,16 +540,10 @@ export function SettingsPage() {
           className="hidden md:block p-4 border-b"
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
-          <h2
-            className="text-lg font-bold"
-            style={{ color: 'hsl(var(--harbor-text-primary))' }}
-          >
+          <h2 className="text-lg font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
             Settings
           </h2>
-          <p
-            className="text-sm mt-0.5"
-            style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-          >
+          <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
             Customize your experience
           </p>
         </div>

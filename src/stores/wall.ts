@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
 import { feedService } from '../services/feed';
+import { commentsService, type Comment } from '../services/comments';
+import { likesService } from '../services/likes';
 import { createLogger } from '../utils/logger';
 import { useSettingsStore } from './settings';
 import type { CreatePostMediaInput, Post, PostMedia, PostVisibility } from '../types';
@@ -41,8 +43,15 @@ export interface WallPost {
 interface WallState {
   posts: WallPost[];
   isLoading: boolean;
+  isSyncingRelay: boolean;
+  lastSyncAt: number | null;
+  syncError: string | null;
+  syncStatus: 'idle' | 'in_progress' | 'success' | 'partial_failure';
   error: string | null;
   editingPostId: string | null;
+  commentsByPost: Record<string, Comment[]>;
+  expandedComments: Set<string>;
+  loadingComments: Set<string>;
 
   // Actions
   loadPosts: () => Promise<void>;
@@ -55,7 +64,11 @@ interface WallState {
   shareToWall: (comment: string, sharedFrom: SharedFrom) => Promise<void>;
   updatePost: (postId: string, content: string) => Promise<void>;
   deletePost: (postId: string) => Promise<void>;
-  likePost: (postId: string) => void; // Local-only for now (likes not in backend schema)
+  likePost: (postId: string) => Promise<void>;
+  loadComments: (postId: string) => Promise<void>;
+  toggleComments: (postId: string) => void;
+  addComment: (postId: string, content: string) => Promise<void>;
+  deleteComment: (postId: string, commentId: string) => Promise<void>;
   setEditingPost: (postId: string | null) => void;
 }
 
@@ -100,7 +113,9 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
     resolvedMedia = await Promise.all(
       media.map(async (m) => ({
         type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as
-          'image' | 'video' | 'audio',
+          | 'image'
+          | 'video'
+          | 'audio',
         url: await resolveMediaUrl(m.mediaHash),
         name: m.fileName,
       })),
@@ -133,11 +148,18 @@ async function readFileAsBytes(file: File): Promise<Uint8Array> {
   return new Uint8Array(buffer);
 }
 
-export const useWallStore = create<WallState>((set) => ({
+export const useWallStore = create<WallState>((set, get) => ({
   posts: [],
   isLoading: false,
+  isSyncingRelay: false,
+  lastSyncAt: null,
+  syncError: null,
+  syncStatus: 'idle',
   error: null,
   editingPostId: null,
+  commentsByPost: {},
+  expandedComments: new Set<string>(),
+  loadingComments: new Set<string>(),
 
   loadPosts: async () => {
     set({ isLoading: true, error: null });
@@ -145,7 +167,7 @@ export const useWallStore = create<WallState>((set) => ({
       const posts = await postsService.getMyPosts(50);
 
       // Load media for each post and resolve hashes to URLs
-      const wallPosts = await Promise.all(
+      let wallPosts = await Promise.all(
         posts.map(async (post) => {
           try {
             const media = await postsService.getPostMedia(post.postId);
@@ -155,6 +177,35 @@ export const useWallStore = create<WallState>((set) => ({
           }
         }),
       );
+
+      const postIds = wallPosts.map((post) => post.postId);
+      if (postIds.length > 0) {
+        const authorPeerId = wallPosts[0]?.authorPeerId;
+        if (authorPeerId) {
+          feedService.fetchWallSocialEvents(authorPeerId, postIds).catch((err) =>
+            log.warn('Failed to fetch wall social events from relay', err),
+          );
+        }
+        try {
+          const [likeSummaries, commentCounts] = await Promise.all([
+            likesService.getPostsLikesBatch(postIds),
+            commentsService.getCommentCounts(postIds),
+          ]);
+          const likesByPost = new Map(likeSummaries.map((summary) => [summary.postId, summary]));
+          const commentsByPost = new Map(commentCounts.map((count) => [count.postId, count.count]));
+          wallPosts = wallPosts.map((post) => {
+            const likes = likesByPost.get(post.postId);
+            return {
+              ...post,
+              likes: likes?.totalLikes ?? 0,
+              liked: likes?.userHasLiked ?? false,
+              comments: commentsByPost.get(post.postId) ?? 0,
+            };
+          });
+        } catch (err) {
+          log.warn('Failed to load wall social counts', err);
+        }
+      }
 
       set({ posts: wallPosts, isLoading: false });
     } catch (err) {
@@ -241,9 +292,26 @@ export const useWallStore = create<WallState>((set) => ({
       }));
 
       // Best-effort sync to relay -- post is already saved locally
-      feedService.syncWallToRelay().catch((err) => {
-        log.warn('Failed to sync post to relay (saved locally)', err);
-      });
+      set({ isSyncingRelay: true, syncStatus: 'in_progress', syncError: null });
+      feedService
+        .syncWallToRelay()
+        .then(() => {
+          set({
+            isSyncingRelay: false,
+            lastSyncAt: Math.floor(Date.now() / 1000),
+            syncStatus: 'success',
+            syncError: null,
+          });
+        })
+        .catch((err) => {
+          log.warn('Failed to sync post to relay (saved locally)', err);
+          set({
+            isSyncingRelay: false,
+            lastSyncAt: Math.floor(Date.now() / 1000),
+            syncStatus: 'partial_failure',
+            syncError: String(err),
+          });
+        });
     } catch (err) {
       log.error('Failed to create post', err);
       throw err;
@@ -317,18 +385,112 @@ export const useWallStore = create<WallState>((set) => ({
     set({ editingPostId: postId });
   },
 
-  likePost: (postId: string) => {
-    // Likes are local-only for now (not in backend schema)
-    set((state) => ({
-      posts: state.posts.map((post) =>
-        post.postId === postId
-          ? {
-              ...post,
-              liked: !post.liked,
-              likes: post.liked ? post.likes - 1 : post.likes + 1,
-            }
-          : post,
-      ),
-    }));
+  likePost: async (postId: string) => {
+    const currentPost = get().posts.find((post) => post.postId === postId);
+    if (!currentPost) return;
+
+    try {
+      const summary = currentPost.liked
+        ? await likesService.unlikePost(postId)
+        : await likesService.likePost(postId);
+      feedService.syncWallSocialEventsToRelay().catch((err) =>
+        log.warn('Failed to sync wall reaction event to relay', err),
+      );
+
+      set((state) => ({
+        posts: state.posts.map((post) =>
+          post.postId === postId
+            ? {
+                ...post,
+                liked: summary.userHasLiked,
+                likes: summary.totalLikes,
+              }
+            : post,
+        ),
+      }));
+    } catch (err) {
+      log.error('Failed to toggle post reaction', err);
+      throw err;
+    }
+  },
+
+  loadComments: async (postId: string) => {
+    if (get().loadingComments.has(postId)) return;
+
+    set((state) => {
+      const loadingComments = new Set(state.loadingComments);
+      loadingComments.add(postId);
+      return { loadingComments };
+    });
+
+    try {
+      const comments = await commentsService.getComments(postId);
+      set((state) => {
+        const loadingComments = new Set(state.loadingComments);
+        loadingComments.delete(postId);
+        return {
+          commentsByPost: { ...state.commentsByPost, [postId]: comments },
+          posts: state.posts.map((post) =>
+            post.postId === postId ? { ...post, comments: comments.length } : post,
+          ),
+          loadingComments,
+        };
+      });
+    } catch (err) {
+      log.error('Failed to load post comments', err);
+      set((state) => {
+        const loadingComments = new Set(state.loadingComments);
+        loadingComments.delete(postId);
+        return { loadingComments };
+      });
+      throw err;
+    }
+  },
+
+  toggleComments: (postId: string) => {
+    set((state) => {
+      const expandedComments = new Set(state.expandedComments);
+      if (expandedComments.has(postId)) {
+        expandedComments.delete(postId);
+      } else {
+        expandedComments.add(postId);
+        if (!state.commentsByPost[postId]) {
+          get()
+            .loadComments(postId)
+            .catch((err) => log.error('Failed to open comments', err));
+        }
+      }
+      return { expandedComments };
+    });
+  },
+
+  addComment: async (postId: string, content: string) => {
+    const comment = await commentsService.addComment(postId, content);
+    feedService.syncWallSocialEventsToRelay().catch((err) =>
+      log.warn('Failed to sync wall comment event to relay', err),
+    );
+    set((state) => {
+      const existing = state.commentsByPost[postId] || [];
+      return {
+        commentsByPost: { ...state.commentsByPost, [postId]: [...existing, comment] },
+        posts: state.posts.map((post) =>
+          post.postId === postId ? { ...post, comments: post.comments + 1 } : post,
+        ),
+      };
+    });
+  },
+
+  deleteComment: async (postId: string, commentId: string) => {
+    await commentsService.deleteComment(commentId);
+    set((state) => {
+      const existing = state.commentsByPost[postId] || [];
+      const nextComments = existing.filter((comment) => comment.commentId !== commentId);
+      return {
+        commentsByPost: { ...state.commentsByPost, [postId]: nextComments },
+        posts: state.posts.map((post) =>
+          post.postId === postId ? { ...post, comments: nextComments.length } : post,
+        ),
+      };
+    });
   },
 }));

@@ -8,6 +8,7 @@ pub mod likes_repo;
 pub mod messages_repo;
 pub mod permissions_repo;
 pub mod posts_repo;
+pub mod wall_social_repo;
 
 pub use boards_repo::{Board, BoardPost, BoardsRepository, RelayCommunity, UpsertBoardPostParams};
 pub use bootstrap_repo::{AddBootstrapNodeInput, BootstrapNodeConfig, BootstrapNodesRepo};
@@ -28,4 +29,7 @@ pub use permissions_repo::{
 pub use posts_repo::{
     Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
     RecordPostEventParams, VisibilityCounts,
+};
+pub use wall_social_repo::{
+    WallSocialEvent, WallSocialEventData, WallSocialEventType, WallSocialEventsRepository,
 };

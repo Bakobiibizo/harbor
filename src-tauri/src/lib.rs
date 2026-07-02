@@ -12,7 +12,7 @@ use logging::{get_log_directory, LogConfig};
 use services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
     FeedService, IdentityService, MediaStorageService, MessagingService, PermissionsService,
-    PostsService,
+    PostsService, WallSocialService,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -40,6 +40,46 @@ fn get_custom_data_dir() -> Option<PathBuf> {
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
+}
+
+fn headless_media_capture_validation_enabled() -> bool {
+    matches!(
+        std::env::var("HARBOR_HEADLESS_MEDIA_CAPTURE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn allow_headless_webkit_media_capture(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+
+    window.with_webview(|webview| {
+        let webview = webview.inner();
+
+        if let Some(settings) = webview.settings() {
+            settings.set_enable_webrtc(true);
+            settings.set_enable_media_stream(true);
+            settings.set_enable_write_console_messages_to_stdout(true);
+            info!(
+                enable_webrtc = settings.enables_webrtc(),
+                enable_media_stream = settings.enables_media_stream(),
+                "Enabled WebKit WebRTC/media-stream settings for headless validation"
+            );
+        } else {
+            info!("WebKit settings unavailable while enabling headless media-capture validation");
+        }
+
+        webview.connect_permission_request(|_, request| {
+            info!("Allowing WebKit permission request for headless media-capture validation");
+            request.allow();
+            true
+        });
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn allow_headless_webkit_media_capture(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    Ok(())
 }
 
 /// Get the database path for the application
@@ -86,9 +126,17 @@ fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let profile = get_profile_name();
+    let uses_isolated_profile = profile.is_some() || get_custom_data_dir().is_some();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+    let mut builder = tauri::Builder::default();
+
+    // The single-instance plugin is intentionally disabled for explicit validation/dev profiles.
+    // Voice-call and wall-sync evidence runs launch multiple desktop processes side by side with
+    // different HARBOR_PROFILE/HARBOR_DATA_DIR values; a global single-instance lock would route the
+    // second launch back to the first window and prevent the second isolated database/window from
+    // being created.
+    if !uses_isolated_profile {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Bring the existing window to the foreground
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
@@ -97,7 +145,10 @@ pub fn run() {
             if let Some(url) = args.iter().find(|a| a.starts_with("harbor://")) {
                 handle_deep_link(app, url);
             }
-        }))
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -138,6 +189,13 @@ pub fn run() {
             if let Some(ref profile_name) = profile {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_title(&format!("Harbor - {}", profile_name));
+                }
+            }
+
+            if headless_media_capture_validation_enabled() {
+                if let Some(window) = app.get_webview_window("main") {
+                    allow_headless_webkit_media_capture(&window)?;
+                    info!("Headless WebKit media-capture validation permission override enabled");
                 }
             }
 
@@ -201,6 +259,12 @@ pub fn run() {
                 contacts_service.clone(),
                 permissions_service.clone(),
             ));
+            let wall_social_service = Arc::new(WallSocialService::new(
+                db.clone(),
+                identity_service.clone(),
+                contacts_service.clone(),
+                permissions_service.clone(),
+            ));
             let board_service = Arc::new(BoardService::new(db.clone(), identity_service.clone()));
 
             // Initialize media storage service (content-addressed file storage)
@@ -222,6 +286,7 @@ pub fn run() {
             app.manage(posts_service);
             app.manage(content_sync_service);
             app.manage(feed_service);
+            app.manage(wall_social_service);
             app.manage(calling_service);
             app.manage(board_service);
             app.manage(media_service);
@@ -349,6 +414,7 @@ pub fn run() {
             commands::get_comments,
             commands::delete_comment,
             commands::get_comment_counts,
+            commands::get_wall_social_events,
             // Calling commands
             commands::get_active_calls,
             commands::get_call_history,
@@ -391,6 +457,8 @@ pub fn run() {
             commands::sync_wall_to_relay,
             commands::fetch_contact_wall_from_relay,
             commands::sync_feed_from_relay,
+            commands::sync_wall_social_events_to_relay,
+            commands::fetch_wall_social_events_from_relay,
             commands::delete_wall_post_on_relay,
             // File commands
             commands::save_to_downloads,

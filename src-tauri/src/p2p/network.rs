@@ -1,4 +1,5 @@
 use base64::Engine;
+use chrono::Utc;
 use futures::StreamExt;
 use libp2p::{
     autonat, dcutr, identify, kad, mdns, ping, relay,
@@ -27,6 +28,7 @@ use super::behaviour::{
 use super::config::NetworkConfig;
 use super::protocols::board_sync::{
     BoardSyncRequest as WireBoardSyncRequest, BoardSyncResponse as WireBoardSyncResponse,
+    WallSocialEventItem,
 };
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
 use super::protocols::signaling::{SignalingEnvelope, SignalingResponse};
@@ -39,8 +41,9 @@ use crate::services::content_sync_service::RemotePostParams;
 use crate::services::messaging_service::IncomingMessageParams;
 use crate::services::{
     BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
-    MediaStorageService, MessagingService, PermissionsService, PostsService, SignableGetWallPosts,
-    SignableWallPostDelete, SignableWallPostSubmit,
+    IncomingWallSocialEventParams, MediaStorageService, MessagingService, PermissionsService,
+    PostsService, SignableGetWallPosts, SignableGetWallSocialEvents, SignableWallPostSubmit,
+    SignableWallSocialEventSubmit, WallSocialService,
 };
 use std::sync::Arc;
 
@@ -507,6 +510,9 @@ impl NetworkHandle {
         &self,
         relay_peer_id: PeerId,
         post_id: String,
+        lamport_clock: u64,
+        deleted_at: i64,
+        signature: Vec<u8>,
     ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
@@ -514,6 +520,9 @@ impl NetworkHandle {
                 NetworkCommand::DeleteWallPostOnRelay {
                     relay_peer_id,
                     post_id,
+                    lamport_clock,
+                    deleted_at,
+                    signature,
                 },
                 Some(tx),
             ))
@@ -522,6 +531,64 @@ impl NetworkHandle {
                 AppError::NetworkServiceUnavailable("Network service unavailable".into())
             })?;
 
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Submit signed wall social events to a relay.
+    pub async fn submit_wall_social_events_to_relay(
+        &self,
+        relay_peer_id: PeerId,
+        events: Vec<WallSocialEventItem>,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::SubmitWallSocialEventsToRelay {
+                    relay_peer_id,
+                    events,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Get signed wall social events from a relay.
+    pub async fn get_wall_social_events_from_relay(
+        &self,
+        relay_peer_id: PeerId,
+        author_peer_id: String,
+        post_ids: Vec<String>,
+        after_timestamp: i64,
+        limit: u32,
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::GetWallSocialEventsFromRelay {
+                    relay_peer_id,
+                    author_peer_id,
+                    post_ids,
+                    after_timestamp,
+                    limit,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
         match rx.await {
             Ok(NetworkResponse::Ok) => Ok(()),
             Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
@@ -606,6 +673,7 @@ pub struct NetworkService {
     permissions_service: Option<Arc<PermissionsService>>,
     posts_service: Option<Arc<PostsService>>,
     content_sync_service: Option<Arc<ContentSyncService>>,
+    wall_social_service: Option<Arc<WallSocialService>>,
     board_service: Option<Arc<BoardService>>,
     media_service: Option<Arc<MediaStorageService>>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
@@ -668,6 +736,7 @@ impl NetworkService {
             permissions_service: None,
             posts_service: None,
             content_sync_service: None,
+            wall_social_service: None,
             board_service: None,
             media_service: None,
             command_rx,
@@ -719,6 +788,11 @@ impl NetworkService {
     /// Set content sync service for handling manifest processing + storage
     pub fn set_content_sync_service(&mut self, service: Arc<ContentSyncService>) {
         self.content_sync_service = Some(service);
+    }
+
+    /// Set wall social service for applying signed comments and reactions.
+    pub fn set_wall_social_service(&mut self, service: Arc<WallSocialService>) {
+        self.wall_social_service = Some(service);
     }
 
     /// Set board service for community board operations
@@ -1043,6 +1117,15 @@ impl NetworkService {
                     }
                 }
             }
+            ContentSyncRequest::FetchSocialEvents { .. } => {
+                let _ = self.swarm.behaviour_mut().content_sync.send_response(
+                    channel,
+                    ContentSyncResponse::Error {
+                        error: "social event sync service unavailable in this network path"
+                            .to_string(),
+                    },
+                );
+            }
         }
     }
 
@@ -1196,6 +1279,16 @@ impl NetworkService {
                 }) {
                     Ok(_) => {
                         info!("Stored remote post {} from {}", post_id, peer);
+                        if let Err(e) = content_sync_service.store_author_sync_cursor(
+                            &peer.to_string(),
+                            &author_peer_id,
+                            lamport_clock,
+                        ) {
+                            warn!(
+                                "Failed to advance direct sync cursor for {} from {}: {}",
+                                author_peer_id, peer, e
+                            );
+                        }
                         // Emit event for UI to refresh feed
                         let _ = self
                             .event_tx
@@ -1216,6 +1309,13 @@ impl NetworkService {
                             .await;
                     }
                 }
+            }
+            ContentSyncResponse::SocialEvents { events, .. } => {
+                debug!(
+                    "Received {} wall social events from {}; social event storage is handled by service callers",
+                    events.len(),
+                    peer
+                );
             }
             ContentSyncResponse::Error { error } => {
                 warn!("Content sync error from {}: {}", peer, error);
@@ -1827,6 +1927,20 @@ impl NetworkService {
                             );
 
                             // Emit event to frontend
+                            Self::emit_wall_sync_status(
+                                self.event_tx.clone(),
+                                "media",
+                                "success",
+                                "media_fetched",
+                                None,
+                                Some(peer.to_string()),
+                                None,
+                                Some(media_hash.clone()),
+                                None,
+                                None,
+                                None,
+                            )
+                            .await;
                             let _ = self
                                 .event_tx
                                 .send(NetworkEvent::MediaFetched {
@@ -1837,14 +1951,56 @@ impl NetworkService {
                         }
                         Err(e) => {
                             warn!("Failed to store media from {}: {}", peer, e);
+                            Self::emit_wall_sync_status(
+                                self.event_tx.clone(),
+                                "media",
+                                "partial_failure",
+                                "media_failed",
+                                None,
+                                Some(peer.to_string()),
+                                None,
+                                Some(media_hash.clone()),
+                                None,
+                                None,
+                                Some(e.to_string()),
+                            )
+                            .await;
                         }
                     }
                 } else {
                     warn!("Media service unavailable, cannot store received media");
+                    Self::emit_wall_sync_status(
+                        self.event_tx.clone(),
+                        "media",
+                        "partial_failure",
+                        "media_failed",
+                        None,
+                        Some(peer.to_string()),
+                        None,
+                        Some(media_hash),
+                        None,
+                        None,
+                        Some("Media service unavailable".to_string()),
+                    )
+                    .await;
                 }
             }
             MediaFetchResponse::Error { error } => {
                 warn!("Media fetch error from {}: {}", peer, error);
+                Self::emit_wall_sync_status(
+                    self.event_tx.clone(),
+                    "media",
+                    "partial_failure",
+                    "media_failed",
+                    None,
+                    Some(peer.to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(error),
+                )
+                .await;
             }
         }
     }
@@ -2157,6 +2313,50 @@ impl NetworkService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn emit_wall_sync_status(
+        event_tx: mpsc::Sender<NetworkEvent>,
+        scope: &str,
+        status: &str,
+        phase: &str,
+        relay_peer_id: Option<String>,
+        author_peer_id: Option<String>,
+        post_id: Option<String>,
+        media_hash: Option<String>,
+        post_count: Option<usize>,
+        cursor: Option<u64>,
+        error: Option<String>,
+    ) {
+        tracing::info!(
+            scope,
+            status,
+            phase,
+            relay_peer_id = relay_peer_id.as_deref(),
+            author_peer_id = author_peer_id.as_deref(),
+            post_id = post_id.as_deref(),
+            media_hash = media_hash.as_deref(),
+            post_count,
+            cursor,
+            error = error.as_deref(),
+            "wall sync status"
+        );
+        let _ = event_tx
+            .send(NetworkEvent::WallSyncStatus {
+                scope: scope.to_string(),
+                status: status.to_string(),
+                phase: phase.to_string(),
+                relay_peer_id,
+                author_peer_id,
+                post_id,
+                media_hash,
+                post_count,
+                cursor,
+                error,
+                occurred_at: Utc::now().timestamp(),
+            })
+            .await;
+    }
+
     async fn handle_board_sync_response(&mut self, peer: PeerId, response: WireBoardSyncResponse) {
         let Some(ref board_service) = self.board_service else {
             return;
@@ -2327,6 +2527,20 @@ impl NetworkService {
             }
             WireBoardSyncResponse::WallPostStored { post_id } => {
                 info!("Wall post {} stored on relay {}", post_id, peer);
+                Self::emit_wall_sync_status(
+                    self.event_tx.clone(),
+                    "author_wall",
+                    "success",
+                    "posts_stored",
+                    Some(relay_peer_id.clone()),
+                    None,
+                    Some(post_id.clone()),
+                    None,
+                    Some(1),
+                    None,
+                    None,
+                )
+                .await;
                 let _ = self
                     .event_tx
                     .send(NetworkEvent::WallPostSynced {
@@ -2348,8 +2562,34 @@ impl NetworkService {
                     "Received {} wall posts for author {} from relay {} (has_more: {}, media_items: {})",
                     post_count, author_peer_id, peer, has_more, total_media_items
                 );
+                Self::emit_wall_sync_status(
+                    self.event_tx.clone(),
+                    if author_peer_id.is_empty() {
+                        "feed"
+                    } else {
+                        "contact_wall"
+                    },
+                    "in_progress",
+                    "posts_received",
+                    Some(relay_peer_id.clone()),
+                    if author_peer_id.is_empty() {
+                        None
+                    } else {
+                        Some(author_peer_id.clone())
+                    },
+                    None,
+                    None,
+                    Some(post_count),
+                    None,
+                    None,
+                )
+                .await;
 
-                // Store received posts in local SQLite via content_sync_service
+                // Store received posts in local SQLite via content_sync_service. Advance the
+                // relay cursor only after each post and signed media metadata are verified and
+                // stored; stop on the first failure so a later page cannot skip a failed lamport.
+                let mut advanced_relay_cursor: Option<u64> = None;
+                let mut stored_all_relay_posts = true;
                 if let Some(ref content_sync_service) = self.content_sync_service {
                     for post in &posts {
                         let signed_media_items: Vec<crate::services::SignedPostMediaMetadata> =
@@ -2369,19 +2609,75 @@ impl NetworkService {
                                 })
                                 .collect();
 
-                        match content_sync_service.store_remote_post(&RemotePostParams {
-                            post_id: &post.post_id,
-                            author_peer_id: &post.author_peer_id,
-                            content_type: &post.content_type,
-                            content_text: post.content_text.as_deref(),
-                            visibility: &post.visibility,
-                            lamport_clock: post.lamport_clock as u64,
-                            created_at: post.created_at,
-                            signature: &post.signature,
-                            media_hashes: &post.media_hashes,
-                            media_items: &signed_media_items,
-                        }) {
+                        let store_result = if let Some(deleted_at) = post.deleted_at {
+                            content_sync_service.store_remote_post_delete(
+                                &post.post_id,
+                                &post.author_peer_id,
+                                post.lamport_clock as u64,
+                                deleted_at,
+                                &post.signature,
+                            )
+                        } else {
+                            content_sync_service.store_remote_post(&RemotePostParams {
+                                post_id: &post.post_id,
+                                author_peer_id: &post.author_peer_id,
+                                content_type: &post.content_type,
+                                content_text: post.content_text.as_deref(),
+                                visibility: &post.visibility,
+                                lamport_clock: post.lamport_clock as u64,
+                                created_at: post.created_at,
+                                signature: &post.signature,
+                                media_hashes: &post.media_hashes,
+                                media_items: &signed_media_items,
+                            })
+                        };
+
+                        match store_result {
                             Ok(_) => {
+                                let lamport_clock = post.lamport_clock as u64;
+                                if let Err(e) = content_sync_service.store_author_sync_cursor(
+                                    &relay_peer_id,
+                                    &post.author_peer_id,
+                                    lamport_clock,
+                                ) {
+                                    warn!(
+                                        "Failed to advance relay wall cursor for {} via {}: {}",
+                                        post.author_peer_id, relay_peer_id, e
+                                    );
+                                    stored_all_relay_posts = false;
+                                    break;
+                                }
+                                advanced_relay_cursor = Some(lamport_clock);
+                                Self::emit_wall_sync_status(
+                                    self.event_tx.clone(),
+                                    "contact_wall",
+                                    "in_progress",
+                                    "cursor_advanced",
+                                    Some(relay_peer_id.clone()),
+                                    Some(post.author_peer_id.clone()),
+                                    Some(post.post_id.clone()),
+                                    None,
+                                    Some(1),
+                                    Some(lamport_clock),
+                                    None,
+                                )
+                                .await;
+                                for media_hash in &post.media_hashes {
+                                    Self::emit_wall_sync_status(
+                                        self.event_tx.clone(),
+                                        "contact_wall",
+                                        "in_progress",
+                                        "media_queued",
+                                        Some(relay_peer_id.clone()),
+                                        Some(post.author_peer_id.clone()),
+                                        Some(post.post_id.clone()),
+                                        Some(media_hash.clone()),
+                                        None,
+                                        None,
+                                        None,
+                                    )
+                                    .await;
+                                }
                                 debug!(
                                     "Stored wall post {} from {} via relay",
                                     post.post_id, post.author_peer_id
@@ -2392,11 +2688,116 @@ impl NetworkService {
                                     "Failed to store wall post {} from relay: {}",
                                     post.post_id, e
                                 );
+                                let error = e.to_string();
+                                let phase = if error.to_ascii_lowercase().contains("permission") {
+                                    "permission_denied"
+                                } else {
+                                    "posts_stored"
+                                };
+                                Self::emit_wall_sync_status(
+                                    self.event_tx.clone(),
+                                    "contact_wall",
+                                    "partial_failure",
+                                    phase,
+                                    Some(relay_peer_id.clone()),
+                                    Some(post.author_peer_id.clone()),
+                                    Some(post.post_id.clone()),
+                                    None,
+                                    None,
+                                    None,
+                                    Some(error),
+                                )
+                                .await;
+                                stored_all_relay_posts = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if has_more && stored_all_relay_posts {
+                        if let (Some(next_since), Some(next_author)) = (
+                            advanced_relay_cursor,
+                            posts.first().map(|p| p.author_peer_id.clone()),
+                        ) {
+                            match self.identity_service.get_identity() {
+                                Ok(Some(identity)) => {
+                                    let now = chrono::Utc::now().timestamp();
+                                    let signable = SignableGetWallPosts {
+                                        requester_peer_id: identity.peer_id.clone(),
+                                        author_peer_id: next_author.clone(),
+                                        since_lamport_clock: next_since as i64,
+                                        limit: post_count as u32,
+                                        timestamp: now,
+                                    };
+                                    match self.identity_service.sign(&signable) {
+                                        Ok(signature) => {
+                                            self.swarm.behaviour_mut().board_sync.send_request(
+                                                &peer,
+                                                WireBoardSyncRequest::GetWallPosts {
+                                                    requester_peer_id: identity.peer_id,
+                                                    author_peer_id: next_author,
+                                                    since_lamport_clock: next_since as i64,
+                                                    limit: post_count as u32,
+                                                    timestamp: now,
+                                                    signature,
+                                                },
+                                            );
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to sign next wall page request: {}", e)
+                                        }
+                                    }
+                                }
+                                Ok(None) => warn!("Cannot request next wall page without identity"),
+                                Err(e) => warn!("Cannot request next wall page: {}", e),
                             }
                         }
                     }
                 } else {
                     warn!("Content sync service unavailable, cannot store wall posts from relay");
+                    Self::emit_wall_sync_status(
+                        self.event_tx.clone(),
+                        "contact_wall",
+                        "partial_failure",
+                        "posts_stored",
+                        Some(relay_peer_id.clone()),
+                        if author_peer_id.is_empty() {
+                            None
+                        } else {
+                            Some(author_peer_id.clone())
+                        },
+                        None,
+                        None,
+                        Some(post_count),
+                        advanced_relay_cursor,
+                        Some("Content sync service unavailable".to_string()),
+                    )
+                    .await;
+                }
+
+                if stored_all_relay_posts {
+                    Self::emit_wall_sync_status(
+                        self.event_tx.clone(),
+                        if author_peer_id.is_empty() {
+                            "feed"
+                        } else {
+                            "contact_wall"
+                        },
+                        "success",
+                        "posts_stored",
+                        Some(relay_peer_id.clone()),
+                        if author_peer_id.is_empty() {
+                            None
+                        } else {
+                            Some(author_peer_id.clone())
+                        },
+                        None,
+                        None,
+                        Some(post_count),
+                        advanced_relay_cursor,
+                        None,
+                    )
+                    .await;
                 }
 
                 // Emit event to refresh feed
@@ -2419,6 +2820,49 @@ impl NetworkService {
                     })
                     .await;
             }
+            WireBoardSyncResponse::WallSocialEventStored { event_id } => {
+                info!("Wall social event {} stored on relay {}", event_id, peer);
+            }
+            WireBoardSyncResponse::WallSocialEvents { events, .. } => {
+                let count = events.len();
+                if let Some(ref wall_social_service) = self.wall_social_service {
+                    for event in events {
+                        match crate::db::WallSocialEventType::parse_event_type(&event.event_type) {
+                            Some(event_type) => {
+                                if let Err(e) = wall_social_service.process_incoming_event(
+                                    &IncomingWallSocialEventParams {
+                                        event_id: &event.event_id,
+                                        event_type,
+                                        post_id: &event.post_id,
+                                        actor_peer_id: &event.actor_peer_id,
+                                        author_name: event.author_name.as_deref(),
+                                        comment_id: event.comment_id.as_deref(),
+                                        content: event.content.as_deref(),
+                                        reaction_type: event.reaction_type.as_deref(),
+                                        timestamp: event.timestamp,
+                                        signature: &event.signature,
+                                    },
+                                ) {
+                                    warn!(
+                                        "Failed to apply wall social event {} from relay {}: {}",
+                                        event.event_id, peer, e
+                                    );
+                                }
+                            }
+                            None => warn!(
+                                "Ignoring unknown wall social event type {} from relay {}",
+                                event.event_type, peer
+                            ),
+                        }
+                    }
+                } else {
+                    warn!(
+                        "Wall social service unavailable; cannot apply {} relay social events",
+                        count
+                    );
+                }
+                debug!("Received {} wall social events from relay {}", count, peer);
+            }
             WireBoardSyncResponse::Error { error } => {
                 // If this was a community probe that failed (either RegisterPeer or
                 // ListBoards), just clean up silently. Non-community relays will return
@@ -2432,6 +2876,25 @@ impl NetworkService {
                     );
                 } else {
                     warn!("Board sync error from {}: {}", peer, error);
+                    let status_phase = if error.to_ascii_lowercase().contains("permission") {
+                        "permission_denied"
+                    } else {
+                        "relay_unavailable"
+                    };
+                    Self::emit_wall_sync_status(
+                        self.event_tx.clone(),
+                        "feed",
+                        "partial_failure",
+                        status_phase,
+                        Some(relay_peer_id.clone()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(error.clone()),
+                    )
+                    .await;
                     let _ = self
                         .event_tx
                         .send(NetworkEvent::BoardSyncError {
@@ -3454,6 +3917,20 @@ impl NetworkService {
 
                 match self.identity_service.sign(&signable) {
                     Ok(request_signature) => {
+                        Self::emit_wall_sync_status(
+                            self.event_tx.clone(),
+                            "author_wall",
+                            "in_progress",
+                            "sync_started",
+                            Some(relay_peer_id.to_string()),
+                            Some(identity.peer_id.clone()),
+                            Some(post_id.clone()),
+                            None,
+                            None,
+                            Some(lamport_clock as u64),
+                            None,
+                        )
+                        .await;
                         let request = WireBoardSyncRequest::SubmitWallPost {
                             author_peer_id: identity.peer_id,
                             post_id,
@@ -3551,6 +4028,24 @@ impl NetworkService {
 
                 match self.identity_service.sign(&signable) {
                     Ok(signature) => {
+                        Self::emit_wall_sync_status(
+                            self.event_tx.clone(),
+                            if author_peer_id.is_empty() {
+                                "feed"
+                            } else {
+                                "contact_wall"
+                            },
+                            "in_progress",
+                            "author_requested",
+                            Some(relay_peer_id.to_string()),
+                            Some(author_peer_id.clone()),
+                            None,
+                            None,
+                            None,
+                            Some(since_lamport_clock.max(0) as u64),
+                            None,
+                        )
+                        .await;
                         let request = WireBoardSyncRequest::GetWallPosts {
                             requester_peer_id: identity.peer_id,
                             author_peer_id,
@@ -3574,6 +4069,9 @@ impl NetworkService {
             NetworkCommand::DeleteWallPostOnRelay {
                 relay_peer_id,
                 post_id,
+                lamport_clock,
+                deleted_at,
+                signature,
             } => {
                 let identity = match self.identity_service.get_identity() {
                     Ok(Some(id)) => id,
@@ -3585,29 +4083,110 @@ impl NetworkService {
                     }
                 };
 
+                let request = WireBoardSyncRequest::DeleteWallPost {
+                    author_peer_id: identity.peer_id,
+                    post_id,
+                    lamport_clock,
+                    deleted_at,
+                    signature,
+                };
+                self.swarm
+                    .behaviour_mut()
+                    .board_sync
+                    .send_request(&relay_peer_id, request);
+                NetworkResponse::Ok
+            }
+
+            NetworkCommand::SubmitWallSocialEventsToRelay {
+                relay_peer_id,
+                events,
+            } => {
+                let identity = match self.identity_service.get_identity() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return NetworkResponse::Error("No identity available".to_string()),
+                    Err(e) => return NetworkResponse::Error(format!("Identity error: {}", e)),
+                };
                 let now = chrono::Utc::now().timestamp();
-                let signable = SignableWallPostDelete {
-                    author_peer_id: identity.peer_id.clone(),
-                    post_id: post_id.clone(),
+                for event in events {
+                    if event.actor_peer_id != identity.peer_id {
+                        return NetworkResponse::Error(
+                            "Cannot submit another peer's wall social event".to_string(),
+                        );
+                    }
+                    let signable = SignableWallSocialEventSubmit {
+                        event_id: event.event_id.clone(),
+                        event_type: event.event_type.clone(),
+                        post_id: event.post_id.clone(),
+                        actor_peer_id: event.actor_peer_id.clone(),
+                        author_name: event.author_name.clone(),
+                        comment_id: event.comment_id.clone(),
+                        content: event.content.clone(),
+                        reaction_type: event.reaction_type.clone(),
+                        timestamp: event.timestamp,
+                        payload_cbor: event.payload_cbor.clone(),
+                        signature: event.signature.clone(),
+                        request_timestamp: now,
+                    };
+                    let request_signature = match self.identity_service.sign(&signable) {
+                        Ok(sig) => sig,
+                        Err(e) => {
+                            return NetworkResponse::Error(format!(
+                                "Failed to sign wall social event submission: {}",
+                                e
+                            ))
+                        }
+                    };
+                    self.swarm.behaviour_mut().board_sync.send_request(
+                        &relay_peer_id,
+                        WireBoardSyncRequest::SubmitWallSocialEvent {
+                            event,
+                            timestamp: now,
+                            request_signature,
+                        },
+                    );
+                }
+                NetworkResponse::Ok
+            }
+
+            NetworkCommand::GetWallSocialEventsFromRelay {
+                relay_peer_id,
+                author_peer_id,
+                post_ids,
+                after_timestamp,
+                limit,
+            } => {
+                let identity = match self.identity_service.get_identity() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => return NetworkResponse::Error("No identity available".to_string()),
+                    Err(e) => return NetworkResponse::Error(format!("Identity error: {}", e)),
+                };
+                let now = chrono::Utc::now().timestamp();
+                let signable = SignableGetWallSocialEvents {
+                    requester_peer_id: identity.peer_id.clone(),
+                    author_peer_id: author_peer_id.clone(),
+                    post_ids: post_ids.clone(),
+                    after_timestamp,
+                    limit,
                     timestamp: now,
                 };
-
                 match self.identity_service.sign(&signable) {
                     Ok(signature) => {
-                        let request = WireBoardSyncRequest::DeleteWallPost {
-                            author_peer_id: identity.peer_id,
-                            post_id,
-                            timestamp: now,
-                            signature,
-                        };
-                        self.swarm
-                            .behaviour_mut()
-                            .board_sync
-                            .send_request(&relay_peer_id, request);
+                        self.swarm.behaviour_mut().board_sync.send_request(
+                            &relay_peer_id,
+                            WireBoardSyncRequest::GetWallSocialEvents {
+                                requester_peer_id: identity.peer_id,
+                                author_peer_id,
+                                post_ids,
+                                after_timestamp,
+                                limit,
+                                timestamp: now,
+                                signature,
+                            },
+                        );
                         NetworkResponse::Ok
                     }
                     Err(e) => NetworkResponse::Error(format!(
-                        "Failed to sign wall post delete request: {}",
+                        "Failed to sign wall social events request: {}",
                         e
                     )),
                 }

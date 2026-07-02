@@ -10,4 +10,8 @@ export interface FeedItem {
   createdAt: number;
   updatedAt: number;
   isLocal: boolean;
+  /** Durable signed social reaction count loaded from the local reactions table. */
+  likes?: number;
+  /** Whether the unlocked local identity has liked this post. */
+  likedByUser?: boolean;
 }

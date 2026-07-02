@@ -1,8 +1,8 @@
 //! Server-side board logic for the relay server
 
-use crate::db::RelayDatabase;
+use crate::db::{RelayDatabase, WallSocialEventRow};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::{info, warn};
 
@@ -146,13 +146,79 @@ struct SignableGetWallPosts {
 
 impl Signable for SignableGetWallPosts {}
 
+#[derive(Debug, Clone, Serialize)]
+struct SignableWallSocialEventSubmit {
+    pub event_id: String,
+    pub event_type: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub author_name: Option<String>,
+    pub comment_id: Option<String>,
+    pub content: Option<String>,
+    pub reaction_type: Option<String>,
+    pub timestamp: i64,
+    pub payload_cbor: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub request_timestamp: i64,
+}
+impl Signable for SignableWallSocialEventSubmit {}
+
+#[derive(Debug, Clone, Serialize)]
+struct SignableGetWallSocialEvents {
+    pub requester_peer_id: String,
+    pub author_peer_id: String,
+    pub post_ids: Vec<String>,
+    pub after_timestamp: i64,
+    pub limit: u32,
+    pub timestamp: i64,
+}
+impl Signable for SignableGetWallSocialEvents {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WallReadGrantProof {
+    pub grant_id: String,
+    pub issuer_peer_id: String,
+    pub subject_peer_id: String,
+    pub capability: String,
+    pub scope: Option<serde_json::Value>,
+    pub lamport_clock: u64,
+    pub issued_at: i64,
+    pub expires_at: Option<i64>,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SignablePermissionGrant {
+    pub grant_id: String,
+    pub issuer_peer_id: String,
+    pub subject_peer_id: String,
+    pub capability: String,
+    pub scope: Option<serde_json::Value>,
+    pub lamport_clock: u64,
+    pub issued_at: i64,
+    pub expires_at: Option<i64>,
+}
+
+impl Signable for SignablePermissionGrant {}
+
+#[derive(Debug, Clone, Serialize)]
+struct SignablePermissionRevoke {
+    pub grant_id: String,
+    pub issuer_peer_id: String,
+    pub lamport_clock: u64,
+    pub revoked_at: i64,
+}
+
+impl Signable for SignablePermissionRevoke {}
+
 /// Signable version of a wall post delete (excludes signature).
 /// Must match `SignableWallPostDelete` on the client side.
 #[derive(Debug, Clone, Serialize)]
 struct SignableWallPostDelete {
-    pub author_peer_id: String,
     pub post_id: String,
-    pub timestamp: i64,
+    pub author_peer_id: String,
+    pub lamport_clock: u64,
+    pub deleted_at: i64,
 }
 
 impl Signable for SignableWallPostDelete {}
@@ -200,6 +266,31 @@ fn verify_registered_peer_signature(
         .ok_or_else(|| format!("No public key found for peer: {}", peer_id))?;
 
     verify_signature(&stored_public_key, signable, signature_bytes)
+}
+
+fn verify_registered_peer_raw_signature(
+    database: &RelayDatabase,
+    peer_id: &str,
+    payload: &[u8],
+    signature_bytes: &[u8],
+) -> Result<(), String> {
+    let stored_public_key = database
+        .get_peer_public_key(peer_id)
+        .map_err(|db_error| format!("Database error looking up peer key: {}", db_error))?
+        .ok_or_else(|| format!("No public key found for peer: {}", peer_id))?;
+    let key_array: [u8; 32] = stored_public_key.as_slice().try_into().map_err(|_| {
+        format!(
+            "Invalid public key length: expected 32 bytes, got {}",
+            stored_public_key.len()
+        )
+    })?;
+    let verifying_key = VerifyingKey::from_bytes(&key_array)
+        .map_err(|key_error| format!("Invalid Ed25519 public key: {}", key_error))?;
+    let signature = Signature::from_slice(signature_bytes)
+        .map_err(|sig_error| format!("Invalid signature format: {}", sig_error))?;
+    verifying_key
+        .verify(payload, &signature)
+        .map_err(|_| "Signature verification failed".to_string())
 }
 
 fn validate_media_hash(media_hash: &str) -> Result<(), String> {
@@ -716,11 +807,101 @@ impl BoardService {
         Ok(())
     }
 
+    fn validate_wall_read_grant(
+        &self,
+        grant: &WallReadGrantProof,
+        author_peer_id: &str,
+        requester_peer_id: &str,
+        now: i64,
+    ) -> Result<(), String> {
+        if grant.issuer_peer_id != author_peer_id || grant.subject_peer_id != requester_peer_id {
+            return Err("WallRead grant does not match requested author/requester".to_string());
+        }
+        if grant.capability != "wall_read" {
+            return Err(format!(
+                "Invalid grant capability '{}': expected wall_read",
+                grant.capability
+            ));
+        }
+        if let Some(expires_at) = grant.expires_at {
+            if expires_at <= now {
+                return Err("WallRead grant is expired".to_string());
+            }
+        }
+
+        let signable = SignablePermissionGrant {
+            grant_id: grant.grant_id.clone(),
+            issuer_peer_id: grant.issuer_peer_id.clone(),
+            subject_peer_id: grant.subject_peer_id.clone(),
+            capability: grant.capability.clone(),
+            scope: grant.scope.clone(),
+            lamport_clock: grant.lamport_clock,
+            issued_at: grant.issued_at,
+            expires_at: grant.expires_at,
+        };
+        verify_registered_peer_signature(
+            &self.db,
+            &grant.issuer_peer_id,
+            &signable,
+            &grant.signature,
+        )?;
+        Ok(())
+    }
+
+    pub fn process_wall_read_grant(&self, grant: &WallReadGrantProof) -> Result<(), String> {
+        self.validate_wall_read_grant(
+            grant,
+            &grant.issuer_peer_id,
+            &grant.subject_peer_id,
+            chrono::Utc::now().timestamp(),
+        )?;
+        let scope_json = grant.scope.as_ref().map(|scope| scope.to_string());
+        self.db
+            .upsert_wall_read_grant(
+                &grant.grant_id,
+                &grant.issuer_peer_id,
+                &grant.subject_peer_id,
+                &grant.capability,
+                scope_json.as_deref(),
+                grant.lamport_clock,
+                grant.issued_at,
+                grant.expires_at,
+                &grant.signature,
+            )
+            .map_err(|db_error| format!("Failed to store WallRead grant: {}", db_error))?;
+        Ok(())
+    }
+
+    pub fn process_wall_read_revoke(
+        &self,
+        grant_id: &str,
+        issuer_peer_id: &str,
+        lamport_clock: u64,
+        revoked_at: i64,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let signable = SignablePermissionRevoke {
+            grant_id: grant_id.to_string(),
+            issuer_peer_id: issuer_peer_id.to_string(),
+            lamport_clock,
+            revoked_at,
+        };
+        verify_registered_peer_signature(&self.db, issuer_peer_id, &signable, signature)?;
+        let revoked = self
+            .db
+            .revoke_wall_read_grant(grant_id, issuer_peer_id, revoked_at)
+            .map_err(|db_error| format!("Failed to revoke WallRead grant: {}", db_error))?;
+        if !revoked {
+            return Err("WallRead grant not found for issuer or already revoked".to_string());
+        }
+        Ok(())
+    }
+
     /// Get wall posts for a specific author.
     ///
     /// Verifies the requester's signature before returning data.
     /// The requester must be a registered peer.
-    #[allow(clippy::type_complexity)] // Return type mirrors posts plus per-post media metadata from relay storage.
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)] // Return type and arguments mirror the relay wire request/response.
     pub fn process_get_wall_posts(
         &self,
         requester_peer_id: &str,
@@ -729,6 +910,7 @@ impl BoardService {
         limit: u32,
         timestamp: i64,
         signature: &[u8],
+        grant_proof: Option<&WallReadGrantProof>,
     ) -> Result<
         (
             Vec<crate::db::WallPostRow>,
@@ -755,22 +937,57 @@ impl BoardService {
                 format!("Signature verification failed: {}", verification_error)
             })?;
 
+        if let Some(grant) = grant_proof {
+            self.validate_wall_read_grant(grant, author_peer_id, requester_peer_id, timestamp)
+                .map_err(|grant_error| format!("Invalid WallRead grant proof: {}", grant_error))?;
+            let scope_json = grant.scope.as_ref().map(|scope| scope.to_string());
+            self.db
+                .upsert_wall_read_grant(
+                    &grant.grant_id,
+                    &grant.issuer_peer_id,
+                    &grant.subject_peer_id,
+                    &grant.capability,
+                    scope_json.as_deref(),
+                    grant.lamport_clock,
+                    grant.issued_at,
+                    grant.expires_at,
+                    &grant.signature,
+                )
+                .map_err(|db_error| {
+                    format!("Failed to store WallRead grant proof: {}", db_error)
+                })?;
+        }
+
+        let can_read_contacts = requester_peer_id == author_peer_id
+            || self
+                .db
+                .has_active_wall_read_grant(author_peer_id, requester_peer_id, timestamp)
+                .map_err(|db_error| format!("Failed to check WallRead grant: {}", db_error))?;
+
         let clamped_limit = limit.min(100);
-        let posts = self
+        let visible_posts = self
             .db
-            .get_wall_posts(author_peer_id, since_lamport_clock, clamped_limit + 1)
+            .get_wall_posts(
+                author_peer_id,
+                since_lamport_clock,
+                clamped_limit + 1,
+                can_read_contacts,
+            )
             .map_err(|db_error| format!("Failed to get wall posts: {}", db_error))?;
 
-        let has_more = posts.len() > clamped_limit as usize;
+        let has_more = visible_posts.len() > clamped_limit as usize;
         let posts = if has_more {
-            posts[..clamped_limit as usize].to_vec()
+            visible_posts[..clamped_limit as usize].to_vec()
         } else {
-            posts
+            visible_posts
         };
 
-        // Fetch media metadata for each post
+        // Fetch media metadata for each live post; tombstones carry the delete signature only.
         let mut media_map = Vec::new();
         for post in &posts {
+            if post.deleted_at.is_some() {
+                continue;
+            }
             match self.db.get_wall_post_media(&post.post_id) {
                 Ok(media_items) if !media_items.is_empty() => {
                     media_map.push((post.post_id.clone(), media_items));
@@ -782,6 +999,108 @@ impl BoardService {
         Ok((posts, has_more, media_map))
     }
 
+    pub fn process_submit_wall_social_event(
+        &self,
+        event: &crate::WallSocialEventItemProto,
+        request_timestamp: i64,
+        request_signature: &[u8],
+    ) -> Result<(), String> {
+        let signable = SignableWallSocialEventSubmit {
+            event_id: event.event_id.clone(),
+            event_type: event.event_type.clone(),
+            post_id: event.post_id.clone(),
+            actor_peer_id: event.actor_peer_id.clone(),
+            author_name: event.author_name.clone(),
+            comment_id: event.comment_id.clone(),
+            content: event.content.clone(),
+            reaction_type: event.reaction_type.clone(),
+            timestamp: event.timestamp,
+            payload_cbor: event.payload_cbor.clone(),
+            signature: event.signature.clone(),
+            request_timestamp,
+        };
+        verify_registered_peer_signature(
+            &self.db,
+            &event.actor_peer_id,
+            &signable,
+            request_signature,
+        )
+        .map_err(|e| format!("Signature verification failed: {}", e))?;
+        verify_registered_peer_raw_signature(
+            &self.db,
+            &event.actor_peer_id,
+            &event.payload_cbor,
+            &event.signature,
+        )
+        .map_err(|e| format!("Event signature verification failed: {}", e))?;
+        self.db
+            .insert_wall_social_event(&WallSocialEventRow {
+                event_id: event.event_id.clone(),
+                event_type: event.event_type.clone(),
+                post_id: event.post_id.clone(),
+                actor_peer_id: event.actor_peer_id.clone(),
+                author_name: event.author_name.clone(),
+                comment_id: event.comment_id.clone(),
+                content: event.content.clone(),
+                reaction_type: event.reaction_type.clone(),
+                timestamp: event.timestamp,
+                payload_cbor: event.payload_cbor.clone(),
+                signature: event.signature.clone(),
+            })
+            .map_err(|e| format!("Failed to store wall social event: {}", e))?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)] // Mirrors the relay wire request shape.
+    pub fn process_get_wall_social_events(
+        &self,
+        requester_peer_id: &str,
+        author_peer_id: &str,
+        post_ids: &[String],
+        after_timestamp: i64,
+        limit: u32,
+        timestamp: i64,
+        signature: &[u8],
+    ) -> Result<(Vec<WallSocialEventRow>, bool, i64), String> {
+        let signable = SignableGetWallSocialEvents {
+            requester_peer_id: requester_peer_id.to_string(),
+            author_peer_id: author_peer_id.to_string(),
+            post_ids: post_ids.to_vec(),
+            after_timestamp,
+            limit,
+            timestamp,
+        };
+        verify_registered_peer_signature(&self.db, requester_peer_id, &signable, signature)
+            .map_err(|e| format!("Signature verification failed: {}", e))?;
+        let can_read_contacts = requester_peer_id == author_peer_id
+            || self
+                .db
+                .has_active_wall_read_grant(author_peer_id, requester_peer_id, timestamp)
+                .map_err(|e| format!("Failed to check WallRead grant: {}", e))?;
+        let clamped = limit.min(500);
+        let rows = self
+            .db
+            .get_wall_social_events(
+                author_peer_id,
+                post_ids,
+                after_timestamp,
+                clamped + 1,
+                can_read_contacts,
+            )
+            .map_err(|e| format!("Failed to get wall social events: {}", e))?;
+        let has_more = rows.len() > clamped as usize;
+        let events = if has_more {
+            rows[..clamped as usize].to_vec()
+        } else {
+            rows
+        };
+        let next_timestamp = events
+            .last()
+            .map(|e| e.timestamp)
+            .unwrap_or(after_timestamp);
+        Ok((events, has_more, next_timestamp))
+    }
+
     /// Delete a wall post (author-only).
     ///
     /// Verifies the signature against the author's stored public key
@@ -790,14 +1109,16 @@ impl BoardService {
         &self,
         author_peer_id: &str,
         post_id: &str,
-        timestamp: i64,
+        lamport_clock: u64,
+        deleted_at: i64,
         signature: &[u8],
     ) -> Result<(), String> {
         // Verify signature against the author's stored public key
         let signable_delete = SignableWallPostDelete {
-            author_peer_id: author_peer_id.to_string(),
             post_id: post_id.to_string(),
-            timestamp,
+            author_peer_id: author_peer_id.to_string(),
+            lamport_clock,
+            deleted_at,
         };
 
         verify_registered_peer_signature(&self.db, author_peer_id, &signable_delete, signature)
@@ -811,8 +1132,14 @@ impl BoardService {
 
         let deleted = self
             .db
-            .delete_wall_post(post_id, author_peer_id)
-            .map_err(|db_error| format!("Failed to delete wall post: {}", db_error))?;
+            .tombstone_wall_post(
+                post_id,
+                author_peer_id,
+                lamport_clock,
+                deleted_at,
+                signature,
+            )
+            .map_err(|db_error| format!("Failed to tombstone wall post: {}", db_error))?;
 
         if !deleted {
             warn!(
@@ -822,7 +1149,341 @@ impl BoardService {
             return Err("Wall post not found or not owned by you".to_string());
         }
 
-        info!("Wall post {} deleted by {}", post_id, author_peer_id);
+        info!(
+            "Wall post {} tombstoned by {} (lamport_clock={}, deleted_at={})",
+            post_id, author_peer_id, lamport_clock, deleted_at
+        );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn signing_key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn register(service: &BoardService, peer_id: &str, key: &SigningKey) {
+        service
+            .db
+            .register_peer(peer_id, &key.verifying_key().to_bytes(), peer_id)
+            .unwrap();
+    }
+
+    fn sign<T: Signable>(key: &SigningKey, value: &T) -> Vec<u8> {
+        key.sign(&value.signable_bytes().unwrap())
+            .to_bytes()
+            .to_vec()
+    }
+
+    fn signed_get(
+        requester_key: &SigningKey,
+        requester_peer_id: &str,
+        author_peer_id: &str,
+        timestamp: i64,
+    ) -> Vec<u8> {
+        signed_get_with(
+            requester_key,
+            requester_peer_id,
+            author_peer_id,
+            0,
+            20,
+            timestamp,
+        )
+    }
+
+    fn signed_get_with(
+        requester_key: &SigningKey,
+        requester_peer_id: &str,
+        author_peer_id: &str,
+        since_lamport_clock: i64,
+        limit: u32,
+        timestamp: i64,
+    ) -> Vec<u8> {
+        sign(
+            requester_key,
+            &SignableGetWallPosts {
+                requester_peer_id: requester_peer_id.to_string(),
+                author_peer_id: author_peer_id.to_string(),
+                since_lamport_clock,
+                limit,
+                timestamp,
+            },
+        )
+    }
+
+    fn signed_delete(
+        author_key: &SigningKey,
+        post_id: &str,
+        author_peer_id: &str,
+        lamport_clock: u64,
+        deleted_at: i64,
+    ) -> Vec<u8> {
+        sign(
+            author_key,
+            &SignableWallPostDelete {
+                post_id: post_id.to_string(),
+                author_peer_id: author_peer_id.to_string(),
+                lamport_clock,
+                deleted_at,
+            },
+        )
+    }
+
+    fn wall_read_grant(
+        author_key: &SigningKey,
+        author_peer_id: &str,
+        requester_peer_id: &str,
+    ) -> WallReadGrantProof {
+        let mut grant = WallReadGrantProof {
+            grant_id: "grant-wall-read-1".to_string(),
+            issuer_peer_id: author_peer_id.to_string(),
+            subject_peer_id: requester_peer_id.to_string(),
+            capability: "wall_read".to_string(),
+            scope: None,
+            lamport_clock: 3,
+            issued_at: 1_000,
+            expires_at: None,
+            signature: Vec::new(),
+        };
+        grant.signature = sign(
+            author_key,
+            &SignablePermissionGrant {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: grant.issuer_peer_id.clone(),
+                subject_peer_id: grant.subject_peer_id.clone(),
+                capability: grant.capability.clone(),
+                scope: grant.scope.clone(),
+                lamport_clock: grant.lamport_clock,
+                issued_at: grant.issued_at,
+                expires_at: grant.expires_at,
+            },
+        );
+        grant
+    }
+
+    fn service_with_wall_posts() -> (BoardService, SigningKey, SigningKey) {
+        let service =
+            BoardService::new(RelayDatabase::open(":memory:").unwrap(), "test".to_string());
+        let author_key = signing_key(1);
+        let requester_key = signing_key(2);
+        register(&service, "author", &author_key);
+        register(&service, "requester", &requester_key);
+        service
+            .db
+            .insert_wall_post(
+                "public-post",
+                "author",
+                "text",
+                Some("Public"),
+                "public",
+                1,
+                1_000,
+                &[7; 64],
+            )
+            .unwrap();
+        service
+            .db
+            .insert_wall_post(
+                "contacts-post",
+                "author",
+                "text",
+                Some("Contacts"),
+                "contacts",
+                2,
+                2_000,
+                &[8; 64],
+            )
+            .unwrap();
+        (service, author_key, requester_key)
+    }
+
+    #[test]
+    fn get_wall_posts_returns_public_only_without_wall_read() {
+        let (service, _author_key, requester_key) = service_with_wall_posts();
+        let timestamp = 3_000;
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+
+        let (posts, _has_more, _media) = service
+            .process_get_wall_posts("requester", "author", 0, 20, timestamp, &signature, None)
+            .unwrap();
+
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, "public-post");
+    }
+
+    #[test]
+    fn get_wall_posts_returns_contacts_posts_with_valid_wall_read_grant() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let timestamp = 3_000;
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let grant = wall_read_grant(&author_key, "author", "requester");
+
+        let (posts, _has_more, _media) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &signature,
+                Some(&grant),
+            )
+            .unwrap();
+
+        let post_ids: Vec<_> = posts.iter().map(|post| post.post_id.as_str()).collect();
+        assert_eq!(post_ids, vec!["public-post", "contacts-post"]);
+    }
+
+    #[test]
+    fn get_wall_posts_paginates_from_stored_lamport_without_duplicates() {
+        let (service, _author_key, requester_key) = service_with_wall_posts();
+        service
+            .db
+            .insert_wall_post(
+                "newer-public-post",
+                "author",
+                "text",
+                Some("Newer"),
+                "public",
+                3,
+                3_000,
+                &[9; 64],
+            )
+            .unwrap();
+
+        let timestamp = 4_000;
+        let first_signature =
+            signed_get_with(&requester_key, "requester", "author", 0, 1, timestamp);
+        let (first_page, has_more, _media) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                1,
+                timestamp,
+                &first_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(first_page[0].post_id, "public-post");
+        assert!(has_more);
+
+        let next_cursor = first_page[0].lamport_clock;
+        let second_signature = signed_get_with(
+            &requester_key,
+            "requester",
+            "author",
+            next_cursor,
+            20,
+            timestamp,
+        );
+        let (second_page, has_more, _media) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                next_cursor,
+                20,
+                timestamp,
+                &second_signature,
+                None,
+            )
+            .unwrap();
+
+        let post_ids: Vec<_> = second_page
+            .iter()
+            .map(|post| post.post_id.as_str())
+            .collect();
+        assert_eq!(post_ids, vec!["newer-public-post"]);
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn get_wall_posts_rejects_malformed_wall_read_grant() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let timestamp = 3_000;
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let mut grant = wall_read_grant(&author_key, "author", "requester");
+        grant.capability = "chat".to_string();
+
+        let result = service.process_get_wall_posts(
+            "requester",
+            "author",
+            0,
+            20,
+            timestamp,
+            &signature,
+            Some(&grant),
+        );
+
+        assert!(matches!(result, Err(message) if message.contains("Invalid WallRead grant proof")));
+    }
+
+    #[test]
+    fn delete_wall_post_persists_signed_tombstone_and_blocks_stale_snapshot() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let delete_signature = signed_delete(&author_key, "public-post", "author", 5, 5_000);
+        service
+            .process_delete_wall_post("author", "public-post", 5, 5_000, &delete_signature)
+            .unwrap();
+
+        service
+            .db
+            .insert_wall_post(
+                "public-post",
+                "author",
+                "text",
+                Some("Stale relay snapshot"),
+                "public",
+                1,
+                1_000,
+                &[3; 64],
+            )
+            .unwrap();
+
+        let timestamp = 6_000;
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (posts, _has_more, media) = service
+            .process_get_wall_posts("requester", "author", 0, 20, timestamp, &signature, None)
+            .unwrap();
+
+        let tombstone = posts
+            .iter()
+            .find(|post| post.post_id == "public-post")
+            .expect("delete tombstone should be returned");
+        assert_eq!(tombstone.deleted_at, Some(5_000));
+        assert_eq!(tombstone.lamport_clock, 5);
+        assert_eq!(tombstone.signature, delete_signature);
+        assert!(media.iter().all(|(post_id, _)| post_id != "public-post"));
+    }
+
+    #[test]
+    fn get_wall_posts_hides_contacts_posts_after_grant_revoke() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let timestamp = 3_000;
+        let grant = wall_read_grant(&author_key, "author", "requester");
+        service.process_wall_read_grant(&grant).unwrap();
+
+        let revoke = SignablePermissionRevoke {
+            grant_id: grant.grant_id.clone(),
+            issuer_peer_id: "author".to_string(),
+            lamport_clock: 4,
+            revoked_at: 3_500,
+        };
+        let revoke_signature = sign(&author_key, &revoke);
+        service
+            .process_wall_read_revoke(&grant.grant_id, "author", 4, 3_500, &revoke_signature)
+            .unwrap();
+
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (posts, _has_more, _media) = service
+            .process_get_wall_posts("requester", "author", 0, 20, timestamp, &signature, None)
+            .unwrap();
+
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, "public-post");
     }
 }

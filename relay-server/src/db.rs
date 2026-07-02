@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS wall_posts (
     lamport_clock INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     signature BLOB NOT NULL,
-    stored_at INTEGER NOT NULL
+    stored_at INTEGER NOT NULL,
+    deleted_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_wall_posts_author
@@ -86,12 +87,62 @@ CREATE TABLE IF NOT EXISTS wall_post_media (
 
 CREATE INDEX IF NOT EXISTS idx_wall_post_media_post
     ON wall_post_media(post_id);
+
+CREATE TABLE IF NOT EXISTS wall_read_grants (
+    grant_id TEXT PRIMARY KEY,
+    issuer_peer_id TEXT NOT NULL,
+    subject_peer_id TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    scope_json TEXT,
+    lamport_clock INTEGER NOT NULL,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    signature BLOB NOT NULL,
+    revoked_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_wall_read_grants_lookup
+    ON wall_read_grants(issuer_peer_id, subject_peer_id, capability, revoked_at);
+
+CREATE TABLE IF NOT EXISTS wall_social_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    event_type TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    actor_peer_id TEXT NOT NULL,
+    author_name TEXT,
+    comment_id TEXT,
+    content TEXT,
+    reaction_type TEXT,
+    timestamp INTEGER NOT NULL,
+    payload_cbor BLOB NOT NULL,
+    signature BLOB NOT NULL,
+    stored_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wall_social_events_post
+    ON wall_social_events(post_id, timestamp);
 "#;
 
 /// Relay server database
 #[derive(Clone)]
 pub struct RelayDatabase {
     conn: Arc<Mutex<Connection>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WallSocialEventRow {
+    pub event_id: String,
+    pub event_type: String,
+    pub post_id: String,
+    pub actor_peer_id: String,
+    pub author_name: Option<String>,
+    pub comment_id: Option<String>,
+    pub content: Option<String>,
+    pub reaction_type: Option<String>,
+    pub timestamp: i64,
+    pub payload_cbor: Vec<u8>,
+    pub signature: Vec<u8>,
 }
 
 impl RelayDatabase {
@@ -105,6 +156,7 @@ impl RelayDatabase {
             conn: Arc::new(Mutex::new(conn)),
         };
 
+        db.ensure_wall_post_tombstone_columns()?;
         db.ensure_wall_media_columns()?;
 
         // Create default "General" board if none exist
@@ -112,6 +164,22 @@ impl RelayDatabase {
 
         info!("Relay database initialized at {}", path);
         Ok(db)
+    }
+
+    fn ensure_wall_post_tombstone_columns(&self) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let has_deleted_at: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('wall_posts') WHERE name = 'deleted_at'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_deleted_at {
+            conn.execute("ALTER TABLE wall_posts ADD COLUMN deleted_at INTEGER", [])?;
+        }
+        Ok(())
     }
 
     fn ensure_wall_media_columns(&self) -> SqliteResult<()> {
@@ -351,6 +419,84 @@ impl RelayDatabase {
         Ok(count > 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_wall_read_grant(
+        &self,
+        grant_id: &str,
+        issuer_peer_id: &str,
+        subject_peer_id: &str,
+        capability: &str,
+        scope_json: Option<&str>,
+        lamport_clock: u64,
+        issued_at: i64,
+        expires_at: Option<i64>,
+        signature: &[u8],
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO wall_read_grants
+                (grant_id, issuer_peer_id, subject_peer_id, capability, scope_json,
+                 lamport_clock, issued_at, expires_at, signature, revoked_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+             ON CONFLICT(grant_id) DO UPDATE SET
+                 issuer_peer_id = excluded.issuer_peer_id,
+                 subject_peer_id = excluded.subject_peer_id,
+                 capability = excluded.capability,
+                 scope_json = excluded.scope_json,
+                 lamport_clock = excluded.lamport_clock,
+                 issued_at = excluded.issued_at,
+                 expires_at = excluded.expires_at,
+                 signature = excluded.signature",
+            params![
+                grant_id,
+                issuer_peer_id,
+                subject_peer_id,
+                capability,
+                scope_json,
+                lamport_clock as i64,
+                issued_at,
+                expires_at,
+                signature
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn revoke_wall_read_grant(
+        &self,
+        grant_id: &str,
+        issuer_peer_id: &str,
+        revoked_at: i64,
+    ) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE wall_read_grants SET revoked_at = ?
+             WHERE grant_id = ? AND issuer_peer_id = ? AND revoked_at IS NULL",
+            params![revoked_at, grant_id, issuer_peer_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn has_active_wall_read_grant(
+        &self,
+        issuer_peer_id: &str,
+        subject_peer_id: &str,
+        now: i64,
+    ) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM wall_read_grants
+             WHERE issuer_peer_id = ?
+               AND subject_peer_id = ?
+               AND capability = 'wall_read'
+               AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > ?)",
+            params![issuer_peer_id, subject_peer_id, now],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     /// Get the highest lamport clock value ever seen for a given author peer.
     ///
     /// This reads from the dedicated `author_lamport_clocks` table, which is
@@ -512,11 +658,22 @@ impl RelayDatabase {
     ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().timestamp();
+        let existing_deleted_at: Option<Option<i64>> = conn
+            .query_row(
+                "SELECT deleted_at FROM wall_posts WHERE post_id = ? AND author_peer_id = ?",
+                params![post_id, author_peer_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if matches!(existing_deleted_at, Some(Some(_))) {
+            return Ok(());
+        }
+
         conn.execute(
             "INSERT OR REPLACE INTO wall_posts
                 (post_id, author_peer_id, content_type, content_text, visibility,
-                 lamport_clock, created_at, signature, stored_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 lamport_clock, created_at, signature, stored_at, deleted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
             params![
                 post_id,
                 author_peer_id,
@@ -534,25 +691,33 @@ impl RelayDatabase {
 
     /// Retrieve wall posts for a given author, optionally filtered by
     /// lamport clock. Returns posts with `lamport_clock > since_lamport_clock`,
-    /// ordered newest-first.
+    /// ordered oldest-first so callers can advance durable cursors without
+    /// duplicating/skipping pages.
     pub fn get_wall_posts(
         &self,
         author_peer_id: &str,
         since_lamport_clock: i64,
         limit: u32,
+        include_contacts_only: bool,
     ) -> SqliteResult<Vec<WallPostRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT post_id, author_peer_id, content_type, content_text, visibility,
-                    lamport_clock, created_at, signature, stored_at
+                    lamport_clock, created_at, deleted_at, signature, stored_at
              FROM wall_posts
              WHERE author_peer_id = ? AND lamport_clock > ?
-             ORDER BY lamport_clock DESC
+               AND (? OR visibility = 'public')
+             ORDER BY lamport_clock ASC
              LIMIT ?",
         )?;
 
         let mut posts = Vec::new();
-        let mut rows = stmt.query(params![author_peer_id, since_lamport_clock, limit])?;
+        let mut rows = stmt.query(params![
+            author_peer_id,
+            since_lamport_clock,
+            include_contacts_only,
+            limit
+        ])?;
         while let Some(row) = rows.next()? {
             posts.push(WallPostRow {
                 post_id: row.get(0)?,
@@ -562,8 +727,9 @@ impl RelayDatabase {
                 visibility: row.get(4)?,
                 lamport_clock: row.get(5)?,
                 created_at: row.get(6)?,
-                signature: row.get(7)?,
-                stored_at: row.get(8)?,
+                deleted_at: row.get(7)?,
+                signature: row.get(8)?,
+                stored_at: row.get(9)?,
             });
         }
         Ok(posts)
@@ -635,14 +801,135 @@ impl RelayDatabase {
         Ok(items)
     }
 
-    /// Delete a wall post. Returns true if a row was actually removed.
-    pub fn delete_wall_post(&self, post_id: &str, author_peer_id: &str) -> SqliteResult<bool> {
+    pub fn insert_wall_social_event(&self, event: &WallSocialEventRow) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap();
-        let rows = conn.execute(
-            "DELETE FROM wall_posts WHERE post_id = ? AND author_peer_id = ?",
-            params![post_id, author_peer_id],
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO wall_social_events
+             (event_id, event_type, post_id, actor_peer_id, author_name, comment_id, content,
+              reaction_type, timestamp, payload_cbor, signature, stored_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                event.event_id,
+                event.event_type,
+                event.post_id,
+                event.actor_peer_id,
+                event.author_name,
+                event.comment_id,
+                event.content,
+                event.reaction_type,
+                event.timestamp,
+                event.payload_cbor,
+                event.signature,
+                chrono::Utc::now().timestamp()
+            ],
         )?;
-        Ok(rows > 0)
+        Ok(inserted > 0)
+    }
+
+    pub fn get_wall_social_events(
+        &self,
+        author_peer_id: &str,
+        post_ids: &[String],
+        after_timestamp: i64,
+        limit: u32,
+        can_read_contacts: bool,
+    ) -> SqliteResult<Vec<WallSocialEventRow>> {
+        if post_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = (0..post_ids.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let visibility_filter = if can_read_contacts {
+            ""
+        } else {
+            " AND p.visibility = 'public'"
+        };
+        let query = format!(
+            "SELECT e.event_id, e.event_type, e.post_id, e.actor_peer_id, e.author_name,
+                    e.comment_id, e.content, e.reaction_type, e.timestamp, e.payload_cbor, e.signature
+             FROM wall_social_events e JOIN wall_posts p ON p.post_id = e.post_id
+             WHERE p.author_peer_id = ? AND e.post_id IN ({}) AND e.timestamp > ?{}
+             ORDER BY e.timestamp ASC, e.id ASC LIMIT ?",
+            placeholders, visibility_filter
+        );
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        params_vec.push(&author_peer_id);
+        for post_id in post_ids {
+            params_vec.push(post_id);
+        }
+        params_vec.push(&after_timestamp);
+        let limit_i64 = limit as i64;
+        params_vec.push(&limit_i64);
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params_vec), |row| {
+            Ok(WallSocialEventRow {
+                event_id: row.get(0)?,
+                event_type: row.get(1)?,
+                post_id: row.get(2)?,
+                actor_peer_id: row.get(3)?,
+                author_name: row.get(4)?,
+                comment_id: row.get(5)?,
+                content: row.get(6)?,
+                reaction_type: row.get(7)?,
+                timestamp: row.get(8)?,
+                payload_cbor: row.get(9)?,
+                signature: row.get(10)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Persist a wall post delete tombstone. Returns true if a row existed or was created.
+    pub fn tombstone_wall_post(
+        &self,
+        post_id: &str,
+        author_peer_id: &str,
+        lamport_clock: u64,
+        deleted_at: i64,
+        signature: &[u8],
+    ) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<(String, Option<String>, String, i64)> = conn
+            .query_row(
+                "SELECT content_type, content_text, visibility, lamport_clock FROM wall_posts WHERE post_id = ? AND author_peer_id = ?",
+                params![post_id, author_peer_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        if let Some((content_type, content_text, visibility, existing_lamport)) = existing {
+            if existing_lamport > lamport_clock as i64 {
+                return Ok(true);
+            }
+            conn.execute(
+                "UPDATE wall_posts
+                 SET content_type = ?, content_text = ?, lamport_clock = ?, deleted_at = ?, signature = ?, stored_at = ?
+                 WHERE post_id = ? AND author_peer_id = ?",
+                params![content_type, content_text, lamport_clock as i64, deleted_at, signature, chrono::Utc::now().timestamp(), post_id, author_peer_id],
+            )?;
+            let _ = visibility;
+            return Ok(true);
+        }
+
+        conn.execute(
+            "INSERT INTO wall_posts
+                (post_id, author_peer_id, content_type, content_text, visibility,
+                 lamport_clock, created_at, signature, stored_at, deleted_at)
+             VALUES (?, ?, 'tombstone', NULL, 'contacts', ?, ?, ?, ?, ?)",
+            params![
+                post_id,
+                author_peer_id,
+                lamport_clock as i64,
+                deleted_at,
+                signature,
+                chrono::Utc::now().timestamp(),
+                deleted_at,
+            ],
+        )?;
+        Ok(true)
     }
 }
 
@@ -680,6 +967,7 @@ pub struct WallPostRow {
     pub visibility: String,
     pub lamport_clock: i64,
     pub created_at: i64,
+    pub deleted_at: Option<i64>,
     pub signature: Vec<u8>,
     pub stored_at: i64,
 }

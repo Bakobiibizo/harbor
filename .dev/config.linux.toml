@@ -1,5 +1,5 @@
 # Linux/macOS devkit configuration
-# Frontend: TypeScript/npm at project root
+# Frontend: TypeScript/pnpm at project root
 # Backend: Rust at src-tauri/
 
 default_language = "rust"
@@ -7,22 +7,22 @@ default_language = "rust"
 # ===================== TypeScript/Frontend ========================
 
 [tasks.ts_fmt]
-commands = [["npx", "prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
+commands = [["pnpm", "exec", "prettier", "--write", "src/**/*.{ts,tsx,js,jsx,css,html}"]]
 
 [tasks.ts_lint]
-commands = [["npx", "eslint", "src", "--fix"]]
+commands = [["pnpm", "exec", "eslint", "src", "--fix"]]
 
 [tasks.ts_lint_check]
-commands = [["npx", "eslint", "src"]]
+commands = [["pnpm", "exec", "eslint", "src"]]
 
 [tasks.ts_type]
-commands = [["npx", "tsc", "--noEmit"]]
+commands = [["pnpm", "exec", "tsc", "--noEmit"]]
 
 [tasks.ts_test]
-commands = [["npm", "run", "test"]]
+commands = [["pnpm", "run", "test"]]
 
 [tasks.ts_build]
-commands = [["npm", "run", "build"]]
+commands = [["pnpm", "run", "build"]]
 
 [tasks.ts_fix]
 commands = [
@@ -97,6 +97,17 @@ commands = [["cargo", "fmt", "--manifest-path", "relay-server/Cargo.toml", "--",
 [tasks.relay_clippy]
 commands = [["cargo", "clippy", "--manifest-path", "relay-server/Cargo.toml", "--", "-D", "warnings"]]
 
+[tasks.relay_test]
+commands = [["cargo", "test", "--manifest-path", "relay-server/Cargo.toml"]]
+
+[tasks.relay_ci]
+commands = [
+  "relay_fmt_check",
+  "relay_check",
+  "relay_clippy",
+  "relay_test"
+]
+
 # ===================== Combined/Tauri ========================
 
 [tasks.fmt_all]
@@ -118,15 +129,15 @@ commands = [
 ]
 
 [tasks.tauri_dev]
-commands = [["npm", "run", "tauri", "dev"]]
+commands = [["pnpm", "run", "tauri", "dev"]]
 
 [tasks.tauri_build]
-commands = [["npm", "run", "tauri", "build"]]
+commands = [["pnpm", "run", "tauri", "build"]]
 
 # ===================== Language Pipelines ========================
 
 [languages.typescript]
-install = [["npm", "install"]]
+install = [["pnpm", "install", "--frozen-lockfile"]]
 
 [languages.typescript.pipelines]
 fmt = ["ts_fmt"]

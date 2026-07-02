@@ -216,10 +216,71 @@ pub async fn create_post(
 #[tauri::command]
 pub async fn update_post(
     posts_service: State<'_, Arc<PostsService>>,
+    network_state: State<'_, crate::commands::NetworkState>,
     post_id: String,
     content_text: Option<String>,
 ) -> Result<(), AppError> {
     posts_service.update_post(&post_id, content_text.as_deref())?;
+
+    // Auto-sync: submit the updated current-state snapshot to the relay in the
+    // background.  The durable local update event remains signed separately;
+    // the relay snapshot lets consumers that missed the edit catch up by
+    // lamport state.
+    if let Some(post) = posts_service.get_post(&post_id)? {
+        if let Ok(handle) = network_state.get_handle().await {
+            if let Ok(stats) = handle.get_stats().await {
+                if let Ok(relay_peer_id) =
+                    crate::commands::wall_sync::find_relay_peer_id(&stats.relay_addresses)
+                {
+                    let media_items: Vec<crate::p2p::protocols::board_sync::WallPostMediaItem> =
+                        posts_service
+                            .get_post_media(&post.post_id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|m| crate::p2p::protocols::board_sync::WallPostMediaItem {
+                                media_hash: m.media_hash,
+                                media_type: m.media_type,
+                                mime_type: m.mime_type,
+                                file_name: m.file_name,
+                                file_size: m.file_size,
+                                width: m.width,
+                                height: m.height,
+                                duration_seconds: m.duration_seconds,
+                                sort_order: m.sort_order,
+                                signature: m.signature,
+                            })
+                            .collect();
+                    let mut sorted_media = media_items.clone();
+                    sorted_media.sort_by_key(|m| m.sort_order);
+                    let media_hashes = sorted_media.iter().map(|m| m.media_hash.clone()).collect();
+                    tokio::spawn(async move {
+                        if let Err(e) = handle
+                            .submit_wall_post_to_relay(
+                                relay_peer_id,
+                                post.post_id.clone(),
+                                post.content_type,
+                                post.content_text,
+                                post.visibility.as_str().to_string(),
+                                post.lamport_clock,
+                                post.created_at,
+                                post.signature,
+                                media_hashes,
+                                media_items,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                "Failed to auto-sync updated wall post {} to relay: {}",
+                                post.post_id,
+                                e
+                            );
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -230,7 +291,7 @@ pub async fn delete_post(
     network_state: State<'_, crate::commands::NetworkState>,
     post_id: String,
 ) -> Result<(), AppError> {
-    posts_service.delete_post(&post_id)?;
+    let tombstone = posts_service.delete_post(&post_id)?;
 
     // Auto-sync: delete the post on the relay in the background
     if let Ok(handle) = network_state.get_handle().await {
@@ -239,9 +300,18 @@ pub async fn delete_post(
                 crate::commands::wall_sync::find_relay_peer_id(&stats.relay_addresses)
             {
                 let pid = post_id.clone();
+                let lamport_clock = tombstone.lamport_clock;
+                let deleted_at = tombstone.deleted_at;
+                let signature = tombstone.signature.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle
-                        .delete_wall_post_on_relay(relay_peer_id, pid.clone())
+                        .delete_wall_post_on_relay(
+                            relay_peer_id,
+                            pid.clone(),
+                            lamport_clock,
+                            deleted_at,
+                            signature,
+                        )
                         .await
                     {
                         tracing::warn!("Failed to auto-delete wall post {} on relay: {}", pid, e);

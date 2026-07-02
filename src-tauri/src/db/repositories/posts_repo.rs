@@ -388,7 +388,7 @@ impl PostsRepository {
         })
     }
 
-    /// Update post content
+    /// Update post content while preserving the previously stored post signature.
     pub fn update_post(
         db: &Database,
         post_id: &str,
@@ -398,7 +398,7 @@ impl PostsRepository {
     ) -> SqliteResult<bool> {
         db.with_connection(|conn| {
             let rows = conn.execute(
-                "UPDATE posts SET content_text = ?, updated_at = ?, lamport_clock = ?
+                "UPDATE posts SET content_text = ?, updated_at = ?, lamport_clock = ?, deleted_at = NULL
                  WHERE post_id = ?",
                 params![content_text, updated_at, lamport_clock, post_id],
             )?;
@@ -406,7 +406,26 @@ impl PostsRepository {
         })
     }
 
-    /// Soft delete a post
+    /// Update post content and replace the materialized post signature.
+    pub fn update_post_with_signature(
+        db: &Database,
+        post_id: &str,
+        content_text: Option<&str>,
+        updated_at: i64,
+        lamport_clock: i64,
+        signature: &[u8],
+    ) -> SqliteResult<bool> {
+        db.with_connection(|conn| {
+            let rows = conn.execute(
+                "UPDATE posts SET content_text = ?, updated_at = ?, lamport_clock = ?, deleted_at = NULL, signature = ?
+                 WHERE post_id = ?",
+                params![content_text, updated_at, lamport_clock, signature, post_id],
+            )?;
+            Ok(rows > 0)
+        })
+    }
+
+    /// Soft delete a post while preserving the previous lamport/signature state.
     pub fn delete_post(db: &Database, post_id: &str, deleted_at: i64) -> SqliteResult<bool> {
         db.with_connection(|conn| {
             let rows = conn.execute(
@@ -415,6 +434,57 @@ impl PostsRepository {
                 params![deleted_at, post_id],
             )?;
             Ok(rows > 0)
+        })
+    }
+
+    /// Soft delete a post and store the tombstone lamport/signature state.
+    pub fn delete_post_with_tombstone(
+        db: &Database,
+        post_id: &str,
+        deleted_at: i64,
+        lamport_clock: i64,
+        signature: &[u8],
+    ) -> SqliteResult<bool> {
+        db.with_connection(|conn| {
+            let rows = conn.execute(
+                "UPDATE posts SET deleted_at = ?, updated_at = ?, lamport_clock = ?, signature = ?
+                 WHERE post_id = ?",
+                params![deleted_at, deleted_at, lamport_clock, signature, post_id],
+            )?;
+            Ok(rows > 0)
+        })
+    }
+
+    /// Insert a remote tombstone for a post we have not seen yet.
+    pub fn insert_remote_tombstone(
+        db: &Database,
+        post_id: &str,
+        author_peer_id: &str,
+        lamport_clock: i64,
+        deleted_at: i64,
+        signature: &[u8],
+    ) -> SqliteResult<i64> {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO posts (
+                    post_id, author_peer_id, content_type, content_text,
+                    visibility, lamport_clock, created_at, updated_at,
+                    deleted_at, is_local, signature
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    post_id,
+                    author_peer_id,
+                    "deleted",
+                    PostVisibility::Public.as_str(),
+                    lamport_clock,
+                    deleted_at,
+                    deleted_at,
+                    deleted_at,
+                    0i32,
+                    signature,
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
         })
     }
 
@@ -716,7 +786,7 @@ impl PostsRepository {
         db.with_connection(|conn| {
             let received_at = chrono::Utc::now().timestamp();
             conn.execute(
-                "INSERT INTO post_events (
+                "INSERT OR REPLACE INTO post_events (
                     event_id, event_type, post_id, author_peer_id,
                     lamport_clock, timestamp, payload_cbor, signature, received_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

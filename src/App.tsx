@@ -6,8 +6,17 @@ import { useTauriEvents } from './hooks';
 import { MainLayout } from './components/layout';
 import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/onboarding';
 import { AddContactDialog, ErrorBoundary } from './components/common';
+import { CallOverlay } from './components/calling/CallOverlay';
 import { HarborIcon } from './components/icons';
-import { BoardsPage, ChatPage, WallPage, FeedPage, NetworkPage, SettingsPage } from './pages';
+import {
+  BoardsPage,
+  ChatPage,
+  ContactWallPage,
+  WallPage,
+  FeedPage,
+  NetworkPage,
+  SettingsPage,
+} from './pages';
 import type { AccountInfo } from './types';
 
 function LoadingScreen() {
@@ -85,7 +94,8 @@ function LoadingScreen() {
 
 function AppContent() {
   const { state, initialize } = useIdentityStore();
-  const { checkStatus, startNetwork, pendingDeepLinkContact, setPendingDeepLinkContact } = useNetworkStore();
+  const { checkStatus, startNetwork, pendingDeepLinkContact, setPendingDeepLinkContact } =
+    useNetworkStore();
   const { autoStartNetwork } = useSettingsStore();
   const { accounts, loading: accountsLoading, loadAccounts } = useAccountsStore();
 
@@ -202,6 +212,7 @@ function AppContent() {
         <Routes>
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/wall" element={<WallPage />} />
+          <Route path="/contacts/:peerId/wall" element={<ContactWallPage />} />
           <Route path="/feed" element={<FeedPage />} />
           <Route path="/boards" element={<BoardsPage />} />
           <Route path="/network" element={<NetworkPage />} />
@@ -209,6 +220,7 @@ function AppContent() {
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
       </MainLayout>
+      <CallOverlay />
       {pendingDeepLinkContact && (
         <AddContactDialog
           contactString={pendingDeepLinkContact}

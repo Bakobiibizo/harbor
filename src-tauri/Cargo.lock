@@ -2026,6 +2026,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "void",
+ "webkit2gtk",
  "x25519-dalek",
 ]
 

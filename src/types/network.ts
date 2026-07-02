@@ -52,8 +52,27 @@ export type NetworkEvent =
   | { type: 'content_manifest_received'; peer_id: string; post_count: number; has_more: boolean }
   | { type: 'content_fetched'; peer_id: string; post_id: string }
   | { type: 'content_sync_error'; peer_id: string; error: string }
+  | {
+      type: 'wall_sync_status';
+      scope: string;
+      status: 'in_progress' | 'success' | 'partial_failure' | string;
+      phase: string;
+      relay_peer_id: string | null;
+      author_peer_id: string | null;
+      post_id: string | null;
+      media_hash: string | null;
+      post_count: number | null;
+      cursor: number | null;
+      error: string | null;
+      occurred_at: number;
+    }
   | { type: 'wall_post_synced'; relay_peer_id: string; post_id: string }
-  | { type: 'wall_posts_received'; relay_peer_id: string; author_peer_id: string; post_count: number }
+  | {
+      type: 'wall_posts_received';
+      relay_peer_id: string;
+      author_peer_id: string;
+      post_count: number;
+    }
   | { type: 'wall_post_deleted_on_relay'; relay_peer_id: string; post_id: string }
   | { type: 'media_fetched'; peer_id: string; media_hash: string }
   | { type: 'call_signaling_received'; peer_id: string; message: SignalingEnvelope }

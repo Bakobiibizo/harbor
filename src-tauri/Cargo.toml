@@ -82,6 +82,10 @@ libp2p = { version = "0.56", features = [
 multiaddr = "0.18"
 void = "1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Directly used to grant WebKitGTK user-media permission in opt-in headless validation runs.
+webkit2gtk = "2.0.2"
+
 [dev-dependencies]
 tempfile = "3"
 

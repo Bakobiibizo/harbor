@@ -99,7 +99,8 @@ pub struct OutgoingGetWallPosts {
 pub struct OutgoingWallPostDelete {
     pub post_id: String,
     pub author_peer_id: String,
-    pub timestamp: i64,
+    pub lamport_clock: u64,
+    pub deleted_at: i64,
     pub signature: Vec<u8>,
 }
 
@@ -345,18 +346,21 @@ impl BoardService {
             .get_identity_info()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        let now = chrono::Utc::now().timestamp();
+        let lamport_clock = self.db.next_lamport_clock(&info.peer_id)? as u64;
+        let deleted_at = chrono::Utc::now().timestamp();
         let signable = SignableWallPostDelete {
-            author_peer_id: info.peer_id.clone(),
             post_id: post_id.to_string(),
-            timestamp: now,
+            author_peer_id: info.peer_id.clone(),
+            lamport_clock,
+            deleted_at,
         };
         let signature = self.identity_service.sign(&signable)?;
 
         Ok(OutgoingWallPostDelete {
             post_id: post_id.to_string(),
             author_peer_id: info.peer_id,
-            timestamp: now,
+            lamport_clock,
+            deleted_at,
             signature,
         })
     }

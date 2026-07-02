@@ -1,10 +1,9 @@
 //! Tauri commands for post likes/reactions
 
-use crate::db::repositories::{LikeData, LikeSummary, LikesRepository};
+use crate::db::repositories::{LikeSummary, LikesRepository};
 use crate::db::Database;
 use crate::error::{AppError, Result};
-use crate::services::signing::SignablePostLike;
-use crate::services::IdentityService;
+use crate::services::{IdentityService, WallSocialService};
 use std::sync::Arc;
 use tauri::State;
 
@@ -13,36 +12,13 @@ use tauri::State;
 pub async fn like_post(
     db: State<'_, Arc<Database>>,
     identity_service: State<'_, Arc<IdentityService>>,
+    wall_social_service: State<'_, Arc<WallSocialService>>,
     post_id: String,
 ) -> Result<LikeSummary> {
-    // Get current identity
     let identity = identity_service
         .get_identity()?
         .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
-
-    // Create signable data for the like
-    let timestamp = chrono::Utc::now().timestamp();
-    let signable = SignablePostLike {
-        post_id: post_id.clone(),
-        liker_peer_id: identity.peer_id.clone(),
-        reaction_type: "like".to_string(),
-        timestamp,
-    };
-
-    // Sign the like
-    let signature = identity_service.sign(&signable)?;
-
-    let data = LikeData {
-        post_id: post_id.clone(),
-        liker_peer_id: identity.peer_id.clone(),
-        reaction_type: "like".to_string(),
-        timestamp,
-        signature,
-    };
-
-    LikesRepository::add_like(&db, &data).map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-    // Return updated summary
+    wall_social_service.add_reaction(&post_id, "like")?;
     LikesRepository::get_like_summary(&db, &post_id, &identity.peer_id)
         .map_err(|e| AppError::DatabaseString(e.to_string()))
 }
@@ -52,17 +28,13 @@ pub async fn like_post(
 pub async fn unlike_post(
     db: State<'_, Arc<Database>>,
     identity_service: State<'_, Arc<IdentityService>>,
+    wall_social_service: State<'_, Arc<WallSocialService>>,
     post_id: String,
 ) -> Result<LikeSummary> {
-    // Get current identity
     let identity = identity_service
         .get_identity()?
         .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
-
-    LikesRepository::remove_like(&db, &post_id, &identity.peer_id)
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-    // Return updated summary
+    wall_social_service.remove_reaction(&post_id, "like")?;
     LikesRepository::get_like_summary(&db, &post_id, &identity.peer_id)
         .map_err(|e| AppError::DatabaseString(e.to_string()))
 }

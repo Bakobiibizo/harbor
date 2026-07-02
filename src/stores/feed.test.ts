@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useFeedStore } from './feed';
 import { feedService } from '../services/feed';
 import { commentsService } from '../services/comments';
+import { likesService } from '../services/likes';
 import * as networkService from '../services/network';
 
 vi.mock('../services/feed', () => ({
   feedService: {
     getFeed: vi.fn(),
     getWall: vi.fn(),
+    syncFromRelay: vi.fn(),
   },
 }));
 
@@ -17,6 +19,14 @@ vi.mock('../services/comments', () => ({
     addComment: vi.fn(),
     deleteComment: vi.fn(),
     getCommentCounts: vi.fn(),
+  },
+}));
+
+vi.mock('../services/likes', () => ({
+  likesService: {
+    getPostsLikesBatch: vi.fn(),
+    likePost: vi.fn(),
+    unlikePost: vi.fn(),
   },
 }));
 
@@ -54,8 +64,16 @@ const mockFeedItems = [
 describe('useFeedStore', () => {
   beforeEach(() => {
     useFeedStore.setState({
+      rawFeedItems: [],
       feedItems: [],
+      savedPostIds: [],
+      hiddenPostIds: [],
+      snoozedAuthors: [],
       isLoading: false,
+      isSyncingRelay: false,
+      lastSyncAt: null,
+      syncError: null,
+      syncStatus: 'idle',
       error: null,
       hasMore: true,
       comments: {},
@@ -63,7 +81,10 @@ describe('useFeedStore', () => {
       expandedComments: new Set(),
       loadingComments: new Set(),
     });
+    localStorage.clear();
+    vi.mocked(likesService.getPostsLikesBatch).mockResolvedValue([]);
     vi.clearAllMocks();
+    vi.mocked(likesService.getPostsLikesBatch).mockResolvedValue([]);
   });
 
   describe('loadFeed', () => {
@@ -177,12 +198,135 @@ describe('useFeedStore', () => {
       expect(useFeedStore.getState().feedItems).toHaveLength(2);
     });
 
-    it('should handle refresh errors', async () => {
+    it('should handle refresh errors as partial sync failures', async () => {
       vi.mocked(networkService.syncFeed).mockRejectedValue(new Error('Sync failed'));
 
       await useFeedStore.getState().refreshFeed();
 
-      expect(useFeedStore.getState().error).toContain('Sync failed');
+      const state = useFeedStore.getState();
+      expect(state.error).toContain('Sync failed');
+      expect(state.syncStatus).toBe('partial_failure');
+      expect(state.syncError).toContain('Sync failed');
+      expect(state.lastSyncAt).toBeGreaterThan(0);
+    });
+  });
+
+  describe('relay sync status', () => {
+    it('records partial failure without replacing locally loaded feed', async () => {
+      useFeedStore.setState({ rawFeedItems: mockFeedItems, feedItems: mockFeedItems });
+      vi.mocked(feedService.syncFromRelay).mockRejectedValue(new Error('relay offline'));
+
+      await useFeedStore.getState().syncFromRelay();
+
+      const state = useFeedStore.getState();
+      expect(state.feedItems).toHaveLength(2);
+      expect(state.syncStatus).toBe('partial_failure');
+      expect(state.syncError).toContain('relay offline');
+      expect(state.lastSyncAt).toBeGreaterThan(0);
+    });
+  });
+
+  describe('durable feed interactions', () => {
+    it('loads signed reaction summaries and toggles like state with backend results', async () => {
+      vi.mocked(feedService.getFeed).mockResolvedValue(mockFeedItems);
+      vi.mocked(commentsService.getCommentCounts).mockResolvedValue([]);
+      vi.mocked(likesService.getPostsLikesBatch).mockResolvedValue([
+        { postId: 'feed-1', totalLikes: 2, userHasLiked: false },
+        { postId: 'feed-2', totalLikes: 5, userHasLiked: true },
+      ]);
+
+      await useFeedStore.getState().loadFeed();
+
+      expect(likesService.getPostsLikesBatch).toHaveBeenCalledWith(['feed-1', 'feed-2']);
+      expect(useFeedStore.getState().feedItems[0]).toMatchObject({
+        postId: 'feed-1',
+        likes: 2,
+        likedByUser: false,
+      });
+
+      vi.mocked(likesService.likePost).mockResolvedValue({
+        postId: 'feed-1',
+        totalLikes: 3,
+        userHasLiked: true,
+      });
+
+      await useFeedStore.getState().toggleLike('feed-1');
+
+      expect(likesService.likePost).toHaveBeenCalledWith('feed-1');
+      expect(useFeedStore.getState().feedItems[0]).toMatchObject({
+        likes: 3,
+        likedByUser: true,
+      });
+
+      vi.mocked(likesService.unlikePost).mockResolvedValue({
+        postId: 'feed-1',
+        totalLikes: 2,
+        userHasLiked: false,
+      });
+
+      await useFeedStore.getState().toggleLike('feed-1');
+
+      expect(likesService.unlikePost).toHaveBeenCalledWith('feed-1');
+      expect(useFeedStore.getState().feedItems[0]).toMatchObject({
+        likes: 2,
+        likedByUser: false,
+      });
+    });
+
+    it('persists saved posts locally and restores saved tab inputs without duplicates', async () => {
+      vi.mocked(feedService.getFeed).mockResolvedValue(mockFeedItems);
+      vi.mocked(commentsService.getCommentCounts).mockResolvedValue([]);
+
+      await useFeedStore.getState().loadFeed();
+      useFeedStore.getState().toggleSave('feed-1');
+      useFeedStore.getState().toggleSave('feed-1');
+      useFeedStore.getState().toggleSave('feed-1');
+
+      expect(useFeedStore.getState().savedPostIds).toEqual(['feed-1']);
+      expect(useFeedStore.getState().getSavedFeedItems().map((p) => p.postId)).toEqual(['feed-1']);
+
+      useFeedStore.setState({ savedPostIds: [] });
+      useFeedStore.getState().hydratePreferences();
+
+      expect(useFeedStore.getState().savedPostIds).toEqual(['feed-1']);
+      expect(useFeedStore.getState().getSavedFeedItems().map((p) => p.postId)).toEqual(['feed-1']);
+    });
+
+    it('persists hidden posts and restores them through management controls without deleting raw feed', async () => {
+      useFeedStore.setState({ rawFeedItems: mockFeedItems, feedItems: mockFeedItems });
+
+      useFeedStore.getState().hidePost('feed-1');
+
+      expect(useFeedStore.getState().feedItems.map((p) => p.postId)).toEqual(['feed-2']);
+      expect(useFeedStore.getState().rawFeedItems.map((p) => p.postId)).toEqual(['feed-1', 'feed-2']);
+
+      useFeedStore.setState({ hiddenPostIds: [], feedItems: mockFeedItems });
+      useFeedStore.getState().hydratePreferences();
+
+      expect(useFeedStore.getState().feedItems.map((p) => p.postId)).toEqual(['feed-2']);
+
+      useFeedStore.getState().unhidePost('feed-1');
+
+      expect(useFeedStore.getState().feedItems.map((p) => p.postId)).toEqual(['feed-1', 'feed-2']);
+    });
+
+    it('persists snoozed authors, filters deterministically, and expires old snoozes on reload', () => {
+      useFeedStore.setState({ rawFeedItems: mockFeedItems, feedItems: mockFeedItems });
+
+      useFeedStore.getState().snoozeAuthor('peer-alice', 24);
+
+      expect(useFeedStore.getState().feedItems.map((p) => p.postId)).toEqual(['feed-2']);
+
+      const expiredPrefs = {
+        savedPostIds: [],
+        hiddenPostIds: [],
+        snoozedAuthors: [{ peerId: 'peer-alice', snoozedUntil: 1 }],
+      };
+      localStorage.setItem('harbor-feed-local-preferences-v1', JSON.stringify(expiredPrefs));
+      useFeedStore.getState().hydratePreferences();
+
+      expect(useFeedStore.getState().snoozedAuthors).toEqual([]);
+      expect(useFeedStore.getState().feedItems.map((p) => p.postId)).toEqual(['feed-1', 'feed-2']);
     });
   });
 

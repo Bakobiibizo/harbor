@@ -8,6 +8,8 @@ export { postsService } from './posts';
 export { feedService } from './feed';
 export { mediaService } from './media';
 export { commentsService } from './comments';
+export { likesService } from './likes';
 export { callingService } from './calling';
 export * from './callingIce';
+export * from './callingRuntime';
 export * as loggingService from './logging';

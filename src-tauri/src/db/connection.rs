@@ -16,6 +16,7 @@ const MIGRATION_010: &str = include_str!("migrations/010_message_edit.sql");
 const MIGRATION_011: &str = include_str!("migrations/011_posts_lamport_index.sql");
 const MIGRATION_012: &str = include_str!("migrations/012_post_media_signature.sql");
 const MIGRATION_013: &str = include_str!("migrations/013_call_history_state.sql");
+const MIGRATION_014: &str = include_str!("migrations/014_wall_social_events.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -77,6 +78,15 @@ impl Database {
             );
             poisoned.into_inner()
         })
+    }
+
+    fn table_exists(conn: &Connection, table: &str) -> SqliteResult<bool> {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+            [table],
+            |row| row.get::<_, i32>(0),
+        )
+        .map(|count| count > 0)
     }
 
     fn column_exists(conn: &Connection, table: &str, column: &str) -> SqliteResult<bool> {
@@ -269,6 +279,62 @@ impl Database {
             )?;
             conn.execute_batch(MIGRATION_013)?;
             info!("Migration 013 complete");
+        }
+
+        if version < 14 {
+            info!("Running migration 014...");
+            // Some tests and older partial databases can start at a later schema_version
+            // without optional social tables. Create empty compatibility tables so the
+            // legacy bridge SELECTs below are safe; normal migrated databases already
+            // have the full tables from migrations 005 and 009.
+            if !Self::table_exists(&conn, "posts")? {
+                conn.execute_batch(
+                    "CREATE TABLE posts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        post_id TEXT NOT NULL UNIQUE,
+                        author_peer_id TEXT NOT NULL,
+                        content_type TEXT NOT NULL,
+                        content_text TEXT,
+                        visibility TEXT DEFAULT 'contacts',
+                        lamport_clock INTEGER NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        deleted_at INTEGER,
+                        is_local INTEGER DEFAULT 1,
+                        signature BLOB NOT NULL
+                    );",
+                )?;
+            }
+            if !Self::table_exists(&conn, "post_comments")? {
+                conn.execute_batch(
+                    "CREATE TABLE post_comments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        comment_id TEXT NOT NULL UNIQUE,
+                        post_id TEXT NOT NULL,
+                        author_peer_id TEXT NOT NULL,
+                        author_name TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        deleted_at INTEGER DEFAULT NULL
+                    );",
+                )?;
+            }
+            if !Self::table_exists(&conn, "post_likes")? {
+                conn.execute_batch(
+                    "CREATE TABLE post_likes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        post_id TEXT NOT NULL,
+                        liker_peer_id TEXT NOT NULL,
+                        reaction_type TEXT DEFAULT 'like',
+                        timestamp INTEGER NOT NULL,
+                        signature BLOB NOT NULL,
+                        created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                        UNIQUE(post_id, liker_peer_id)
+                    );",
+                )?;
+            }
+            conn.execute_batch(MIGRATION_014)?;
+            info!("Migration 014 complete");
         }
 
         Ok(())
@@ -760,7 +826,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 13);
+            assert_eq!(version, 14);
 
             let row: (String, String, Option<String>, Option<String>, String, Option<String>) = conn
                 .query_row(

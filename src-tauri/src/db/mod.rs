@@ -10,5 +10,6 @@ pub use repositories::{
     MessagesRepository, NewCallSession, Permission, PermissionEvent, PermissionsRepository, Post,
     PostComment, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
     RecordMessageEventParams, RecordPermissionEventParams, RecordPostEventParams, RelayCommunity,
-    UpsertBoardPostParams,
+    UpsertBoardPostParams, WallSocialEvent, WallSocialEventData, WallSocialEventType,
+    WallSocialEventsRepository,
 };

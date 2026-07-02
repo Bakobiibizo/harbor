@@ -1,6 +1,6 @@
 # Harbor Infrastructure - Relay Server Templates
 
-This directory contains AWS CloudFormation templates for deploying relay servers that support Harbor's P2P networking.
+This directory contains AWS CloudFormation templates for deploying relay servers that support Harbor's P2P networking and optional community/wall-sync relay storage.
 
 ## Two Templates
 
@@ -14,6 +14,9 @@ Both templates:
 - Write the relay address to **SSM Parameter Store** automatically
 - Run as a systemd service with automatic restarts
 - Use an **Elastic IP** for a stable address
+- Carry Harbor/libp2p traffic and call signaling only; they do **not** provide WebRTC TURN/SFU/MCU media relay behavior
+
+Community relay mode additionally stores community/wall data in SQLite and participates in wall-sync validation, including contacts-only `WallRead` enforcement. Production wall-sync claims still require the multi-profile evidence in `../docs/wall-sync-multi-profile-validation.md`.
 
 ### Service Naming
 
@@ -162,6 +165,19 @@ cat /var/log/user-data.log
 
 **High memory usage:**
 Reduce `MaxReservations` and `MaxCircuits` parameters in the CloudFormation stack.
+
+## Release-gate expectations
+
+Before publishing infrastructure changes, validate the relay server itself and then run the relevant Harbor multi-profile scenario:
+
+```bash
+cargo fmt --manifest-path relay-server/Cargo.toml -- --check
+cargo check --manifest-path relay-server/Cargo.toml
+cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings
+cargo test --manifest-path relay-server/Cargo.toml
+```
+
+Use `docs/voice-call-e2e-validation.md`, `docs/video-group-call-validation.md`, and `docs/wall-sync-multi-profile-validation.md` for release evidence. Do not present CloudFormation deployment success alone as proof of call media or wall-sync correctness.
 
 ## Cleanup
 

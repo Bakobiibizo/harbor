@@ -15,7 +15,59 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release-validation:
+    name: Release validation gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Verify updater signing configuration
+        run: |
+          ! grep -q 'UPDATER_PUBKEY_PLACEHOLDER' src-tauri/tauri.conf.json
+          grep -q 'github.com/bakobiibizo/harbor' src-tauri/tauri.conf.json
+
+      - name: Install frontend tooling
+        run: .dev/bin/dev install typescript
+
+      - name: Frontend TypeScript CI
+        run: .dev/bin/dev ci --language typescript
+
+      - name: Tauri/Rust CI
+        run: .dev/bin/dev ci --language rust
+
+      - name: Relay formatting
+        run: cargo fmt --manifest-path relay-server/Cargo.toml -- --check
+
+      - name: Relay check
+        run: cargo check --manifest-path relay-server/Cargo.toml
+
+      - name: Relay clippy
+        run: cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings
+
+      - name: Relay tests
+        run: cargo test --manifest-path relay-server/Cargo.toml
+
   create-release:
+    needs: release-validation
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create-release.outputs.id }}
@@ -66,11 +118,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: pnpm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -84,10 +141,10 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
-        run: npm run build
+        run: pnpm run build
 
       - name: Load signing secrets from 1Password
         uses: 1password/load-secrets-action@v2

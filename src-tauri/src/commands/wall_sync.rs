@@ -4,9 +4,12 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::NetworkState;
+use crate::db::WallSocialEventsRepository;
 use crate::error::AppError;
-use crate::p2p::protocols::board_sync::WallPostMediaItem;
-use crate::services::{ContactsService, PostsService};
+use crate::p2p::protocols::board_sync::{WallPostMediaItem, WallSocialEventItem};
+use crate::services::{
+    ContactsService, ContentSyncService, IdentityService, PostsService, WallSocialService,
+};
 
 /// Submit all local wall posts to the relay for offline availability.
 /// This finds the connected community relay and sends each unsynced post.
@@ -80,6 +83,7 @@ pub async fn sync_wall_to_relay(
 #[tauri::command]
 pub async fn fetch_contact_wall_from_relay(
     network_state: State<'_, NetworkState>,
+    content_sync_service: State<'_, Arc<ContentSyncService>>,
     author_peer_id: String,
     since_lamport_clock: Option<i64>,
     limit: Option<u32>,
@@ -89,11 +93,15 @@ pub async fn fetch_contact_wall_from_relay(
     let stats = handle.get_stats().await?;
     let relay_peer_id = find_relay_peer_id(&stats.relay_addresses)?;
 
+    let cursor = content_sync_service.get_sync_cursor(&relay_peer_id.to_string())?;
+    let stored_since = cursor.get(&author_peer_id).copied().unwrap_or(0) as i64;
+    let since_lamport_clock = since_lamport_clock.unwrap_or(stored_since);
+
     handle
         .get_wall_posts_from_relay(
             relay_peer_id,
             author_peer_id,
-            since_lamport_clock.unwrap_or(0),
+            since_lamport_clock,
             limit.unwrap_or(50),
         )
         .await
@@ -105,6 +113,7 @@ pub async fn fetch_contact_wall_from_relay(
 pub async fn sync_feed_from_relay(
     network_state: State<'_, NetworkState>,
     contacts_service: State<'_, Arc<ContactsService>>,
+    content_sync_service: State<'_, Arc<ContentSyncService>>,
     limit: Option<u32>,
 ) -> Result<u32, AppError> {
     let handle = network_state.get_handle().await?;
@@ -116,9 +125,17 @@ pub async fn sync_feed_from_relay(
     let limit = limit.unwrap_or(50);
     let mut requested = 0u32;
 
+    let cursor = content_sync_service.get_sync_cursor(&relay_peer_id.to_string())?;
+
     for contact in contacts {
+        let since_lamport_clock = cursor.get(&contact.peer_id).copied().unwrap_or(0) as i64;
         match handle
-            .get_wall_posts_from_relay(relay_peer_id, contact.peer_id.clone(), 0, limit)
+            .get_wall_posts_from_relay(
+                relay_peer_id,
+                contact.peer_id.clone(),
+                since_lamport_clock,
+                limit,
+            )
             .await
         {
             Ok(_) => {
@@ -137,10 +154,80 @@ pub async fn sync_feed_from_relay(
     Ok(requested)
 }
 
+/// Submit this peer's signed wall social events (comments/reactions) to the relay.
+#[tauri::command]
+pub async fn sync_wall_social_events_to_relay(
+    network_state: State<'_, NetworkState>,
+    identity_service: State<'_, Arc<IdentityService>>,
+    db: State<'_, Arc<crate::db::Database>>,
+) -> Result<u32, AppError> {
+    let handle = network_state.get_handle().await?;
+    let stats = handle.get_stats().await?;
+    let relay_peer_id = find_relay_peer_id(&stats.relay_addresses)?;
+    let identity = identity_service
+        .get_identity()?
+        .ok_or_else(|| AppError::IdentityNotFound("No identity found".to_string()))?;
+    let events = WallSocialEventsRepository::list_by_actor_since(&db, &identity.peer_id, 0, 500)
+        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+    let items: Vec<WallSocialEventItem> = events
+        .into_iter()
+        .map(|event| WallSocialEventItem {
+            event_id: event.event_id,
+            event_type: event.event_type.as_str().to_string(),
+            post_id: event.post_id,
+            actor_peer_id: event.actor_peer_id,
+            author_name: event.author_name,
+            comment_id: event.comment_id,
+            content: event.content,
+            reaction_type: event.reaction_type,
+            timestamp: event.timestamp,
+            payload_cbor: event.payload_cbor,
+            signature: event.signature,
+        })
+        .collect();
+    let submitted = items.len() as u32;
+    if !items.is_empty() {
+        handle
+            .submit_wall_social_events_to_relay(relay_peer_id, items)
+            .await?;
+    }
+    Ok(submitted)
+}
+
+/// Fetch and apply signed wall social events for a set of posts from the relay.
+#[tauri::command]
+pub async fn fetch_wall_social_events_from_relay(
+    network_state: State<'_, NetworkState>,
+    wall_social_service: State<'_, Arc<WallSocialService>>,
+    author_peer_id: String,
+    post_ids: Vec<String>,
+    after_timestamp: Option<i64>,
+    limit: Option<u32>,
+) -> Result<(), AppError> {
+    let handle = network_state.get_handle().await?;
+    let stats = handle.get_stats().await?;
+    let relay_peer_id = find_relay_peer_id(&stats.relay_addresses)?;
+    if post_ids.is_empty() {
+        return Ok(());
+    }
+    handle
+        .get_wall_social_events_from_relay(
+            relay_peer_id,
+            author_peer_id,
+            post_ids,
+            after_timestamp.unwrap_or(0),
+            limit.unwrap_or(500),
+        )
+        .await?;
+    let _ = wall_social_service; // managed state ensures service is initialized for async application.
+    Ok(())
+}
+
 /// Delete a wall post from the relay.
 #[tauri::command]
 pub async fn delete_wall_post_on_relay(
     network_state: State<'_, NetworkState>,
+    posts_service: State<'_, Arc<PostsService>>,
     post_id: String,
 ) -> Result<(), AppError> {
     let handle = network_state.get_handle().await?;
@@ -148,8 +235,23 @@ pub async fn delete_wall_post_on_relay(
     let stats = handle.get_stats().await?;
     let relay_peer_id = find_relay_peer_id(&stats.relay_addresses)?;
 
+    let tombstone = posts_service
+        .get_post(&post_id)?
+        .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
+    let deleted_at = tombstone.deleted_at.ok_or_else(|| {
+        AppError::InvalidData(
+            "Post must be deleted locally before its relay tombstone can be published".to_string(),
+        )
+    })?;
+
     handle
-        .delete_wall_post_on_relay(relay_peer_id, post_id)
+        .delete_wall_post_on_relay(
+            relay_peer_id,
+            post_id,
+            tombstone.lamport_clock as u64,
+            deleted_at,
+            tombstone.signature,
+        )
         .await
 }
 

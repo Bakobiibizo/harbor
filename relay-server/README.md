@@ -1,13 +1,16 @@
 # Harbor Relay Server
 
-A standalone libp2p relay server that enables NAT traversal for Harbor chat app users.
+A standalone libp2p relay server that enables NAT traversal for Harbor chat app users. In community mode it also stores relay-backed community/wall data used by Harbor's wall-sync flows.
 
 ## What it does
 
 This relay server allows Harbor users behind NAT/firewalls to connect with each other by:
 1. Accepting relay reservations from clients
-2. Forwarding traffic between peers who can't connect directly
+2. Forwarding libp2p traffic between peers who can't connect directly
 3. Supporting DCUtR (Direct Connection Upgrade through Relay) for hole punching
+4. Optionally running community mode with SQLite-backed board/wall storage, wall media metadata, and `WallRead` grant enforcement for contacts-only relay reads
+
+The relay carries Harbor/libp2p traffic and call signaling. It is **not** a WebRTC TURN, SFU, MCU, or media-recording server; call media relay requires separately configured TURN.
 
 ## Building
 
@@ -23,6 +26,15 @@ The binary will be at `target/release/harbor-relay`.
 ### Basic usage (local testing)
 ```bash
 ./harbor-relay --port 4001
+```
+
+### Community/wall-sync testing
+```bash
+./harbor-relay \
+  --port 4001 \
+  --community \
+  --community-name "Harbor Test" \
+  --data-dir /tmp/harbor-relay-data
 ```
 
 ### Production usage (with public IP)
@@ -50,7 +62,7 @@ YOUR RELAY ADDRESSES:
   QUIC: /ip4/1.2.3.4/udp/4001/quic-v1/p2p/12D3KooW...
 ```
 
-Copy the TCP address and paste it into Harbor's Network settings.
+Copy the TCP address and paste it into Harbor's Network settings. Use the same relay address when running the multi-profile wall-sync validation in `../docs/wall-sync-multi-profile-validation.md`.
 
 ## Deploying on a VPS
 
@@ -114,6 +126,19 @@ sudo ufw allow 4001/udp
 sudo iptables -A INPUT -p tcp --dport 4001 -j ACCEPT
 sudo iptables -A INPUT -p udp --dport 4001 -j ACCEPT
 ```
+
+## Release validation
+
+Before publishing relay artifacts or claiming wall-sync release readiness, run:
+
+```bash
+cargo fmt --manifest-path relay-server/Cargo.toml -- --check
+cargo check --manifest-path relay-server/Cargo.toml
+cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings
+cargo test --manifest-path relay-server/Cargo.toml
+```
+
+Relay tests are still not a substitute for the Harbor multi-profile scenarios documented in `../docs/wall-sync-multi-profile-validation.md`.
 
 ## Resource Usage
 

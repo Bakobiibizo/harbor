@@ -2,7 +2,7 @@ use libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::protocols::board_sync::WallPostMediaItem;
+use super::protocols::board_sync::{WallPostMediaItem, WallSocialEventItem};
 use super::protocols::signaling::SignalingEnvelope;
 
 /// Network connection status
@@ -102,6 +102,20 @@ pub enum NetworkEvent {
     ContentFetched { peer_id: String, post_id: String },
     /// Content sync error
     ContentSyncError { peer_id: String, error: String },
+    /// Structured wall/feed synchronization status update.
+    WallSyncStatus {
+        scope: String,
+        status: String,
+        phase: String,
+        relay_peer_id: Option<String>,
+        author_peer_id: Option<String>,
+        post_id: Option<String>,
+        media_hash: Option<String>,
+        post_count: Option<usize>,
+        cursor: Option<u64>,
+        error: Option<String>,
+        occurred_at: i64,
+    },
     /// Board list received from a relay
     BoardListReceived {
         relay_peer_id: String,
@@ -276,6 +290,22 @@ pub enum NetworkCommand {
     DeleteWallPostOnRelay {
         relay_peer_id: PeerId,
         post_id: String,
+        lamport_clock: u64,
+        deleted_at: i64,
+        signature: Vec<u8>,
+    },
+    /// Submit signed wall social events to a relay
+    SubmitWallSocialEventsToRelay {
+        relay_peer_id: PeerId,
+        events: Vec<WallSocialEventItem>,
+    },
+    /// Get signed wall social events for visible wall posts from a relay
+    GetWallSocialEventsFromRelay {
+        relay_peer_id: PeerId,
+        author_peer_id: String,
+        post_ids: Vec<String>,
+        after_timestamp: i64,
+        limit: u32,
     },
     /// Shutdown the network
     Shutdown,
@@ -289,4 +319,34 @@ pub enum NetworkResponse {
     Peers(Vec<PeerInfo>),
     Addresses(Vec<String>),
     Error(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NetworkEvent;
+
+    #[test]
+    fn wall_sync_status_event_serializes_without_private_content() {
+        let event = NetworkEvent::WallSyncStatus {
+            scope: "contact_wall".to_string(),
+            status: "partial_failure".to_string(),
+            phase: "permission_denied".to_string(),
+            relay_peer_id: Some("relay-peer".to_string()),
+            author_peer_id: Some("author-peer".to_string()),
+            post_id: Some("post-123".to_string()),
+            media_hash: Some("abcd".to_string()),
+            post_count: Some(2),
+            cursor: Some(42),
+            error: Some("permission denied".to_string()),
+            occurred_at: 1_700_000_000,
+        };
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "wall_sync_status");
+        assert_eq!(json["phase"], "permission_denied");
+        assert_eq!(json["post_id"], "post-123");
+        assert_eq!(json["cursor"], 42);
+        assert!(json.get("content_text").is_none());
+        assert!(json.get("media_bytes").is_none());
+    }
 }
