@@ -7,37 +7,50 @@
 #   3. Run this script: ./infrastructure/scripts/update-relay.sh
 #
 # Usage:
-#   ./update-relay.sh                     # defaults (stack: harbor-relay, region: us-east-1)
-#   ./update-relay.sh --name my-relay     # custom stack name
-#   ./update-relay.sh --region us-west-2  # different region
+#   ./update-relay.sh                          # defaults (community stack: harbor-relay, region: us-east-1)
+#   ./update-relay.sh --type relay             # lightweight relay service name
+#   ./update-relay.sh --name my-relay          # custom stack name
+#   ./update-relay.sh --region us-west-2       # different region
 
 set -euo pipefail
 
 # Defaults
 STACK_NAME="harbor-relay"
 REGION="us-east-1"
+TEMPLATE_TYPE="community"
+EXPECTED_SHA256="a4b5f161fa78cb1d5453831a3c0bb28c3281b0db581352989a83eb088bf6e079"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
     --name)    STACK_NAME="$2"; shift 2 ;;
     --region)  REGION="$2"; shift 2 ;;
+    --type)    TEMPLATE_TYPE="$2"; shift 2 ;;
     --help|-h)
       echo "Usage: $0 [options]"
       echo "  --name NAME      Stack name (default: harbor-relay)"
-      echo "  --region REGION   AWS region (default: us-east-1)"
+      echo "  --region REGION  AWS region (default: us-east-1)"
+      echo "  --type TYPE      Template/service type: 'community' or 'relay' (default: community)"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
 
-SERVICE_NAME="${STACK_NAME}-relay"
+if [ "$TEMPLATE_TYPE" = "community" ]; then
+  SERVICE_NAME="${STACK_NAME}-community-relay"
+elif [ "$TEMPLATE_TYPE" = "relay" ]; then
+  SERVICE_NAME="${STACK_NAME}-relay"
+else
+  echo "ERROR: unknown --type '$TEMPLATE_TYPE' (expected 'community' or 'relay')"
+  exit 1
+fi
 BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
 
 echo "=== Updating Harbor Relay ==="
 echo "Stack:   $STACK_NAME"
 echo "Region:  $REGION"
+echo "Type:    $TEMPLATE_TYPE"
 echo "Service: $SERVICE_NAME"
 echo ""
 
@@ -84,6 +97,9 @@ COMMAND_ID=$(aws ssm send-command \
     \"echo '[+] Downloading new binary...'\",
     \"curl -fSL --retry 3 -o /tmp/harbor-relay-new '$BINARY_URL'\",
     \"chmod +x /tmp/harbor-relay-new\",
+    \"echo '[+] Verifying binary sha256...'\",
+    \"ACTUAL_SHA256=\\$(sha256sum /tmp/harbor-relay-new | awk '{print \\$1}')\",
+    \"test \\\"\\$ACTUAL_SHA256\\\" = '$EXPECTED_SHA256' || { echo sha256 mismatch: expected $EXPECTED_SHA256 got \\$ACTUAL_SHA256; exit 1; }\",
     \"echo '[+] Replacing binary...'\",
     \"mv /tmp/harbor-relay-new /usr/local/bin/harbor-relay\",
     \"echo '[+] Starting relay service...'\",
