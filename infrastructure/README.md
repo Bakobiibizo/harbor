@@ -18,6 +18,29 @@ Both templates:
 
 Community relay mode additionally stores community/wall data in SQLite and participates in wall-sync validation, including contacts-only `WallRead` enforcement. Production wall-sync claims still require the multi-profile evidence in `../docs/wall-sync-multi-profile-validation.md`.
 
+## Harbor-operated community relay
+
+Current development builds use this default public community relay:
+
+```text
+/ip4/100.49.236.191/tcp/4001/p2p/12D3KooWMfwHKfzDrZ2V3Zniw3Qu797bHrKsFKAdG9CtQiaEhbQ3
+```
+
+The same value is stored in AWS SSM at:
+
+```bash
+aws ssm get-parameter \
+  --name "/harbor/harbor-community-relay/relay-address" \
+  --query 'Parameter.Value' --output text \
+  --region us-east-1
+```
+
+The relay binary currently published in `relay-server/bin/harbor-relay` has SHA-256:
+
+```text
+a4b5f161fa78cb1d5453831a3c0bb28c3281b0db581352989a83eb088bf6e079
+```
+
 ### Service Naming
 
 The systemd service name is based on your CloudFormation stack name:
@@ -131,6 +154,34 @@ The address format is:
 **Total estimated cost:**
 - First 12 months: **$0** (free tier)
 - After free tier: **~$10-14/month**
+
+## Updating an existing relay binary
+
+Use `infrastructure/scripts/update-relay.sh` when the CloudFormation stack already exists and you only need to replace `/usr/local/bin/harbor-relay` on the EC2 instance.
+
+```bash
+# Harbor-operated community relay
+./infrastructure/scripts/update-relay.sh \
+  --name harbor-community-relay \
+  --region us-east-1 \
+  --type community
+
+# Lightweight relay example
+./infrastructure/scripts/update-relay.sh \
+  --name harbor-relay \
+  --region us-east-1 \
+  --type relay
+```
+
+The update script:
+
+1. Finds the EC2 instance from CloudFormation.
+2. Verifies SSM connectivity.
+3. Downloads the binary from `main`.
+4. Verifies the expected SHA-256 **before** stopping the service.
+5. Installs the binary and restarts the correct stack-derived systemd service.
+
+Prefer this in-place update path for binary-only changes. A CloudFormation template update can replace the EC2 instance if launch-template/user-data properties change; always preview a change set before applying template changes to an existing relay.
 
 ## Monitoring
 

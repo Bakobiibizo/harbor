@@ -2,6 +2,19 @@
 
 A decentralized peer-to-peer chat application with local-first data storage, end-to-end encryption, and permission-based content sharing.
 
+## Branding
+
+- **Product name:** Harbor
+- **Tagline:** Decentralized Chat
+- **Public site / invite handoff:** `https://social-harbor.com`
+- **Default community relay:** Harbor Community Relay
+- **Default relay address:**
+  ```text
+  /ip4/100.49.236.191/tcp/4001/p2p/12D3KooWMfwHKfzDrZ2V3Zniw3Qu797bHrKsFKAdG9CtQiaEhbQ3
+  ```
+
+Harbor contact invites use the public site as a friendly handoff URL and embed the full `harbor://` contact bundle needed by the desktop app to add/connect to a contact.
+
 ## Features
 
 - **Decentralized Identity**: Ed25519 keypairs for signing, X25519 for key agreement
