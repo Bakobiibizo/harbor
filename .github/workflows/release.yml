@@ -17,7 +17,7 @@ env:
 jobs:
   release-validation:
     name: Release validation gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -46,25 +46,16 @@ jobs:
           grep -q 'github.com/bakobiibizo/harbor' src-tauri/tauri.conf.json
 
       - name: Install frontend tooling
-        run: .dev/bin/dev install typescript
+        run: .dev/bin/dev --language typescript install
 
       - name: Frontend TypeScript CI
-        run: .dev/bin/dev ci --language typescript
+        run: .dev/bin/dev --language typescript ci
 
       - name: Tauri/Rust CI
-        run: .dev/bin/dev ci --language rust
+        run: .dev/bin/dev --language rust ci
 
-      - name: Relay formatting
-        run: cargo fmt --manifest-path relay-server/Cargo.toml -- --check
-
-      - name: Relay check
-        run: cargo check --manifest-path relay-server/Cargo.toml
-
-      - name: Relay clippy
-        run: cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings
-
-      - name: Relay tests
-        run: cargo test --manifest-path relay-server/Cargo.toml
+      - name: Relay CI
+        run: .dev/bin/dev run relay_ci
 
   create-release:
     needs: release-validation

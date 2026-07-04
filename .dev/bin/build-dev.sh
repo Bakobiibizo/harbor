@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEVKIT_DIR="/home/bakobi/repos/Erasmus/erasmus-3/tools/devkit"
+DEVKIT_DIR="${DEVKIT_DIR:-/mnt/d/apps/devkit}"
+TARGET="${DEVKIT_TARGET:-aarch64-unknown-linux-gnu}"
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-cargo build --release -p devkit-cli --manifest-path "$DEVKIT_DIR/Cargo.toml"
+cargo build --release -p devkit-cli --target "$TARGET" --manifest-path "$DEVKIT_DIR/Cargo.toml"
 
-cp "$DEVKIT_DIR/target/release/dev" "$OUT_DIR/dev"
-chmod +x "$OUT_DIR/dev"
+install -m 0755 "$DEVKIT_DIR/target/$TARGET/release/dev" "$OUT_DIR/dev"
 
-echo "built dev -> $OUT_DIR/dev"
+echo "built dev ($TARGET) -> $OUT_DIR/dev"
