@@ -85,30 +85,43 @@ echo "       SSM status: Online"
 
 # Send update command via SSM
 echo "[3/5] Downloading new binary and restarting service..."
+PARAMETERS_FILE=$(mktemp)
+trap 'rm -f "$PARAMETERS_FILE"' EXIT
+python3 - "$PARAMETERS_FILE" "$SERVICE_NAME" "$BINARY_URL" "$EXPECTED_SHA256" <<'PY'
+import json
+import sys
+
+path, service_name, binary_url, expected_sha256 = sys.argv[1:]
+commands = [
+    "echo '[+] Downloading new binary...'",
+    f"curl -fSL --retry 3 -o /tmp/harbor-relay-new '{binary_url}'",
+    "chmod +x /tmp/harbor-relay-new",
+    "echo '[+] Verifying binary sha256...'",
+    "ACTUAL_SHA256=$(sha256sum /tmp/harbor-relay-new | awk '{print $1}')",
+    f"test \"$ACTUAL_SHA256\" = '{expected_sha256}' || {{ echo sha256 mismatch: expected {expected_sha256} got $ACTUAL_SHA256; rm -f /tmp/harbor-relay-new; exit 1; }}",
+    "echo '[+] Stopping relay service...'",
+    f"systemctl stop {service_name} || true",
+    "echo '[+] Replacing binary...'",
+    "install -m 0755 /tmp/harbor-relay-new /usr/local/bin/harbor-relay",
+    "rm -f /tmp/harbor-relay-new",
+    "echo '[+] Starting relay service...'",
+    f"systemctl start {service_name}",
+    "sleep 3",
+    "echo '[+] Service status:'",
+    f"systemctl is-active {service_name}",
+    "echo '[+] Update complete.'",
+]
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump({"commands": commands}, fh)
+PY
+
 COMMAND_ID=$(aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --region "$REGION" \
   --document-name "AWS-RunShellScript" \
   --comment "Update harbor-relay binary" \
   --timeout-seconds 120 \
-  --parameters commands="[
-    \"echo '[+] Stopping relay service...'\",
-    \"systemctl stop $SERVICE_NAME || true\",
-    \"echo '[+] Downloading new binary...'\",
-    \"curl -fSL --retry 3 -o /tmp/harbor-relay-new '$BINARY_URL'\",
-    \"chmod +x /tmp/harbor-relay-new\",
-    \"echo '[+] Verifying binary sha256...'\",
-    \"ACTUAL_SHA256=\\$(sha256sum /tmp/harbor-relay-new | awk '{print \\$1}')\",
-    \"test \\\"\\$ACTUAL_SHA256\\\" = '$EXPECTED_SHA256' || { echo sha256 mismatch: expected $EXPECTED_SHA256 got \\$ACTUAL_SHA256; exit 1; }\",
-    \"echo '[+] Replacing binary...'\",
-    \"mv /tmp/harbor-relay-new /usr/local/bin/harbor-relay\",
-    \"echo '[+] Starting relay service...'\",
-    \"systemctl start $SERVICE_NAME\",
-    \"sleep 3\",
-    \"echo '[+] Service status:'\",
-    \"systemctl is-active $SERVICE_NAME\",
-    \"echo '[+] Update complete.'\"
-  ]" \
+  --parameters "file://$PARAMETERS_FILE" \
   --query "Command.CommandId" \
   --output text)
 

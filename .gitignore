@@ -3,6 +3,11 @@
 .bako
 .claude
 .vscode
+.graph-worker/
+.ldgr-code/
+.ldgr/
+.pi/
+artifacts/
 
 # Logs
 logs
