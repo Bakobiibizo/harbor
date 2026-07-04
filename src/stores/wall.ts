@@ -182,9 +182,9 @@ export const useWallStore = create<WallState>((set, get) => ({
       if (postIds.length > 0) {
         const authorPeerId = wallPosts[0]?.authorPeerId;
         if (authorPeerId) {
-          feedService.fetchWallSocialEvents(authorPeerId, postIds).catch((err) =>
-            log.warn('Failed to fetch wall social events from relay', err),
-          );
+          feedService
+            .fetchWallSocialEvents(authorPeerId, postIds)
+            .catch((err) => log.warn('Failed to fetch wall social events from relay', err));
         }
         try {
           const [likeSummaries, commentCounts] = await Promise.all([
@@ -393,9 +393,9 @@ export const useWallStore = create<WallState>((set, get) => ({
       const summary = currentPost.liked
         ? await likesService.unlikePost(postId)
         : await likesService.likePost(postId);
-      feedService.syncWallSocialEventsToRelay().catch((err) =>
-        log.warn('Failed to sync wall reaction event to relay', err),
-      );
+      feedService
+        .syncWallSocialEventsToRelay()
+        .catch((err) => log.warn('Failed to sync wall reaction event to relay', err));
 
       set((state) => ({
         posts: state.posts.map((post) =>
@@ -466,9 +466,9 @@ export const useWallStore = create<WallState>((set, get) => ({
 
   addComment: async (postId: string, content: string) => {
     const comment = await commentsService.addComment(postId, content);
-    feedService.syncWallSocialEventsToRelay().catch((err) =>
-      log.warn('Failed to sync wall comment event to relay', err),
-    );
+    feedService
+      .syncWallSocialEventsToRelay()
+      .catch((err) => log.warn('Failed to sync wall comment event to relay', err));
     set((state) => {
       const existing = state.commentsByPost[postId] || [];
       return {

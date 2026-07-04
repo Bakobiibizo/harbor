@@ -283,13 +283,23 @@ describe('useFeedStore', () => {
       useFeedStore.getState().toggleSave('feed-1');
 
       expect(useFeedStore.getState().savedPostIds).toEqual(['feed-1']);
-      expect(useFeedStore.getState().getSavedFeedItems().map((p) => p.postId)).toEqual(['feed-1']);
+      expect(
+        useFeedStore
+          .getState()
+          .getSavedFeedItems()
+          .map((p) => p.postId),
+      ).toEqual(['feed-1']);
 
       useFeedStore.setState({ savedPostIds: [] });
       useFeedStore.getState().hydratePreferences();
 
       expect(useFeedStore.getState().savedPostIds).toEqual(['feed-1']);
-      expect(useFeedStore.getState().getSavedFeedItems().map((p) => p.postId)).toEqual(['feed-1']);
+      expect(
+        useFeedStore
+          .getState()
+          .getSavedFeedItems()
+          .map((p) => p.postId),
+      ).toEqual(['feed-1']);
     });
 
     it('persists hidden posts and restores them through management controls without deleting raw feed', async () => {
@@ -298,7 +308,10 @@ describe('useFeedStore', () => {
       useFeedStore.getState().hidePost('feed-1');
 
       expect(useFeedStore.getState().feedItems.map((p) => p.postId)).toEqual(['feed-2']);
-      expect(useFeedStore.getState().rawFeedItems.map((p) => p.postId)).toEqual(['feed-1', 'feed-2']);
+      expect(useFeedStore.getState().rawFeedItems.map((p) => p.postId)).toEqual([
+        'feed-1',
+        'feed-2',
+      ]);
 
       useFeedStore.setState({ hiddenPostIds: [], feedItems: mockFeedItems });
       useFeedStore.getState().hydratePreferences();

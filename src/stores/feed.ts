@@ -83,9 +83,7 @@ function filterVisibleFeedItems(
 ): FeedItem[] {
   const hidden = new Set(hiddenPostIds);
   const now = nowSeconds();
-  const snoozed = new Set(
-    snoozedAuthors.filter((s) => s.snoozedUntil > now).map((s) => s.peerId),
-  );
+  const snoozed = new Set(snoozedAuthors.filter((s) => s.snoozedUntil > now).map((s) => s.peerId));
   return items.filter((item) => !hidden.has(item.postId) && !snoozed.has(item.authorPeerId));
 }
 
@@ -204,7 +202,9 @@ export const useFeedStore = create<FeedState>((set, get) => ({
   },
 
   toggleLike: async (postId: string) => {
-    const existing = [...get().rawFeedItems, ...get().feedItems].find((item) => item.postId === postId);
+    const existing = [...get().rawFeedItems, ...get().feedItems].find(
+      (item) => item.postId === postId,
+    );
     const summary = existing?.likedByUser
       ? await likesService.unlikePost(postId)
       : await likesService.likePost(postId);

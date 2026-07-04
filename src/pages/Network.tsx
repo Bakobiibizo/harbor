@@ -1294,7 +1294,9 @@ export function NetworkPage() {
                         className="px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 text-xs font-medium"
                         style={{ color: 'hsl(var(--harbor-text-secondary))' }}
                         title={`Open ${contact.displayName}'s wall`}
-                        onClick={() => navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)}
+                        onClick={() =>
+                          navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)
+                        }
                       >
                         View wall
                       </button>

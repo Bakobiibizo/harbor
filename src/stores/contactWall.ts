@@ -146,9 +146,14 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
       });
 
       if (wallItems.length > 0) {
-        feedService.fetchWallSocialEvents(authorPeerId, wallItems.map((item) => item.postId)).catch((error) =>
-          log.warn('Failed to fetch contact wall social events from relay', error),
-        );
+        feedService
+          .fetchWallSocialEvents(
+            authorPeerId,
+            wallItems.map((item) => item.postId),
+          )
+          .catch((error) =>
+            log.warn('Failed to fetch contact wall social events from relay', error),
+          );
         get().loadCommentCounts(wallItems.map((item) => item.postId));
         mediaService.preloadMissingMedia().catch(() => {});
       }
@@ -199,9 +204,9 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
     const summary = existing?.likedByUser
       ? await likesService.unlikePost(postId)
       : await likesService.likePost(postId);
-    feedService.syncWallSocialEventsToRelay().catch((error) =>
-      log.warn('Failed to sync contact wall reaction event to relay', error),
-    );
+    feedService
+      .syncWallSocialEventsToRelay()
+      .catch((error) => log.warn('Failed to sync contact wall reaction event to relay', error));
 
     set((state) => ({
       wallItems: state.wallItems.map((item) =>
@@ -243,9 +248,9 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
 
   addComment: async (postId: string, content: string) => {
     const comment = await commentsService.addComment(postId, content);
-    feedService.syncWallSocialEventsToRelay().catch((error) =>
-      log.warn('Failed to sync contact wall comment event to relay', error),
-    );
+    feedService
+      .syncWallSocialEventsToRelay()
+      .catch((error) => log.warn('Failed to sync contact wall comment event to relay', error));
     set((state) => ({
       comments: { ...state.comments, [postId]: [...(state.comments[postId] || []), comment] },
       commentCounts: { ...state.commentCounts, [postId]: (state.commentCounts[postId] || 0) + 1 },
@@ -257,7 +262,9 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
     set((state) => ({
       comments: {
         ...state.comments,
-        [postId]: (state.comments[postId] || []).filter((comment) => comment.commentId !== commentId),
+        [postId]: (state.comments[postId] || []).filter(
+          (comment) => comment.commentId !== commentId,
+        ),
       },
       commentCounts: {
         ...state.commentCounts,

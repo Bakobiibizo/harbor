@@ -796,7 +796,15 @@ export function WallPage() {
           <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
             Your personal space for thoughts and creations
           </p>
-          <p className="text-xs mt-1" style={{ color: syncStatus === 'partial_failure' ? 'hsl(var(--harbor-warning))' : 'hsl(var(--harbor-text-tertiary))' }}>
+          <p
+            className="text-xs mt-1"
+            style={{
+              color:
+                syncStatus === 'partial_failure'
+                  ? 'hsl(var(--harbor-warning))'
+                  : 'hsl(var(--harbor-text-tertiary))',
+            }}
+          >
             {isSyncingRelay
               ? 'Syncing to relay… local posts are already saved.'
               : lastSyncAt

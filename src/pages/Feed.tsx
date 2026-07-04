@@ -752,7 +752,15 @@ export function FeedPage() {
               <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {activeTab === 'saved' ? 'Your saved posts' : 'Updates from your contacts'}
               </p>
-              <p className="text-xs mt-1" style={{ color: syncStatus === 'partial_failure' ? 'hsl(var(--harbor-warning))' : 'hsl(var(--harbor-text-tertiary))' }}>
+              <p
+                className="text-xs mt-1"
+                style={{
+                  color:
+                    syncStatus === 'partial_failure'
+                      ? 'hsl(var(--harbor-warning))'
+                      : 'hsl(var(--harbor-text-tertiary))',
+                }}
+              >
                 {syncStatus === 'in_progress'
                   ? 'Sync in progress… local feed remains available.'
                   : lastSyncAt
@@ -995,7 +1003,9 @@ export function FeedPage() {
                       <div>
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => navigate(`/contacts/${encodeURIComponent(post.author.peerId)}/wall`)}
+                            onClick={() =>
+                              navigate(`/contacts/${encodeURIComponent(post.author.peerId)}/wall`)
+                            }
                             className="font-semibold text-sm text-left hover:underline"
                             style={{ color: 'hsl(var(--harbor-text-primary))' }}
                             title={`Open ${post.author.name}'s wall`}
