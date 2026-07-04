@@ -2,15 +2,21 @@
 
 All notable Harbor changes are summarized here. Older generated merge-history entries were consolidated during release-hardening documentation cleanup so release notes do not imply unvalidated production behavior.
 
-## Unreleased — calls and wall sync release hardening
+## 1.4.0 — calls, wall sync, contact links, and relay release hardening
 
 ### Added
-- Production-oriented one-to-one call documentation for signed libp2p signaling, WebRTC runtime expectations, call history, UI states, and ICE/STUN/TURN configuration.
+- Shareable contact invite links that use `https://social-harbor.com/add-friend/...` as a browser handoff and embed the full `harbor://` contact bundle for the desktop app.
+- Deep-link routing for `harbor://add-friend/...`, including single-instance forwarding and queued contact invites while the identity is locked.
+- One-to-one call runtime work: signed libp2p signaling, call history, visible call UI states, configurable ICE/STUN/TURN settings, and two-profile validation documentation.
 - Group-call topology contract: relay-assisted small-group full mesh with a hard 4-participant cap and no SFU/MCU/media relay behavior.
-- Wall host/consumer documentation for visibility controls, media posts, preview/RSS/share surfaces, contact-wall/feed reads, signed comments/reactions, edit/delete reconciliation, and relay-assisted sync.
+- Wall and feed sync hardening: wall visibility controls, media posts, preview/RSS/share surfaces, contact-wall/feed reads, signed comments/reactions, edit/delete reconciliation, tombstones, and relay-assisted sync paths.
+- Harbor-operated community relay documentation, default relay branding, AWS SSM relay-address instructions, and in-place relay binary update workflow.
 - Release validation gates for frontend TypeScript CI, Tauri/Rust CI, relay formatting/check/clippy/tests, plus documented multi-profile voice/video/group/wall validation checklists.
 
 ### Changed
+- Default app relay now points at the Harbor Community Relay at `/ip4/100.49.236.191/tcp/4001/p2p/12D3KooWMfwHKfzDrZ2V3Zniw3Qu797bHrKsFKAdG9CtQiaEhbQ3`.
+- Relay deployment artifacts and checksums were refreshed, and `update-relay.sh` now verifies the new binary checksum before stopping the running service.
+- GitHub CI and release validation now use the bundled ARM64 `dev` binary with the current devkit command shape.
 - Mock peers, mock auto-replies, and mock walls are documented as demo/test fixtures only; they are not release evidence for production calling or wall sync.
 - Release notes now distinguish validated automated coverage from required interactive multi-profile evidence.
 

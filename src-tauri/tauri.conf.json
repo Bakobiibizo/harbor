@@ -35,10 +35,12 @@
   "identifier": "io.harbor.desktop",
   "plugins": {
     "deep-link": {
-      "mobile": [],
       "desktop": {
-        "schemes": ["harbor"]
-      }
+        "schemes": [
+          "harbor"
+        ]
+      },
+      "mobile": []
     },
     "updater": {
       "endpoints": [
@@ -48,5 +50,5 @@
     }
   },
   "productName": "Harbor",
-  "version": "1.3.0"
+  "version": "1.4.0"
 }
