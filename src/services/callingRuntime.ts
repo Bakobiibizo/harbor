@@ -2,6 +2,7 @@ import type {
   CallIceStateSnapshot,
   HangupReason,
   IceServerConfig,
+  GroupMembershipSignal,
   NetworkEvent,
   SignalingEnvelope,
   SignalingPayload,
@@ -684,6 +685,7 @@ function groupOverallState(
     ['ringing', 'connecting', 'connected', 'degraded'].includes(participant.state),
   );
   if (active.length === 0) {
+    if (current === 'starting' || current === 'ringing' || current === 'connecting') return current;
     return participants.every((participant) => participant.state === 'failed') ? 'failed' : 'ended';
   }
   if (
@@ -736,6 +738,84 @@ export class GroupMeshCallRuntime {
       ...this.snapshot,
       participants: this.snapshot.participants.map((participant) => ({ ...participant })),
     };
+  }
+
+  prepareIncomingGroupCall(
+    membership: GroupMembershipSignal,
+    localPeerId: string,
+  ): GroupCallRuntimeSnapshot {
+    this.ensureIdle();
+    const peers = membership.participants.filter((peerId) => peerId !== localPeerId);
+    this.update({
+      state: 'ringing',
+      roomId: membership.roomId,
+      mediaMode: membership.mediaMode,
+      localPeerId,
+      participantCount: membership.participants.length,
+      participants: peers.map((peerId) =>
+        this.placeholderParticipant(peerId, membership.mediaMode),
+      ),
+      error: null,
+    });
+    return this.getSnapshot();
+  }
+
+  async acceptIncomingGroupCall(
+    membership: GroupMembershipSignal,
+    pendingOffers: SignalingEnvelope[],
+    options: StartCallOptions = {},
+  ): Promise<GroupCallRuntimeSnapshot> {
+    const localPeerId = this.snapshot.localPeerId;
+    if (!localPeerId || this.snapshot.roomId !== membership.roomId) {
+      throw new Error('The pending group invitation is no longer active.');
+    }
+    this.update({ state: 'connecting' });
+    const offeredPeers = new Set<string>();
+    for (const envelope of pendingOffers) {
+      if (envelope.payload.type !== 'offer') continue;
+      const peerId = envelope.senderPeerId;
+      offeredPeers.add(peerId);
+      const participantRuntime = this.createParticipantRuntime(peerId);
+      this.runtimes.set(peerId, participantRuntime);
+      await participantRuntime.acceptIncomingCall(envelope);
+      this.participantSnapshots.set(peerId, participantRuntime.getSnapshot());
+    }
+
+    const outgoingPeers = membership.participants.filter(
+      (peerId) =>
+        peerId !== localPeerId &&
+        peerId !== membership.creatorPeerId &&
+        localPeerId.localeCompare(peerId) < 0 &&
+        !offeredPeers.has(peerId),
+    );
+    await Promise.all(
+      outgoingPeers.map(async (peerId) => {
+        const participantRuntime = this.createParticipantRuntime(peerId);
+        this.runtimes.set(peerId, participantRuntime);
+        const participantSnapshot = await participantRuntime.startOutgoingCall(peerId, {
+          ...options,
+          video: membership.mediaMode === 'video',
+        });
+        this.participantSnapshots.set(peerId, participantSnapshot);
+      }),
+    );
+    this.recompute();
+    return this.getSnapshot();
+  }
+
+  async acceptParticipantOffer(envelope: SignalingEnvelope): Promise<void> {
+    if (envelope.payload.type !== 'offer') return;
+    const peerId = envelope.senderPeerId;
+    if (!this.snapshot.participants.some((participant) => participant.peerId === peerId)) return;
+    if (this.runtimes.has(peerId)) {
+      await this.runtimes.get(peerId)?.handleSignalingEnvelope(envelope);
+      return;
+    }
+    const participantRuntime = this.createParticipantRuntime(peerId);
+    this.runtimes.set(peerId, participantRuntime);
+    await participantRuntime.acceptIncomingCall(envelope);
+    this.participantSnapshots.set(peerId, participantRuntime.getSnapshot());
+    this.recompute();
   }
 
   async startOutgoingGroupCall(

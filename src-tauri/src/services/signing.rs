@@ -524,6 +524,23 @@ pub struct SignableSignalingHangup {
 
 impl Signable for SignableSignalingHangup {}
 
+/// Canonical signed form of a group-room membership update.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableGroupMembership {
+    pub room_id: String,
+    pub creator_peer_id: String,
+    pub sender_peer_id: String,
+    pub action: String,
+    pub topology: String,
+    pub roster_version: u64,
+    pub participants: Vec<String>,
+    pub media_mode: String,
+    pub nonce: String,
+    pub timestamp: i64,
+}
+
+impl Signable for SignableGroupMembership {}
+
 // ============================================================
 // CONTENT SYNC
 // ============================================================

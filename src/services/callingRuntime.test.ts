@@ -531,6 +531,43 @@ describe('GroupMeshCallRuntime', () => {
     );
   });
 
+  it('queues an incoming room without media and fills deterministic mesh legs on accept', async () => {
+    const pcs = [new MockPeerConnection(), new MockPeerConnection()];
+    const { runtime, getUserMedia } = groupRuntimeWith(pcs);
+    const membership = {
+      roomId: 'room-1',
+      creatorPeerId: 'peer-alice',
+      senderPeerId: 'peer-alice',
+      action: 'invite' as const,
+      topology: 'relay_assisted_mesh_v1' as const,
+      rosterVersion: 1,
+      participants: ['peer-alice', 'peer-local', 'peer-zed'],
+      mediaMode: 'video' as const,
+      nonce: 'nonce-1',
+      timestamp: 100,
+      signature: [1],
+    };
+    vi.mocked(callingService.answerCall).mockResolvedValue({
+      callId: 'call-1', callerPeerId: 'peer-alice', calleePeerId: 'peer-local',
+      sdp: 'v=0\r\nanswer', timestamp: 100, signature: [1],
+    });
+    vi.mocked(callingService.startCall).mockImplementation(async (calleePeerId, sdp) => ({
+      callId: `call-${calleePeerId}`, callerPeerId: 'peer-local', calleePeerId,
+      sdp, timestamp: 100, signature: [1],
+    }));
+
+    const pending = runtime.prepareIncomingGroupCall(membership, 'peer-local');
+    expect(pending.state).toBe('ringing');
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    const accepted = await runtime.acceptIncomingGroupCall(membership, [offerEnvelope()]);
+    expect(callingService.answerCall).toHaveBeenCalledTimes(1);
+    expect(callingService.startCall).toHaveBeenCalledWith('peer-zed', 'v=0\r\noffer');
+    expect(accepted.participants.map((participant) => participant.peerId).sort()).toEqual([
+      'peer-alice', 'peer-zed',
+    ]);
+  });
+
   it('isolates a failed participant while remaining mesh legs continue', async () => {
     const pcs = [new MockPeerConnection(), new MockPeerConnection()];
     const { runtime } = groupRuntimeWith(pcs);

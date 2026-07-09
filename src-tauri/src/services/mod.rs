@@ -50,6 +50,7 @@ pub use signing::{
     // Wall post relay sync
     SignableGetWallPosts,
     SignableGetWallSocialEvents,
+    SignableGroupMembership,
     // Identity messages
     SignableIdentityRequest,
     SignableIdentityResponse,

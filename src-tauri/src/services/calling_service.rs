@@ -8,19 +8,25 @@ use uuid::Uuid;
 
 pub use crate::db::CallState;
 use crate::db::{
-    CallDirection, CallMediaKind, CallSession, CallsRepository, Capability, NewCallSession,
+    CallDirection, CallMediaKind, CallSession, CallsRepository, Capability, GroupCallRoom,
+    GroupCallsRepository, NewCallSession,
 };
 use crate::error::{AppError, Result};
-use crate::p2p::protocols::signaling::{SignalingEnvelope, SignalingPayload};
+use crate::p2p::protocols::signaling::{
+    GroupMembershipAction, GroupMembershipSignal, SignalingEnvelope, SignalingPayload,
+};
 use crate::services::{
     verify, ContactsService, CryptoService, IdentityService, PermissionsService,
-    SignableSignalingAnswer, SignableSignalingHangup, SignableSignalingIce, SignableSignalingOffer,
+    SignableGroupMembership, SignableSignalingAnswer, SignableSignalingHangup,
+    SignableSignalingIce, SignableSignalingOffer,
 };
 use crate::Database;
 
 const MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS: i64 = 5 * 60;
 const MAX_SDP_BYTES: usize = 256 * 1024;
 const MAX_ICE_CANDIDATE_BYTES: usize = 16 * 1024;
+const GROUP_CALL_TOPOLOGY: &str = "relay_assisted_mesh_v1";
+const GROUP_CALL_MAX_PARTICIPANTS: usize = 4;
 
 /// An active call
 #[derive(Debug, Clone)]
@@ -101,6 +107,239 @@ pub struct IncomingIceParams<'a> {
 }
 
 impl CallingService {
+    pub fn database(&self) -> &Database {
+        &self.db
+    }
+    fn group_action_name(action: &GroupMembershipAction) -> &'static str {
+        match action {
+            GroupMembershipAction::Invite => "invite",
+            GroupMembershipAction::Join => "join",
+            GroupMembershipAction::Leave => "leave",
+            GroupMembershipAction::Roster => "roster",
+            GroupMembershipAction::Terminate => "terminate",
+        }
+    }
+
+    fn group_signable(signal: &GroupMembershipSignal) -> SignableGroupMembership {
+        SignableGroupMembership {
+            room_id: signal.room_id.clone(),
+            creator_peer_id: signal.creator_peer_id.clone(),
+            sender_peer_id: signal.sender_peer_id.clone(),
+            action: Self::group_action_name(&signal.action).to_string(),
+            topology: signal.topology.clone(),
+            roster_version: signal.roster_version,
+            participants: signal.participants.clone(),
+            media_mode: signal.media_mode.clone(),
+            nonce: signal.nonce.clone(),
+            timestamp: signal.timestamp,
+        }
+    }
+
+    pub fn create_group_membership(
+        &self,
+        room_id: Option<&str>,
+        creator_peer_id: Option<&str>,
+        action: GroupMembershipAction,
+        roster_version: u64,
+        participants: &[String],
+        media_mode: &str,
+    ) -> Result<GroupMembershipSignal> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+        let mut roster = participants.to_vec();
+        roster.sort();
+        roster.dedup();
+        if roster.is_empty() || roster.len() > GROUP_CALL_MAX_PARTICIPANTS {
+            return Err(AppError::Validation(
+                "Group roster must contain between 1 and 4 unique participants".to_string(),
+            ));
+        }
+        if !roster.contains(&identity.peer_id) {
+            return Err(AppError::Validation(
+                "Local peer must be in group roster".to_string(),
+            ));
+        }
+        if !matches!(media_mode, "audio" | "video") {
+            return Err(AppError::Validation("Invalid group media mode".to_string()));
+        }
+        for peer_id in roster.iter().filter(|peer| *peer != &identity.peer_id) {
+            self.validate_contact_identity(peer_id)?;
+            self.require_any_call_grant_with(peer_id)?;
+        }
+        let now = chrono::Utc::now().timestamp();
+        let room_id = room_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let creator = creator_peer_id.unwrap_or(&identity.peer_id).to_string();
+        let mut signal = GroupMembershipSignal {
+            room_id: room_id.clone(),
+            creator_peer_id: creator.clone(),
+            sender_peer_id: identity.peer_id.clone(),
+            action,
+            topology: GROUP_CALL_TOPOLOGY.to_string(),
+            roster_version,
+            participants: roster.clone(),
+            media_mode: media_mode.to_string(),
+            nonce: Uuid::new_v4().to_string(),
+            timestamp: now,
+            signature: Vec::new(),
+        };
+        signal.signature = self.identity_service.sign(&Self::group_signable(&signal))?;
+        GroupCallsRepository::upsert(
+            &self.db,
+            &GroupCallRoom {
+                room_id,
+                creator_peer_id: creator,
+                topology: GROUP_CALL_TOPOLOGY.to_string(),
+                media_mode: media_mode.to_string(),
+                roster_version,
+                participants: roster,
+                state: match signal.action {
+                    GroupMembershipAction::Invite => "invited",
+                    GroupMembershipAction::Terminate => "terminated",
+                    GroupMembershipAction::Leave => "left",
+                    _ => "active",
+                }
+                .to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+        )?;
+        Ok(signal)
+    }
+
+    fn process_group_membership(&self, signal: &GroupMembershipSignal) -> Result<()> {
+        let local_peer_id = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?
+            .peer_id;
+        if signal.topology != GROUP_CALL_TOPOLOGY {
+            return Err(AppError::Validation(
+                "Unsupported group-call topology".to_string(),
+            ));
+        }
+        if signal.participants.is_empty() || signal.participants.len() > GROUP_CALL_MAX_PARTICIPANTS
+        {
+            return Err(AppError::Validation(
+                "Invalid group roster size".to_string(),
+            ));
+        }
+        let mut canonical = signal.participants.clone();
+        canonical.sort();
+        canonical.dedup();
+        if canonical != signal.participants {
+            return Err(AppError::Validation(
+                "Group roster must be sorted and unique".to_string(),
+            ));
+        }
+        if !canonical.contains(&signal.creator_peer_id)
+            || !canonical.contains(&signal.sender_peer_id)
+        {
+            return Err(AppError::PermissionDenied(
+                "Group sender and creator must be roster members".to_string(),
+            ));
+        }
+        for peer_id in &canonical {
+            if peer_id != &signal.sender_peer_id && peer_id != &local_peer_id {
+                self.validate_contact_identity(peer_id)?;
+                self.require_any_call_grant_with(peer_id)?;
+            }
+        }
+        let public_key = self
+            .contacts_service
+            .get_public_key(&signal.sender_peer_id)?
+            .ok_or_else(|| AppError::NotFound("Sender public key not found".to_string()))?;
+        let key_bytes: [u8; 32] = public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?;
+        let key = VerifyingKey::from_bytes(&key_bytes)
+            .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
+        if !verify(&key, &Self::group_signable(signal), &signal.signature)? {
+            return Err(AppError::Crypto(
+                "Invalid group membership signature".to_string(),
+            ));
+        }
+        if !GroupCallsRepository::record_nonce(
+            &self.db,
+            &signal.room_id,
+            &signal.sender_peer_id,
+            &signal.nonce,
+            signal.timestamp,
+        )? {
+            return Err(AppError::AlreadyExists(
+                "Duplicate group membership nonce".to_string(),
+            ));
+        }
+        if let Some(existing) = GroupCallsRepository::get(&self.db, &signal.room_id)? {
+            if existing.creator_peer_id != signal.creator_peer_id {
+                return Err(AppError::Validation(
+                    "Group creator cannot change".to_string(),
+                ));
+            }
+            let member_ack = matches!(
+                signal.action,
+                GroupMembershipAction::Join | GroupMembershipAction::Leave
+            );
+            if (member_ack && signal.roster_version != existing.roster_version)
+                || (!member_ack && signal.roster_version <= existing.roster_version)
+            {
+                return Err(AppError::Validation(
+                    "Stale group roster version".to_string(),
+                ));
+            }
+            if matches!(
+                signal.action,
+                GroupMembershipAction::Join | GroupMembershipAction::Leave
+            ) && (!existing.participants.contains(&signal.sender_peer_id)
+                || canonical != existing.participants)
+            {
+                return Err(AppError::PermissionDenied(
+                    "Only invited roster members may join or leave without a creator roster update"
+                        .to_string(),
+                ));
+            }
+            if !matches!(
+                signal.action,
+                GroupMembershipAction::Join | GroupMembershipAction::Leave
+            ) && signal.sender_peer_id != signal.creator_peer_id
+            {
+                return Err(AppError::PermissionDenied(
+                    "Only the group creator may publish rosters or terminate the room".to_string(),
+                ));
+            }
+        } else if !matches!(signal.action, GroupMembershipAction::Invite)
+            || signal.sender_peer_id != signal.creator_peer_id
+        {
+            return Err(AppError::Validation("Unknown group room".to_string()));
+        }
+        let now = chrono::Utc::now().timestamp();
+        GroupCallsRepository::upsert(
+            &self.db,
+            &GroupCallRoom {
+                room_id: signal.room_id.clone(),
+                creator_peer_id: signal.creator_peer_id.clone(),
+                topology: signal.topology.clone(),
+                media_mode: signal.media_mode.clone(),
+                roster_version: signal.roster_version,
+                participants: canonical,
+                state: match signal.action {
+                    GroupMembershipAction::Invite => "invited",
+                    GroupMembershipAction::Leave => "left",
+                    GroupMembershipAction::Terminate => "terminated",
+                    _ => "active",
+                }
+                .to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Create a new calling service
     pub fn new(
         db: Arc<Database>,
@@ -915,6 +1154,14 @@ impl CallingService {
         self.validate_contact_identity(&envelope.sender_peer_id)?;
 
         match &envelope.payload {
+            SignalingPayload::GroupMembership(signal) => {
+                if signal.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Group membership sender does not match envelope".to_string(),
+                    ));
+                }
+                self.process_group_membership(signal)?;
+            }
             SignalingPayload::Offer(offer) => {
                 if offer.caller_peer_id != envelope.sender_peer_id {
                     return Err(AppError::Validation(
@@ -1929,5 +2176,50 @@ mod tests {
 
         let result = service.create_hangup("call-123", "12D3KooWPeer", "normal");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_group_invite_is_signed_persisted_and_replay_safe() {
+        let (alice, alice_db, alice_identity, alice_permissions, alice_peer) = create_test_env();
+        let (bob, bob_db, bob_identity, bob_permissions, bob_peer) = create_test_env();
+        add_peer_with_call_permission(
+            &alice_db,
+            &alice_permissions,
+            &bob_peer,
+            &identity_public_key(&bob_identity),
+        );
+        add_peer_with_call_permission(
+            &bob_db,
+            &bob_permissions,
+            &alice_peer,
+            &identity_public_key(&alice_identity),
+        );
+
+        let mut roster = vec![alice_peer.clone(), bob_peer.clone()];
+        roster.sort();
+        let invite = alice
+            .create_group_membership(
+                Some("room-signed"),
+                None,
+                GroupMembershipAction::Invite,
+                1,
+                &roster,
+                "video",
+            )
+            .unwrap();
+        let envelope = SignalingEnvelope {
+            sender_peer_id: alice_peer,
+            recipient_peer_id: bob_peer,
+            payload: SignalingPayload::GroupMembership(invite),
+        };
+
+        bob.process_incoming_signaling(&envelope).unwrap();
+        let room = GroupCallsRepository::get(&bob_db, "room-signed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(room.roster_version, 1);
+        assert_eq!(room.participants, roster);
+        assert_eq!(room.state, "invited");
+        assert!(bob.process_incoming_signaling(&envelope).is_err());
     }
 }

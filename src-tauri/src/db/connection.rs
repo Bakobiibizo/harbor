@@ -17,6 +17,7 @@ const MIGRATION_011: &str = include_str!("migrations/011_posts_lamport_index.sql
 const MIGRATION_012: &str = include_str!("migrations/012_post_media_signature.sql");
 const MIGRATION_013: &str = include_str!("migrations/013_call_history_state.sql");
 const MIGRATION_014: &str = include_str!("migrations/014_wall_social_events.sql");
+const MIGRATION_015: &str = include_str!("migrations/015_group_call_rooms.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -335,6 +336,12 @@ impl Database {
             }
             conn.execute_batch(MIGRATION_014)?;
             info!("Migration 014 complete");
+        }
+
+        if version < 15 {
+            info!("Running migration 015...");
+            conn.execute_batch(MIGRATION_015)?;
+            info!("Migration 015 complete");
         }
 
         Ok(())
@@ -826,7 +833,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 14);
+            assert_eq!(version, 15);
 
             let row: (String, String, Option<String>, Option<String>, String, Option<String>) = conn
                 .query_row(

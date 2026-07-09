@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod control;
 pub mod db;
 pub mod error;
 pub mod logging;
@@ -293,6 +294,8 @@ pub fn run() {
             app.manage(network_state);
             app.manage(PendingDeepLink(Mutex::new(Vec::new())));
 
+            control::spawn_if_configured(app.handle().clone());
+
             // Deep-link handler: receives harbor:// URLs from the OS
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
@@ -418,6 +421,8 @@ pub fn run() {
             // Calling commands
             commands::get_active_calls,
             commands::get_call_history,
+            commands::get_active_group_calls,
+            commands::send_group_membership,
             commands::start_call,
             commands::answer_call,
             commands::send_ice_candidate,

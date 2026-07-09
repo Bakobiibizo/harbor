@@ -7,6 +7,7 @@ vi.mock('../services/calling', () => ({
   callingService: {
     getActiveCalls: vi.fn(),
     getCallHistory: vi.fn(),
+    getActiveGroupCalls: vi.fn(),
     busyCall: vi.fn(),
     declineCall: vi.fn(),
   },
@@ -39,6 +40,7 @@ describe('useCallingStore', () => {
   beforeEach(() => {
     useCallingStore.getState().reset();
     vi.clearAllMocks();
+    vi.mocked(callingService.getActiveGroupCalls).mockResolvedValue([]);
   });
 
   it('hydrates active calls and call history from backend persistence', async () => {

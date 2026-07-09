@@ -3,7 +3,7 @@ ldgr_doc: 1
 kind: ticket
 id: ticket.0203-group-call-signaling-membership
 schema: ldgr.ticket.v1
-status: ready
+status: validation_pending
 produces:
 - work:0203-group-call-signaling-membership
 tags:
@@ -67,9 +67,22 @@ Harbor is an existing Tauri/React/Rust/libp2p application. Extend the current id
 
 ## Acceptance Criteria
 
-- [ ] req.01: Group-call signaling messages identify room/session IDs, creator, invited participants, active roster, media modes, and per-participant state with signatures and replay protection.
-- [ ] req.02: Joining a group call requires contact/call capability checks for invited participants and rejects unauthorized or stale join attempts with auditable errors.
-- [ ] req.03: Roster changes are delivered to all affected participants and persisted enough to recover/terminate active sessions after frontend refresh or backend restart.
+- [x] req.01: Group-call signaling messages identify room/session IDs, creator, invited participants, active roster, media modes, and per-participant state with signatures and replay protection.
+- [x] req.02: Joining a group call requires contact/call capability checks for invited participants and rejects unauthorized or stale join attempts with auditable errors.
+- [x] req.03: Roster changes are delivered to all affected participants and persisted enough to recover/terminate active sessions after frontend refresh or backend restart.
+
+## Implementation Status (2026-07-09)
+
+Implemented in the current working tree:
+
+- signed `group_membership` invite/join/leave/roster/terminate envelopes over the existing libp2p signaling protocol;
+- canonical roster ordering, four-participant enforcement, topology/media binding, nonce replay protection, stale-version rejection, and creator/member authorization;
+- durable group room and nonce storage through schema migration 015, including active-room hydration after restart;
+- explicit incoming group-call acceptance before media capture;
+- deterministic missing-leg creation so accepted remote participants form a mesh instead of remaining in a caller-centered star;
+- creator termination, participant leave signaling, degraded-participant isolation, and persisted room recovery.
+
+Automated evidence: 233 Rust tests, 363 frontend tests, strict Rust clippy, ESLint, TypeScript, and production frontend build pass. Interactive three/four-profile evidence remains required by `test.02`; use `/opt/webkitgtk-2.52.3-webrtc-gtk3` for the Tauri-compatible WebKit2GTK 4.1 runtime.
 
 ## Validation Guidance
 

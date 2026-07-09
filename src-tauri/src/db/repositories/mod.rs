@@ -3,6 +3,7 @@ pub mod bootstrap_repo;
 pub mod calls_repo;
 pub mod comments_repo;
 pub mod contacts_repo;
+pub mod group_calls_repo;
 pub mod identity_repo;
 pub mod likes_repo;
 pub mod messages_repo;
@@ -17,6 +18,7 @@ pub use calls_repo::{
 };
 pub use comments_repo::{CommentCount, CommentData, CommentsRepository, PostComment};
 pub use contacts_repo::{Contact, ContactData, ContactsRepository};
+pub use group_calls_repo::{GroupCallRoom, GroupCallsRepository};
 pub use identity_repo::IdentityRepository;
 pub use likes_repo::{LikeData, LikeSummary, LikesRepository, PostLike};
 pub use messages_repo::{

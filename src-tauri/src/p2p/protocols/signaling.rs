@@ -46,6 +46,7 @@ pub enum SignalingPayload {
     Hangup(SignalingHangup),
     Decline(SignalingHangup),
     Busy(SignalingHangup),
+    GroupMembership(GroupMembershipSignal),
 }
 
 impl SignalingPayload {
@@ -57,6 +58,7 @@ impl SignalingPayload {
             SignalingPayload::Hangup(payload)
             | SignalingPayload::Decline(payload)
             | SignalingPayload::Busy(payload) => &payload.call_id,
+            SignalingPayload::GroupMembership(payload) => &payload.room_id,
         }
     }
 
@@ -68,8 +70,38 @@ impl SignalingPayload {
             SignalingPayload::Hangup(payload)
             | SignalingPayload::Decline(payload)
             | SignalingPayload::Busy(payload) => payload.timestamp,
+            SignalingPayload::GroupMembership(payload) => payload.timestamp,
         }
     }
+}
+
+/// Membership action carried by a signed group-room update.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupMembershipAction {
+    Invite,
+    Join,
+    Leave,
+    Roster,
+    Terminate,
+}
+
+/// Signed group-room membership update. SDP and ICE continue to use the
+/// existing pairwise payloads, bound to this room through deterministic legs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMembershipSignal {
+    pub room_id: String,
+    pub creator_peer_id: String,
+    pub sender_peer_id: String,
+    pub action: GroupMembershipAction,
+    pub topology: String,
+    pub roster_version: u64,
+    pub participants: Vec<String>,
+    pub media_mode: String,
+    pub nonce: String,
+    pub timestamp: i64,
+    pub signature: Vec<u8>,
 }
 
 /// Signed call offer payload.
@@ -194,6 +226,34 @@ mod tests {
         assert!(decoded.error.unwrap().contains("Permission denied"));
     }
 
+    #[test]
+    fn group_membership_cbor_roundtrip_preserves_roster_contract() {
+        let signal = GroupMembershipSignal {
+            room_id: "room-1".into(),
+            creator_peer_id: "peer-a".into(),
+            sender_peer_id: "peer-a".into(),
+            action: GroupMembershipAction::Invite,
+            topology: "relay_assisted_mesh_v1".into(),
+            roster_version: 1,
+            participants: vec!["peer-a".into(), "peer-b".into()],
+            media_mode: "video".into(),
+            nonce: "nonce-1".into(),
+            timestamp: 1_700_000_000,
+            signature: vec![3; 64],
+        };
+        let envelope = SignalingEnvelope {
+            sender_peer_id: "peer-a".into(),
+            recipient_peer_id: "peer-b".into(),
+            payload: SignalingPayload::GroupMembership(signal.clone()),
+        };
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&envelope, &mut bytes).unwrap();
+        let decoded: SignalingEnvelope = ciborium::from_reader(bytes.as_slice()).unwrap();
+        assert_eq!(decoded, envelope);
+        assert_eq!(decoded.call_id(), "room-1");
+        assert_eq!(decoded.timestamp(), 1_700_000_000);
+    }
+
     #[cfg(test)]
     mod libp2p_roundtrip {
         use super::*;
@@ -214,6 +274,7 @@ mod tests {
                 SignalingPayload::Hangup(_) => "hangup",
                 SignalingPayload::Decline(_) => "decline",
                 SignalingPayload::Busy(_) => "busy",
+                SignalingPayload::GroupMembership(_) => "group_membership",
             }
         }
 

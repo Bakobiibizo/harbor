@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { CallSession, HangupReason, NetworkEvent, SignalingEnvelope } from '../types';
+import type {
+  CallSession,
+  GroupMembershipSignal,
+  HangupReason,
+  NetworkEvent,
+  SignalingEnvelope,
+} from '../types';
 import { callingService } from '../services/calling';
 import {
   AudioCallRuntime,
@@ -9,6 +15,7 @@ import {
   type GroupCallRuntimeSnapshot,
 } from '../services/callingRuntime';
 import { useSettingsStore } from './settings';
+import { useIdentityStore } from './identity';
 
 interface CallingState {
   activeCalls: CallSession[];
@@ -33,7 +40,9 @@ interface CallingState {
     options?: { video?: boolean; videoDeviceId?: string; roomId?: string },
   ) => Promise<void>;
   acceptIncomingCall: () => Promise<void>;
+  acceptIncomingGroupCall: () => Promise<void>;
   declineIncomingCall: () => Promise<void>;
+  declineIncomingGroupCall: () => Promise<void>;
   hangupActiveCall: (reason?: HangupReason) => Promise<void>;
   leaveGroupCall: (reason?: HangupReason) => Promise<void>;
   setCameraEnabled: (enabled: boolean) => Promise<void>;
@@ -93,6 +102,10 @@ function toErrorMessage(error: unknown): string {
 let runtime: AudioCallRuntime | null = null;
 let groupRuntime: GroupMeshCallRuntime | null = null;
 let pendingIncomingEnvelope: SignalingEnvelope | null = null;
+let activeGroupCreatorPeerId: string | null = null;
+let activeGroupRosterVersion = 0;
+let pendingGroupInvite: GroupMembershipSignal | null = null;
+let pendingGroupOffers = new Map<string, SignalingEnvelope>();
 
 function getRuntime(set: (state: Partial<CallingState>) => void): AudioCallRuntime {
   if (!runtime) {
@@ -122,6 +135,10 @@ function disposeRuntime() {
   runtime = null;
   groupRuntime = null;
   pendingIncomingEnvelope = null;
+  activeGroupCreatorPeerId = null;
+  activeGroupRosterVersion = 0;
+  pendingGroupInvite = null;
+  pendingGroupOffers.clear();
 }
 
 export const useCallingStore = create<CallingState>((set, get) => ({
@@ -130,11 +147,35 @@ export const useCallingStore = create<CallingState>((set, get) => ({
   hydrateCalls: async () => {
     set({ isLoading: true, error: null });
     try {
-      const [activeCalls, callHistory] = await Promise.all([
+      const [activeCalls, callHistory, groupRooms] = await Promise.all([
         callingService.getActiveCalls(),
         callingService.getCallHistory(),
+        callingService.getActiveGroupCalls(),
       ]);
       set({ activeCalls, callHistory, isLoading: false });
+      const identityState = useIdentityStore.getState().state;
+      const room = groupRooms[0];
+      if (room && identityState.status === 'unlocked' && !groupRuntime) {
+        pendingGroupInvite = {
+          roomId: room.roomId,
+          creatorPeerId: room.creatorPeerId,
+          senderPeerId: room.creatorPeerId,
+          action: 'invite',
+          topology: room.topology,
+          rosterVersion: room.rosterVersion,
+          participants: room.participants,
+          mediaMode: room.mediaMode,
+          nonce: 'persisted-room',
+          timestamp: room.updatedAt,
+          signature: [],
+        };
+        activeGroupCreatorPeerId = room.creatorPeerId;
+        activeGroupRosterVersion = room.rosterVersion;
+        getGroupRuntime(set).prepareIncomingGroupCall(
+          pendingGroupInvite,
+          identityState.identity.peerId,
+        );
+      }
     } catch (error) {
       set({ error: toErrorMessage(error), isLoading: false });
     }
@@ -164,6 +205,37 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     }
 
     set({ lastEventPeerId: event.peer_id });
+    if (event.message.payload.type === 'group_membership') {
+      const membership = event.message.payload.payload;
+      activeGroupCreatorPeerId = membership.creatorPeerId;
+      activeGroupRosterVersion = membership.rosterVersion;
+      if (membership.action === 'terminate') {
+        groupRuntime?.dispose('ended');
+        groupRuntime = null;
+        set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+      } else if (membership.action === 'invite') {
+        const identityState = useIdentityStore.getState().state;
+        if (identityState.status !== 'unlocked') return;
+        pendingGroupInvite = membership;
+        getGroupRuntime(set).prepareIncomingGroupCall(
+          membership,
+          identityState.identity.peerId,
+        );
+      }
+      return;
+    }
+    if (
+      event.message.payload.type === 'offer' &&
+      pendingGroupInvite?.participants.includes(event.peer_id)
+    ) {
+      if (groupRuntime && groupRuntime.getSnapshot().state !== 'ringing') {
+        await groupRuntime.acceptParticipantOffer(event.message);
+        await get().hydrateCalls();
+      } else {
+        pendingGroupOffers.set(event.peer_id, event.message);
+      }
+      return;
+    }
     const callRuntime = getRuntime(set);
     const snapshot = callRuntime.getSnapshot();
 
@@ -208,7 +280,26 @@ export const useCallingStore = create<CallingState>((set, get) => ({
           'Group calls support up to 4 total participants in the selected mesh topology.',
         );
       }
-      await getGroupRuntime(set).startOutgoingGroupCall(peerIds, options);
+      const identityState = useIdentityStore.getState().state;
+      if (identityState.status !== 'unlocked') {
+        throw new Error('Unlock your identity before starting a group call.');
+      }
+      const localPeerId = identityState.identity.peerId;
+      const participants = [...new Set([localPeerId, ...peerIds])].sort();
+      const membership = await callingService.sendGroupMembership({
+        roomId: options.roomId,
+        action: 'invite',
+        rosterVersion: 1,
+        participants,
+        mediaMode: options.video ? 'video' : 'audio',
+      });
+      activeGroupCreatorPeerId = membership.creatorPeerId;
+      activeGroupRosterVersion = membership.rosterVersion;
+      await getGroupRuntime(set).startOutgoingGroupCall(peerIds, {
+        ...options,
+        roomId: membership.roomId,
+        localPeerId,
+      });
       await get().hydrateCalls();
     } catch (error) {
       set({ error: toErrorMessage(error) });
@@ -225,6 +316,34 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     try {
       await getRuntime(set).acceptIncomingCall(pendingIncomingEnvelope);
       pendingIncomingEnvelope = null;
+      await get().hydrateCalls();
+    } catch (error) {
+      set({ error: toErrorMessage(error) });
+      throw error;
+    }
+  },
+
+  acceptIncomingGroupCall: async () => {
+    const membership = pendingGroupInvite;
+    if (!membership) {
+      set({ error: 'No incoming group call is available to answer.' });
+      return;
+    }
+    try {
+      await callingService.sendGroupMembership({
+        roomId: membership.roomId,
+        creatorPeerId: membership.creatorPeerId,
+        action: 'join',
+        rosterVersion: membership.rosterVersion,
+        participants: membership.participants,
+        mediaMode: membership.mediaMode,
+      });
+      activeGroupRosterVersion = membership.rosterVersion;
+      await getGroupRuntime(set).acceptIncomingGroupCall(
+        membership,
+        [...pendingGroupOffers.values()],
+      );
+      pendingGroupOffers.clear();
       await get().hydrateCalls();
     } catch (error) {
       set({ error: toErrorMessage(error) });
@@ -250,6 +369,14 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     await get().hydrateCalls();
   },
 
+  declineIncomingGroupCall: async () => {
+    pendingGroupInvite = null;
+    pendingGroupOffers.clear();
+    groupRuntime?.dispose();
+    groupRuntime = null;
+    set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+  },
+
   hangupActiveCall: async (reason = 'normal') => {
     try {
       await runtime?.hangup(reason);
@@ -263,6 +390,22 @@ export const useCallingStore = create<CallingState>((set, get) => ({
 
   leaveGroupCall: async (reason = 'normal') => {
     try {
+      const snapshot = groupRuntime?.getSnapshot();
+      if (snapshot?.roomId && snapshot.localPeerId && activeGroupCreatorPeerId) {
+        const participants = [
+          snapshot.localPeerId,
+          ...snapshot.participants.map((participant) => participant.peerId),
+        ].sort();
+        await callingService.sendGroupMembership({
+          roomId: snapshot.roomId,
+          creatorPeerId: activeGroupCreatorPeerId,
+          action: snapshot.localPeerId === activeGroupCreatorPeerId ? 'terminate' : 'leave',
+          rosterVersion: activeGroupRosterVersion + 1,
+          participants,
+          mediaMode: snapshot.mediaMode,
+        });
+        activeGroupRosterVersion += 1;
+      }
       await groupRuntime?.leave(reason);
       await get().hydrateCalls();
     } catch (error) {

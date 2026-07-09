@@ -93,7 +93,9 @@ export function CallOverlay() {
   const error = useCallingStore((state) => state.error);
   const startError = snapshot.error ?? error;
   const acceptIncomingCall = useCallingStore((state) => state.acceptIncomingCall);
+  const acceptIncomingGroupCall = useCallingStore((state) => state.acceptIncomingGroupCall);
   const declineIncomingCall = useCallingStore((state) => state.declineIncomingCall);
+  const declineIncomingGroupCall = useCallingStore((state) => state.declineIncomingGroupCall);
   const hangupActiveCall = useCallingStore((state) => state.hangupActiveCall);
   const leaveGroupCall = useCallingStore((state) => state.leaveGroupCall);
   const dismissCallUi = useCallingStore((state) => state.dismissCallUi);
@@ -114,6 +116,9 @@ export function CallOverlay() {
 
   if (groupSnapshot.state !== 'idle') {
     const isTerminalGroup = groupSnapshot.state === 'ended' || groupSnapshot.state === 'failed';
+    const isIncomingGroup = groupSnapshot.state === 'ringing' && groupSnapshot.participants.every(
+      (participant) => participant.state === 'invited',
+    );
     const contactName = (peerId: string) =>
       contacts.find((contact) => contact.peerId === peerId)?.displayName ?? compactPeer(peerId);
     return (
@@ -172,7 +177,28 @@ export function CallOverlay() {
           )}
 
           <div className="mt-4 flex justify-end gap-2">
-            {!isTerminalGroup && (
+            {isIncomingGroup && (
+              <>
+                <button
+                  onClick={() => void declineIncomingGroupCall()}
+                  className="px-4 py-2 rounded-lg text-sm font-medium"
+                  style={{ color: 'hsl(var(--harbor-error))' }}
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={() => void acceptIncomingGroupCall()}
+                  className="px-4 py-2 rounded-lg text-sm font-medium"
+                  style={{
+                    background: 'hsl(var(--harbor-accent))',
+                    color: 'hsl(var(--harbor-bg-primary))',
+                  }}
+                >
+                  Accept
+                </button>
+              </>
+            )}
+            {!isTerminalGroup && !isIncomingGroup && (
               <>
                 <button
                   aria-pressed={groupSnapshot.localMuted}
@@ -200,7 +226,7 @@ export function CallOverlay() {
                 )}
               </>
             )}
-            <button
+            {!isIncomingGroup && <button
               onClick={() => {
                 if (isTerminalGroup) dismissCallUi();
                 else void leaveGroupCall('normal');
@@ -217,7 +243,7 @@ export function CallOverlay() {
             >
               {isTerminalGroup ? <XIcon className="w-4 h-4" /> : null}
               {isTerminalGroup ? 'Dismiss' : 'Leave'}
-            </button>
+            </button>}
           </div>
         </div>
       </div>

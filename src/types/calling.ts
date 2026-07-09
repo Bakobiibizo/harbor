@@ -126,13 +126,42 @@ export interface HangupResult {
   signature: number[];
 }
 
+export type GroupMembershipAction = 'invite' | 'join' | 'leave' | 'roster' | 'terminate';
+
+export interface GroupMembershipSignal {
+  roomId: string;
+  creatorPeerId: string;
+  senderPeerId: string;
+  action: GroupMembershipAction;
+  topology: 'relay_assisted_mesh_v1';
+  rosterVersion: number;
+  participants: string[];
+  mediaMode: CallMediaKind;
+  nonce: string;
+  timestamp: number;
+  signature: number[];
+}
+
+export interface GroupCallRoom {
+  roomId: string;
+  creatorPeerId: string;
+  topology: 'relay_assisted_mesh_v1';
+  mediaMode: CallMediaKind;
+  rosterVersion: number;
+  participants: string[];
+  state: 'invited' | 'active' | 'left' | 'terminated';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type SignalingPayload =
   | { type: 'offer'; payload: OfferResult }
   | { type: 'answer'; payload: AnswerResult }
   | { type: 'ice'; payload: Omit<IceResult, 'targetPeerId'> }
   | { type: 'hangup'; payload: Omit<HangupResult, 'targetPeerId'> }
   | { type: 'decline'; payload: Omit<HangupResult, 'targetPeerId'> }
-  | { type: 'busy'; payload: Omit<HangupResult, 'targetPeerId'> };
+  | { type: 'busy'; payload: Omit<HangupResult, 'targetPeerId'> }
+  | { type: 'group_membership'; payload: GroupMembershipSignal };
 
 export interface SignalingEnvelope {
   senderPeerId: string;

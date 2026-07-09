@@ -7,11 +7,11 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::network::NetworkState;
-use crate::db::CallSession;
+use crate::db::{CallSession, GroupCallRoom, GroupCallsRepository};
 use crate::error::AppError;
 use crate::p2p::protocols::signaling::{
-    SignalingAnswer, SignalingEnvelope, SignalingHangup, SignalingIce, SignalingOffer,
-    SignalingPayload,
+    GroupMembershipAction, GroupMembershipSignal, SignalingAnswer, SignalingEnvelope,
+    SignalingHangup, SignalingIce, SignalingOffer, SignalingPayload,
 };
 use crate::services::calling_service::IncomingIceParams;
 use crate::services::CallingService;
@@ -126,6 +126,66 @@ fn map_signaling_transport_error(error: AppError) -> AppError {
         AppError::Network(message) => AppError::Network(message),
         other => other,
     }
+}
+
+#[tauri::command]
+pub async fn get_active_group_calls(
+    calling_service: State<'_, Arc<CallingService>>,
+) -> Result<Vec<GroupCallRoom>, AppError> {
+    GroupCallsRepository::active(calling_service.database()).map_err(AppError::from)
+}
+
+/// Create, persist, sign, and broadcast a group-room membership update.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMembershipInput {
+    pub room_id: Option<String>,
+    pub creator_peer_id: Option<String>,
+    pub action: String,
+    pub roster_version: u64,
+    pub participants: Vec<String>,
+    pub media_mode: String,
+}
+
+#[tauri::command]
+pub async fn send_group_membership(
+    calling_service: State<'_, Arc<CallingService>>,
+    network: State<'_, NetworkState>,
+    input: GroupMembershipInput,
+) -> Result<GroupMembershipSignal, AppError> {
+    let action = match input.action.as_str() {
+        "invite" => GroupMembershipAction::Invite,
+        "join" => GroupMembershipAction::Join,
+        "leave" => GroupMembershipAction::Leave,
+        "roster" => GroupMembershipAction::Roster,
+        "terminate" => GroupMembershipAction::Terminate,
+        _ => {
+            return Err(AppError::Validation(
+                "Invalid group membership action".to_string(),
+            ))
+        }
+    };
+    let signal = calling_service.create_group_membership(
+        input.room_id.as_deref(),
+        input.creator_peer_id.as_deref(),
+        action,
+        input.roster_version,
+        &input.participants,
+        &input.media_mode,
+    )?;
+    for peer_id in signal
+        .participants
+        .iter()
+        .filter(|peer| *peer != &signal.sender_peer_id)
+    {
+        let envelope = SignalingEnvelope {
+            sender_peer_id: signal.sender_peer_id.clone(),
+            recipient_peer_id: peer_id.clone(),
+            payload: SignalingPayload::GroupMembership(signal.clone()),
+        };
+        transmit_signaling(&network, peer_id, envelope).await?;
+    }
+    Ok(signal)
 }
 
 /// Get persisted active calls.

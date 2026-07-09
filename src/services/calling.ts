@@ -6,6 +6,9 @@ import type {
   HangupResult,
   HangupReason,
   CallSession,
+  GroupMembershipAction,
+  GroupMembershipSignal,
+  GroupCallRoom,
 } from '../types';
 
 /** Calling service - wraps Tauri commands for voice calling */
@@ -18,6 +21,21 @@ export const callingService = {
   /** Get call history persisted by the backend */
   async getCallHistory(limit = 100): Promise<CallSession[]> {
     return invoke<CallSession[]>('get_call_history', { limit });
+  },
+
+  async getActiveGroupCalls(): Promise<GroupCallRoom[]> {
+    return invoke<GroupCallRoom[]>('get_active_group_calls');
+  },
+
+  async sendGroupMembership(input: {
+    roomId?: string;
+    creatorPeerId?: string;
+    action: GroupMembershipAction;
+    rosterVersion: number;
+    participants: string[];
+    mediaMode: 'audio' | 'video';
+  }): Promise<GroupMembershipSignal> {
+    return invoke<GroupMembershipSignal>('send_group_membership', { input });
   },
 
   /** Start a call (create an offer) */
