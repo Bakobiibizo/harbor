@@ -41,6 +41,7 @@ Frontend actions drive the same stores and WebRTC runtime used by the UI:
 
 ```bash
 harborctl frontend identity.refresh
+harborctl frontend state.snapshot
 harborctl frontend call.start '{"peerId":"12D3...","mediaMode":"video"}'
 harborctl frontend call.accept
 harborctl frontend call.decline

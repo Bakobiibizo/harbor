@@ -10,10 +10,13 @@ use crate::services::{
 use crate::{Database, PendingDeepLink};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::{Mutex, OnceLock};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 
 use crate::commands::network::NetworkState;
 
@@ -93,6 +96,18 @@ struct FrontendControlEvent {
     payload: Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendControlResult {
+    id: String,
+    ok: bool,
+    result: Option<Value>,
+    error: Option<String>,
+}
+
+type PendingFrontendRequests = Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>;
+static PENDING_FRONTEND_REQUESTS: OnceLock<PendingFrontendRequests> = OnceLock::new();
+
 pub fn spawn_if_configured(app: AppHandle) {
     let Ok(token) = std::env::var("HARBOR_CONTROL_TOKEN") else {
         return;
@@ -105,6 +120,26 @@ pub fn spawn_if_configured(app: AppHandle) {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(19420);
+    app.listen("harbor:control-result", |event| {
+        let Ok(response) = serde_json::from_str::<FrontendControlResult>(event.payload()) else {
+            tracing::warn!("Ignoring malformed frontend control response");
+            return;
+        };
+        let result = if response.ok {
+            Ok(response.result.unwrap_or_else(|| json!({})))
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "frontend control action failed".to_string()))
+        };
+        if let Some(sender) = pending_frontend_requests()
+            .lock()
+            .expect("frontend request mutex poisoned")
+            .remove(&response.id)
+        {
+            let _ = sender.send(result);
+        }
+    });
     tauri::async_runtime::spawn(async move {
         let address = format!("127.0.0.1:{port}");
         match TcpListener::bind(&address).await {
@@ -245,17 +280,39 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
                 .map(|grants| json!(grants))
                 .map_err(|error| error.to_string())
         }
-        ControlCommand::Frontend { action, payload } => app
-            .emit(
+        ControlCommand::Frontend { action, payload } => {
+            let (sender, receiver) = oneshot::channel();
+            pending_frontend_requests()
+                .lock()
+                .expect("frontend request mutex poisoned")
+                .insert(id.clone(), sender);
+            if let Err(error) = app.emit(
                 "harbor:control",
                 FrontendControlEvent {
                     id: id.clone(),
                     action,
                     payload,
                 },
-            )
-            .map(|_| json!({ "dispatched": true }))
-            .map_err(|error| error.to_string()),
+            ) {
+                pending_frontend_requests()
+                    .lock()
+                    .expect("frontend request mutex poisoned")
+                    .remove(&id);
+                Err(error.to_string())
+            } else {
+                match tokio::time::timeout(std::time::Duration::from_secs(30), receiver).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) => Err("frontend control response channel closed".to_string()),
+                    Err(_) => {
+                        pending_frontend_requests()
+                            .lock()
+                            .expect("frontend request mutex poisoned")
+                            .remove(&id);
+                        Err("frontend control action timed out".to_string())
+                    }
+                }
+            }
+        }
         ControlCommand::Shutdown => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -269,6 +326,10 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
         Ok(value) => ControlResponse::success(id, value),
         Err(error) => ControlResponse::failure(id, error),
     }
+}
+
+fn pending_frontend_requests() -> &'static PendingFrontendRequests {
+    PENDING_FRONTEND_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {

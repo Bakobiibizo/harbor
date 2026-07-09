@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
 import toast from 'react-hot-toast';
 import type { NetworkEvent } from '../types';
 import {
@@ -43,7 +43,18 @@ export function useTauriEvents() {
         action: string;
         payload: Record<string, unknown>;
       }>('harbor:control', (event) => {
-        void handleControlEvent(event.payload);
+        void (async () => {
+          try {
+            const result = await handleControlEvent(event.payload);
+            await emit('harbor:control-result', { id: event.payload.id, ok: true, result });
+          } catch (error) {
+            await emit('harbor:control-result', {
+              id: event.payload.id,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
       });
       unlistenersRef.current.push(unlistenControl);
 
@@ -63,39 +74,46 @@ export function useTauriEvents() {
       const peerId = typeof event.payload.peerId === 'string' ? event.payload.peerId : '';
       const video = event.payload.video === true;
       switch (event.action) {
+        case 'state.snapshot':
+          return {
+            identity: useIdentityStore.getState().state,
+            call: useCallingStore.getState().runtimeSnapshot,
+            group: useCallingStore.getState().groupRuntimeSnapshot,
+            error: useCallingStore.getState().error,
+          };
         case 'identity.refresh':
           await useIdentityStore.getState().initialize();
-          break;
+          return useIdentityStore.getState().state;
         case 'call.start':
           if (!peerId) throw new Error('call.start requires payload.peerId');
           await useCallingStore.getState().startOutgoingCall(peerId, { video });
-          break;
+          return useCallingStore.getState().runtimeSnapshot;
         case 'call.accept':
           await useCallingStore.getState().acceptIncomingCall();
-          break;
+          return useCallingStore.getState().runtimeSnapshot;
         case 'call.decline':
           await useCallingStore.getState().declineIncomingCall();
-          break;
+          return useCallingStore.getState().runtimeSnapshot;
         case 'call.hangup':
           await useCallingStore.getState().hangupActiveCall('normal');
-          break;
+          return useCallingStore.getState().runtimeSnapshot;
         case 'group.start': {
           const peerIds = Array.isArray(event.payload.peerIds)
             ? event.payload.peerIds.filter((value): value is string => typeof value === 'string')
             : [];
           if (peerIds.length === 0) throw new Error('group.start requires payload.peerIds');
           await useCallingStore.getState().startOutgoingGroupCall(peerIds, { video });
-          break;
+          return useCallingStore.getState().groupRuntimeSnapshot;
         }
         case 'group.accept':
           await useCallingStore.getState().acceptIncomingGroupCall();
-          break;
+          return useCallingStore.getState().groupRuntimeSnapshot;
         case 'group.decline':
           await useCallingStore.getState().declineIncomingGroupCall();
-          break;
+          return useCallingStore.getState().groupRuntimeSnapshot;
         case 'group.leave':
           await useCallingStore.getState().leaveGroupCall('normal');
-          break;
+          return useCallingStore.getState().groupRuntimeSnapshot;
         default:
           throw new Error(`Unknown Harbor control action: ${event.action}`);
       }
