@@ -280,13 +280,14 @@ impl CallingService {
                     "Group creator cannot change".to_string(),
                 ));
             }
-            let member_ack = matches!(
-                signal.action,
-                GroupMembershipAction::Join | GroupMembershipAction::Leave
-            );
-            if (member_ack && signal.roster_version != existing.roster_version)
-                || (!member_ack && signal.roster_version <= existing.roster_version)
-            {
+            let valid_version = match signal.action {
+                GroupMembershipAction::Join => signal.roster_version == existing.roster_version,
+                GroupMembershipAction::Leave => {
+                    signal.roster_version == existing.roster_version + 1
+                }
+                _ => signal.roster_version > existing.roster_version,
+            };
+            if !valid_version {
                 return Err(AppError::Validation(
                     "Stale group roster version".to_string(),
                 ));
@@ -317,6 +318,14 @@ impl CallingService {
             return Err(AppError::Validation("Unknown group room".to_string()));
         }
         let now = chrono::Utc::now().timestamp();
+        let stored_participants = if matches!(signal.action, GroupMembershipAction::Leave) {
+            canonical
+                .into_iter()
+                .filter(|peer_id| peer_id != &signal.sender_peer_id)
+                .collect()
+        } else {
+            canonical
+        };
         GroupCallsRepository::upsert(
             &self.db,
             &GroupCallRoom {
@@ -325,10 +334,10 @@ impl CallingService {
                 topology: signal.topology.clone(),
                 media_mode: signal.media_mode.clone(),
                 roster_version: signal.roster_version,
-                participants: canonical,
+                participants: stored_participants,
                 state: match signal.action {
                     GroupMembershipAction::Invite => "invited",
-                    GroupMembershipAction::Leave => "left",
+                    GroupMembershipAction::Leave => "active",
                     GroupMembershipAction::Terminate => "terminated",
                     _ => "active",
                 }

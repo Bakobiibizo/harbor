@@ -531,6 +531,28 @@ describe('GroupMeshCallRuntime', () => {
     );
   });
 
+  it('removes a leaving participant and closes only that mesh leg', async () => {
+    const pcs = [new MockPeerConnection(), new MockPeerConnection()];
+    const { runtime } = groupRuntimeWith(pcs);
+    vi.mocked(callingService.startCall).mockImplementation(async (calleePeerId, sdp) => ({
+      callId: `call-${calleePeerId}`,
+      callerPeerId: 'peer-local',
+      calleePeerId,
+      sdp,
+      timestamp: 100,
+      signature: [1],
+    }));
+
+    await runtime.startOutgoingGroupCall(['peer-a', 'peer-b']);
+    runtime.handleParticipantLeft('peer-a');
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.participantCount).toBe(2);
+    expect(snapshot.participants.map((participant) => participant.peerId)).toEqual(['peer-b']);
+    expect(pcs[0].close).toHaveBeenCalledTimes(1);
+    expect(pcs[1].close).not.toHaveBeenCalled();
+  });
+
   it('queues an incoming room without media and fills deterministic mesh legs on accept', async () => {
     const pcs = [new MockPeerConnection(), new MockPeerConnection()];
     const { runtime, getUserMedia } = groupRuntimeWith(pcs);

@@ -818,6 +818,20 @@ export class GroupMeshCallRuntime {
     this.recompute();
   }
 
+  handleParticipantLeft(peerId: string): void {
+    this.runtimes.get(peerId)?.dispose();
+    this.runtimes.delete(peerId);
+    this.participantSnapshots.delete(peerId);
+    this.failedParticipants.delete(peerId);
+    this.update({
+      participantCount: Math.max(1, this.snapshot.participantCount - 1),
+      participants: this.snapshot.participants.filter(
+        (participant) => participant.peerId !== peerId,
+      ),
+    });
+    this.recompute();
+  }
+
   async startOutgoingGroupCall(
     peerIds: string[],
     options: StartGroupCallOptions = {},

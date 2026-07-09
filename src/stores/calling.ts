@@ -221,6 +221,9 @@ export const useCallingStore = create<CallingState>((set, get) => ({
           membership,
           identityState.identity.peerId,
         );
+      } else if (membership.action === 'leave') {
+        pendingGroupOffers.delete(membership.senderPeerId);
+        groupRuntime?.handleParticipantLeft(membership.senderPeerId);
       }
       return;
     }
