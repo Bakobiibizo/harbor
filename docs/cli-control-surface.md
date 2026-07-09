@@ -51,6 +51,12 @@ harborctl frontend group.decline
 harborctl frontend group.leave
 ```
 
+On Windows, use `@file.json` for structured payloads so PowerShell/native argument parsing cannot remove JSON quotes:
+
+```powershell
+harborctl frontend group.start '@E:\harbor-validation\group-start.json'
+```
+
 The transport is newline-delimited JSON. Request command names and argument keys use snake case:
 
 ```json

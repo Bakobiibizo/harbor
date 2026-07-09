@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use uuid::Uuid;
@@ -48,9 +49,28 @@ fn command_from_args(args: &[String]) -> Result<Value, Box<dyn std::error::Error
         })),
         Some("frontend") if args.len() >= 2 => Ok(json!({
             "command": "frontend", "action": args[1],
-            "payload": args.get(2).map(|raw| serde_json::from_str(raw)).transpose()?.unwrap_or(json!({})),
+            "payload": args.get(2).map(|raw| parse_payload(raw)).transpose()?.unwrap_or(json!({})),
         })),
         Some("shutdown") => Ok(json!({ "command": "shutdown" })),
         _ => Err("usage: harborctl <status|identity-create NAME PASS|identity-unlock PASS|identity-lock|network-start|network-stop|network-peers|contact-string|contact-add STRING|permission-grant-all PEER|frontend ACTION [JSON]|shutdown>".into()),
+    }
+}
+
+fn parse_payload(raw: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let contents = match raw.strip_prefix('@') {
+        Some(path) => fs::read_to_string(path)?,
+        None => raw.to_string(),
+    };
+    Ok(serde_json::from_str(&contents)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_inline_frontend_payload() {
+        let value = parse_payload(r#"{"peerIds":["peer-a"]}"#).unwrap();
+        assert_eq!(value["peerIds"][0], "peer-a");
     }
 }
