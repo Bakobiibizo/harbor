@@ -4,6 +4,7 @@ version = "1.4.0"
 description = "A decentralized P2P chat application with local-first data and permission-based sharing"
 authors = ["Harbor Contributors"]
 edition = "2021"
+default-run = "harbor"
 
 [lib]
 name = "harbor_lib"
@@ -88,4 +89,3 @@ webkit2gtk = "2.0.2"
 
 [dev-dependencies]
 tempfile = "3"
-
