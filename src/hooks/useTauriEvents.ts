@@ -24,19 +24,29 @@ export function useTauriEvents() {
   const { refreshContacts } = useContactsStore();
 
   useEffect(() => {
+    let cancelled = false;
+
+    function register(unlisten: UnlistenFn) {
+      if (cancelled) {
+        unlisten();
+      } else {
+        unlistenersRef.current.push(unlisten);
+      }
+    }
+
     async function setupListeners() {
       // Listen to network events
       const unlistenNetwork = await listen<NetworkEvent>('harbor:network', (event) => {
         console.log('[TauriEvent] harbor:network:', event.payload);
         handleNetworkEvent(event.payload);
       });
-      unlistenersRef.current.push(unlistenNetwork);
+      register(unlistenNetwork);
 
       // Listen for deep-link contact strings forwarded from the OS via Rust
       const unlistenDeepLink = await listen<string>('deep_link_contact', (event) => {
         useNetworkStore.getState().setPendingDeepLinkContact(event.payload);
       });
-      unlistenersRef.current.push(unlistenDeepLink);
+      register(unlistenDeepLink);
 
       const unlistenControl = await listen<{
         id: string;
@@ -56,7 +66,7 @@ export function useTauriEvents() {
           }
         })();
       });
-      unlistenersRef.current.push(unlistenControl);
+      register(unlistenControl);
 
       // Future: Listen to message events
       // const unlistenMessage = await listen<MessageEvent>(
@@ -314,6 +324,7 @@ export function useTauriEvents() {
 
     // Cleanup on unmount
     return () => {
+      cancelled = true;
       unlistenersRef.current.forEach((unlisten) => unlisten());
       unlistenersRef.current = [];
     };
