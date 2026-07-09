@@ -739,7 +739,7 @@ impl CallingService {
         // Check caller has call permission from us
         if !self
             .permissions_service
-            .we_have_capability(caller_peer_id, Capability::Call)?
+            .peer_has_capability(caller_peer_id, Capability::Call)?
         {
             return Err(AppError::PermissionDenied(
                 "Caller doesn't have call permission".to_string(),
@@ -778,7 +778,7 @@ impl CallingService {
 
         if !self
             .permissions_service
-            .we_have_capability(caller_peer_id, Capability::Call)?
+            .peer_has_capability(caller_peer_id, Capability::Call)?
         {
             return Err(AppError::PermissionDenied(
                 "No call permission from caller".to_string(),
@@ -1085,7 +1085,7 @@ impl CallingService {
 
         if !self
             .permissions_service
-            .we_have_capability(caller_peer_id, Capability::Call)?
+            .peer_has_capability(caller_peer_id, Capability::Call)?
         {
             return Err(AppError::PermissionDenied(
                 "No call permission from caller".to_string(),
@@ -1372,7 +1372,7 @@ mod tests {
         ContactsRepository::add_contact(db, &contact_data).unwrap();
     }
 
-    fn add_received_call_permission(db: &Database, issuer_peer_id: &str, subject_peer_id: &str) {
+    fn add_local_call_permission(db: &Database, subject_peer_id: &str, issuer_peer_id: &str) {
         let grant_data = GrantData {
             grant_id: format!("grant-call-{}-{}", issuer_peer_id, subject_peer_id),
             issuer_peer_id: issuer_peer_id.to_string(),
@@ -1514,7 +1514,7 @@ mod tests {
         let (_, caller_verifying) = CryptoService::generate_ed25519_keypair();
         let caller = "12D3KooWCaller";
         add_peer_contact(&db, caller, &caller_verifying.to_bytes());
-        add_received_call_permission(&db, caller, &peer_id);
+        add_local_call_permission(&db, caller, &peer_id);
         insert_incoming_test_call(&service, "call-123", caller, &peer_id);
 
         let answer = service
@@ -1539,7 +1539,7 @@ mod tests {
         let (_, caller_verifying) = CryptoService::generate_ed25519_keypair();
         let caller = "12D3KooWCaller";
         add_peer_contact(&db, caller, &caller_verifying.to_bytes());
-        add_received_call_permission(&db, caller, &peer_id);
+        add_local_call_permission(&db, caller, &peer_id);
         insert_incoming_test_call(&service, "call-double", caller, &peer_id);
 
         service
@@ -1571,7 +1571,7 @@ mod tests {
         let (caller_signing, caller_verifying) = CryptoService::generate_ed25519_keypair();
         let caller_id = "12D3KooWCaller123";
         add_peer_contact(&db, caller_id, &caller_verifying.to_bytes());
-        add_received_call_permission(&db, caller_id, &peer_id);
+        add_local_call_permission(&db, caller_id, &peer_id);
         insert_incoming_test_call(&service, "existing-call", caller_id, &peer_id);
 
         let signable = SignableSignalingOffer {
@@ -1601,7 +1601,7 @@ mod tests {
         let (_, caller_verifying) = CryptoService::generate_ed25519_keypair();
         let caller = "12D3KooWCaller";
         add_peer_contact(&db, caller, &caller_verifying.to_bytes());
-        add_received_call_permission(&db, caller, &peer_id);
+        add_local_call_permission(&db, caller, &peer_id);
 
         let busy = service.create_busy("duplicate-call", caller).unwrap();
         assert_eq!(busy.reason, "busy");
@@ -1736,11 +1736,11 @@ mod tests {
         };
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
 
-        // We need a grant FROM caller TO us (we_have_capability checks issuer=caller, subject=us)
+        // The callee grants the caller permission to initiate a call.
         let grant_data = GrantData {
             grant_id: "grant-call-1".to_string(),
-            issuer_peer_id: caller_id.to_string(),
-            subject_peer_id: peer_id.clone(),
+            issuer_peer_id: peer_id.clone(),
+            subject_peer_id: caller_id.to_string(),
             capability: "call".to_string(),
             scope_json: None,
             lamport_clock: 1,
@@ -1976,7 +1976,7 @@ mod tests {
             &caller_peer_id,
             &identity_public_key(&caller_identity),
         );
-        add_received_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
+        add_local_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
 
         let envelope = signed_offer_envelope(
             &caller_identity,
@@ -2045,7 +2045,7 @@ mod tests {
             &caller_peer_id,
             &identity_public_key(&caller_identity),
         );
-        add_received_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
+        add_local_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
 
         let mut envelope = signed_offer_envelope(
             &caller_identity,
@@ -2073,7 +2073,7 @@ mod tests {
             &caller_peer_id,
             &identity_public_key(&caller_identity),
         );
-        add_received_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
+        add_local_call_permission(&callee_db, &caller_peer_id, &callee_peer_id);
 
         let stale = chrono::Utc::now().timestamp() - MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS - 1;
         let envelope =
