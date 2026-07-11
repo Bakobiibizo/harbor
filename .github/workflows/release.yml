@@ -84,16 +84,30 @@ jobs:
         with:
           script: |
             const version = '${{ steps.get-version.outputs.version }}';
-            const release = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: `v${version}`,
-              target_commitish: context.sha,
-              name: `Harbor v${version}`,
-              draft: true,
-              prerelease: version.includes('-'),
-              generate_release_notes: true
-            });
+            let release;
+            try {
+              release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: `v${version}`
+              });
+              if (!release.data.draft) {
+                core.setFailed(`v${version} is already published`);
+                return;
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: `v${version}`,
+                target_commitish: context.sha,
+                name: `Harbor v${version}`,
+                draft: true,
+                prerelease: version.includes('-'),
+                generate_release_notes: true
+              });
+            }
             core.setOutput('id', release.data.id);
 
   build:
@@ -148,6 +162,7 @@ jobs:
         run: pnpm run build
 
       - name: Load signing secrets from 1Password
+        if: runner.os != 'Windows'
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
@@ -155,6 +170,19 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_BAKO }}
           TAURI_SIGNING_PRIVATE_KEY: op://bako/TAURI_SIGNING_PRIVATE_KEY/password
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password
+
+      - name: Install 1Password CLI on Windows
+        if: runner.os == 'Windows'
+        uses: 1password/install-cli-action@v2
+
+      - name: Load signing secrets on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_BAKO }}
+        run: |
+          "TAURI_SIGNING_PRIVATE_KEY=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY/password')" >> $env:GITHUB_ENV
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password')" >> $env:GITHUB_ENV
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
