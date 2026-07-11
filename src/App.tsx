@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
+import { isTauri } from '@tauri-apps/api/core';
 import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore } from './stores';
 import { useTauriEvents } from './hooks';
 import { MainLayout } from './components/layout';
@@ -18,6 +19,7 @@ import {
   SettingsPage,
 } from './pages';
 import type { AccountInfo } from './types';
+import { checkForUpdate } from './services/updater';
 
 function LoadingScreen() {
   return (
@@ -105,6 +107,21 @@ function AppContent() {
 
   // Set up Tauri event listeners for real-time updates from backend
   useTauriEvents();
+
+  // Check quietly on launch. Installation remains an explicit user decision in Settings.
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    checkForUpdate()
+      .then((update) => {
+        if (update.available) {
+          toast.success(`Harbor ${update.version} is available in Settings`, { duration: 8000 });
+        }
+      })
+      .catch((error) => {
+        console.warn('Automatic update check failed', error);
+      });
+  }, []);
 
   // Load accounts on mount
   useEffect(() => {
