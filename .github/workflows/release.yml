@@ -86,11 +86,14 @@ jobs:
             const version = '${{ steps.get-version.outputs.version }}';
             let release;
             try {
-              release = await github.rest.repos.getReleaseByTag({
+              const releases = await github.paginate(github.rest.repos.listReleases, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                tag: `v${version}`
+                per_page: 100
               });
+              const existing = releases.find(item => item.tag_name === `v${version}` && item.draft);
+              if (!existing) throw Object.assign(new Error('draft not found'), { status: 404 });
+              release = { data: existing };
               if (!release.data.draft) {
                 core.setFailed(`v${version} is already published`);
                 return;
@@ -126,7 +129,9 @@ jobs:
             args: ''
             target: 'x86_64-unknown-linux-gnu'
           - platform: 'windows-latest'
-            args: ''
+            # MSI only accepts numeric prerelease identifiers. NSIS supports the
+            # product's SemVer beta version and still produces updater artifacts.
+            args: '--bundles nsis'
             target: 'x86_64-pc-windows-msvc'
 
     runs-on: ${{ matrix.platform }}
