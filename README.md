@@ -279,6 +279,7 @@ Harbor keeps voice calls LAN/direct-capable by default and does not bundle priva
 - TURN credential persistence is explicit. The default is **This session only**, which is usable for the current runtime but redacts the credential from persisted settings. **Save on this device** stores the credential locally for operator-managed deployments.
 - libp2p relay connectivity and WebRTC media relay are separate. Harbor/libp2p relays can carry call signaling, but audio media relay requires TURN/TURNS.
 - If ICE fails without usable TURN, Harbor reports strict-NAT guidance. If relay-only media is requested without TURN, Harbor reports that TURN is required rather than implying libp2p relay can carry media.
+- Demo and operator setup, observability, recovery, and credential rotation are documented in [`docs/demo-operations.md`](docs/demo-operations.md).
 
 Manual validation checklist for call networking changes:
 
@@ -337,7 +338,7 @@ The codebase follows these patterns:
 - [ ] Larger group rooms beyond the 4-participant ADR-0001 cap
 - [ ] Group chats
 - [ ] Mobile app (iOS/Android via Tauri)
-- [ ] Production TURN deployment/credential rotation guide for strict-NAT support
+- [x] TURN/relay demo operations and credential rotation guide for strict-NAT support
 - [ ] Profile photo uploads
 - [ ] Read receipts
 - [ ] Typing indicators

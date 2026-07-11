@@ -14,6 +14,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
   release-validation:
     name: Release validation gates
@@ -75,16 +78,23 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create Release
+      - name: Create draft release
         id: create-release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/github-script@v7
         with:
-          tag_name: v${{ steps.get-version.outputs.version }}
-          release_name: Harbor v${{ steps.get-version.outputs.version }}
-          draft: true
-          prerelease: false
+          script: |
+            const version = '${{ steps.get-version.outputs.version }}';
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${version}`,
+              target_commitish: context.sha,
+              name: `Harbor v${version}`,
+              draft: true,
+              prerelease: version.includes('-'),
+              generate_release_notes: true
+            });
+            core.setOutput('id', release.data.id);
 
   build:
     needs: create-release

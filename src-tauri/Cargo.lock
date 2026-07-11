@@ -2077,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "harbor"
-version = "1.4.0"
+version = "1.4.1-beta.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
