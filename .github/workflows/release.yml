@@ -171,6 +171,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: op://bako/TAURI_SIGNING_PRIVATE_KEY/password
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password
 
+      - name: Normalize signing key
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          printf 'TAURI_SIGNING_PRIVATE_KEY=%s\n' "$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
       - name: Install 1Password CLI on Windows
         if: runner.os == 'Windows'
         uses: 1password/install-cli-action@v2
@@ -181,7 +187,8 @@ jobs:
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_BAKO }}
         run: |
-          "TAURI_SIGNING_PRIVATE_KEY=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY/password')" >> $env:GITHUB_ENV
+          $key = (op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY/password') -replace '\s', ''
+          "TAURI_SIGNING_PRIVATE_KEY=$key" >> $env:GITHUB_ENV
           "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password')" >> $env:GITHUB_ENV
 
       - name: Build Tauri app
