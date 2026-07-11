@@ -241,33 +241,31 @@ export function EllipsisIcon({ size = 20, ...props }: IconProps) {
 }
 
 export function HarborLogoIcon({ size = 24, ...props }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" {...props}>
-      <defs>
-        <linearGradient id="harbor-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="hsl(220, 91%, 54%)" />
-          <stop offset="100%" stopColor="hsl(262, 83%, 58%)" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z"
-        fill="url(#harbor-gradient)"
-      />
-      <path
-        d="M12 5.5c-2.5 0-4.5 2-4.5 4.5 0 3.5 4.5 8 4.5 8s4.5-4.5 4.5-8c0-2.5-2-4.5-4.5-4.5zm0 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3z"
-        fill="white"
-      />
-    </svg>
-  );
+  return <HarborIcon size={size} {...props} />;
 }
 
-// Harbor icon - anchor/safe harbor symbol
+// Canonical Harbor sunrise mark. Product identity remains stable across themes.
 export function HarborIcon({ size = 20, ...props }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" {...props}>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M12 3C10.9 3 10 3.9 10 5C10 5.74 10.4 6.39 11 6.73V9H9.5C7.57 9 6 10.57 6 12.5V13C6 13.55 6.45 14 7 14C7.55 14 8 13.55 8 13V12.5C8 11.67 8.67 11 9.5 11H11V18.05C8.72 17.56 7 15.5 7 13H5C5 16.27 7.51 18.92 10.71 19.88C10.5 19.96 10.26 20 10 20C9.45 20 9 20.45 9 21C9 21.55 9.45 22 10 22H14C14.55 22 15 21.55 15 21C15 20.45 14.55 20 14 20C13.74 20 13.5 19.96 13.29 19.88C16.49 18.92 19 16.27 19 13H17C17 15.5 15.28 17.56 13 18.05V11H14.5C15.33 11 16 11.67 16 12.5V13C16 13.55 16.45 14 17 14C17.55 14 18 13.55 18 13V12.5C18 10.57 16.43 9 14.5 9H13V6.73C13.6 6.39 14 5.74 14 5C14 3.9 13.1 3 12 3Z"
-        fill="currentColor"
+        d="M12 1.7 21 6.8v10.4L12 22.3 3 17.2V6.8L12 1.7Z"
+        fill="#74b3e9"
+        stroke="#344b70"
+        strokeWidth="1.5"
+      />
+      <circle cx="12" cy="11.2" r="5" fill="#f9cf00" stroke="#ff9800" strokeWidth="1" />
+      <path
+        d="m3.8 17 4.1-2.5 4.1 2.4 4.1-2.4 4.1 2.5L12 21.5 3.8 17Z"
+        fill="#1769d7"
+        stroke="#f5f7fa"
+        strokeWidth=".8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m7.9 14.5 4.1 2.4 4.1-2.4M7.9 19.2l4.1-2.3 4.1 2.3"
+        stroke="#f5f7fa"
+        strokeWidth=".8"
       />
     </svg>
   );

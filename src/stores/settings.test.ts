@@ -16,7 +16,7 @@ describe('useSettingsStore', () => {
       defaultVisibility: 'contacts',
       avatarUrl: null,
       theme: 'system',
-      accentColor: 'blue',
+      accentColor: 'harbor',
       fontSize: 'medium',
     });
   });
@@ -173,6 +173,12 @@ describe('useSettingsStore', () => {
     });
 
     it('should set accent color', () => {
+      useSettingsStore.getState().setAccentColor('harbor');
+      expect(useSettingsStore.getState().accentColor).toBe('harbor');
+      expect(document.documentElement.style.getPropertyValue('--harbor-primary')).toBe(
+        '214 81% 47%',
+      );
+
       useSettingsStore.getState().setAccentColor('purple');
       expect(useSettingsStore.getState().accentColor).toBe('purple');
 
@@ -201,7 +207,7 @@ describe('useSettingsStore', () => {
       expect(state.defaultVisibility).toBe('contacts');
       expect(state.avatarUrl).toBeNull();
       expect(state.theme).toBe('system');
-      expect(state.accentColor).toBe('blue');
+      expect(state.accentColor).toBe('harbor');
       expect(state.fontSize).toBe('medium');
     });
   });

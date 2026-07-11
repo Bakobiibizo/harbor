@@ -8,20 +8,28 @@
 
 :root {
   /* Brand Colors */
-  --harbor-primary: 220 91% 54%; /* Vibrant blue */
-  --harbor-primary-light: 220 91% 64%;
-  --harbor-primary-dark: 220 91% 44%;
+  --harbor-primary: 214 81% 47%; /* Harbor blue */
+  --harbor-primary-light: 211 82% 59%;
+  --harbor-primary-dark: 214 83% 36%;
 
   /* Accent Colors */
-  --harbor-accent: 262 83% 58%; /* Purple accent */
-  --harbor-success: 152 69% 40%; /* Green */
-  --harbor-warning: 38 92% 50%; /* Amber */
-  --harbor-error: 0 84% 60%; /* Red */
+  --harbor-accent: 48 100% 45%; /* Harbor gold */
+  --harbor-success: 164 58% 33%; /* Harbor green */
+  --harbor-warning: 38 92% 50%;
+  --harbor-error: 5 61% 59%; /* Harbor coral */
+
+  /* Product identity is stable while presentation colors remain customizable. */
+  --harbor-brand-navy: 217 47% 15%;
+  --harbor-brand-blue: 214 81% 47%;
+  --harbor-brand-gold: 48 100% 45%;
+  --harbor-brand-backdrop-start: 217 47% 9%;
+  --harbor-brand-backdrop-mid: 217 47% 15%;
+  --harbor-brand-backdrop-end: 214 56% 12%;
 
   /* Neutral Colors - Light Mode */
   --harbor-bg-primary: 0 0% 100%;
-  --harbor-bg-secondary: 220 14% 96%;
-  --harbor-bg-tertiary: 220 13% 91%;
+  --harbor-bg-secondary: 216 24% 97%;
+  --harbor-bg-tertiary: 214 19% 92%;
   --harbor-bg-elevated: 0 0% 100%;
 
   --harbor-surface-1: 220 14% 96%;
@@ -31,8 +39,8 @@
   --harbor-border: 220 13% 87%;
   --harbor-border-subtle: 220 13% 91%;
 
-  --harbor-text-primary: 220 13% 13%;
-  --harbor-text-secondary: 220 9% 46%;
+  --harbor-text-primary: 214 25% 13%;
+  --harbor-text-secondary: 212 12% 42%;
   --harbor-text-tertiary: 220 9% 64%;
   --harbor-text-inverse: 0 0% 100%;
 

@@ -55,7 +55,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
       className="min-h-screen flex"
       style={{
         background:
-          'linear-gradient(135deg, hsl(220 91% 8%) 0%, hsl(262 60% 12%) 50%, hsl(220 91% 8%) 100%)',
+          'linear-gradient(135deg, hsl(var(--harbor-brand-backdrop-start)) 0%, hsl(var(--harbor-brand-backdrop-mid)) 50%, hsl(var(--harbor-brand-backdrop-end)) 100%)',
       }}
     >
       {/* Left side - Branding */}

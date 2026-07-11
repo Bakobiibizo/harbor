@@ -71,6 +71,7 @@ const FONT_SIZE_OPTIONS: { value: FontSize; label: string; previewSize: string }
 ];
 
 const ACCENT_COLOR_KEYS: AccentColor[] = [
+  'harbor',
   'blue',
   'purple',
   'green',
