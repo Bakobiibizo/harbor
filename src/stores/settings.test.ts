@@ -178,6 +178,9 @@ describe('useSettingsStore', () => {
       expect(document.documentElement.style.getPropertyValue('--harbor-primary')).toBe(
         '214 81% 47%',
       );
+      expect(document.documentElement.style.getPropertyValue('--harbor-accent')).toBe(
+        '50 100% 47%',
+      );
 
       useSettingsStore.getState().setAccentColor('purple');
       expect(useSettingsStore.getState().accentColor).toBe('purple');

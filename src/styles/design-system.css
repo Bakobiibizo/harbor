@@ -13,33 +13,37 @@
   --harbor-primary-dark: 214 83% 36%;
 
   /* Accent Colors */
-  --harbor-accent: 48 100% 45%; /* Harbor gold */
+  --harbor-accent: 50 100% 47%; /* Sun Gold #F0C900 */
   --harbor-success: 164 58% 33%; /* Harbor green */
   --harbor-warning: 38 92% 50%;
   --harbor-error: 5 61% 59%; /* Harbor coral */
 
   /* Product identity is stable while presentation colors remain customizable. */
-  --harbor-brand-navy: 217 47% 15%;
+  --harbor-brand-navy: 218 45% 11%;
   --harbor-brand-blue: 214 81% 47%;
-  --harbor-brand-gold: 48 100% 45%;
-  --harbor-brand-backdrop-start: 217 47% 9%;
-  --harbor-brand-backdrop-mid: 217 47% 15%;
-  --harbor-brand-backdrop-end: 214 56% 12%;
+  --harbor-brand-gold: 50 100% 47%;
+  --harbor-brand-orange: 37 100% 49%;
+  --harbor-brand-sky: 209 95% 73%;
+  --harbor-brand-sky-deep: 226 50% 48%;
+  --harbor-brand-silver: 40 6% 89%;
+  --harbor-brand-backdrop-start: 218 45% 11%;
+  --harbor-brand-backdrop-mid: 218 32% 18%;
+  --harbor-brand-backdrop-end: 218 45% 11%;
 
   /* Neutral Colors - Light Mode */
-  --harbor-bg-primary: 0 0% 100%;
-  --harbor-bg-secondary: 216 24% 97%;
-  --harbor-bg-tertiary: 214 19% 92%;
+  --harbor-bg-primary: 212 33% 91%;
+  --harbor-bg-secondary: 0 0% 100%;
+  --harbor-bg-tertiary: 212 25% 86%;
   --harbor-bg-elevated: 0 0% 100%;
 
-  --harbor-surface-1: 220 14% 96%;
-  --harbor-surface-2: 220 13% 91%;
-  --harbor-surface-3: 220 12% 86%;
+  --harbor-surface-1: 0 0% 100%;
+  --harbor-surface-2: 212 33% 91%;
+  --harbor-surface-3: 209 95% 73%;
 
-  --harbor-border: 220 13% 87%;
-  --harbor-border-subtle: 220 13% 91%;
+  --harbor-border: 217 25% 29%;
+  --harbor-border-subtle: 212 25% 78%;
 
-  --harbor-text-primary: 214 25% 13%;
+  --harbor-text-primary: 0 0% 20%;
   --harbor-text-secondary: 212 12% 42%;
   --harbor-text-tertiary: 220 9% 64%;
   --harbor-text-inverse: 0 0% 100%;
@@ -111,19 +115,19 @@
 /* Dark Mode - follows system preference when no data-theme is set */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --harbor-bg-primary: 222 47% 8%;
-    --harbor-bg-secondary: 222 47% 11%;
-    --harbor-bg-tertiary: 222 41% 15%;
-    --harbor-bg-elevated: 222 41% 13%;
+    --harbor-bg-primary: 218 45% 11%;
+    --harbor-bg-secondary: 218 32% 18%;
+    --harbor-bg-tertiary: 218 28% 23%;
+    --harbor-bg-elevated: 218 32% 18%;
 
-    --harbor-surface-1: 222 41% 13%;
-    --harbor-surface-2: 222 41% 17%;
-    --harbor-surface-3: 222 41% 21%;
+    --harbor-surface-1: 218 32% 18%;
+    --harbor-surface-2: 217 25% 29%;
+    --harbor-surface-3: 226 50% 48%;
 
-    --harbor-border: 222 30% 22%;
-    --harbor-border-subtle: 222 30% 18%;
+    --harbor-border: 40 6% 89%;
+    --harbor-border-subtle: 217 25% 29%;
 
-    --harbor-text-primary: 220 14% 96%;
+    --harbor-text-primary: 40 6% 89%;
     --harbor-text-secondary: 220 9% 70%;
     --harbor-text-tertiary: 220 9% 50%;
 
@@ -136,19 +140,19 @@
 
 /* Dark Mode - forced via toggle */
 :root[data-theme='dark'] {
-  --harbor-bg-primary: 222 47% 8%;
-  --harbor-bg-secondary: 222 47% 11%;
-  --harbor-bg-tertiary: 222 41% 15%;
-  --harbor-bg-elevated: 222 41% 13%;
+  --harbor-bg-primary: 218 45% 11%;
+  --harbor-bg-secondary: 218 32% 18%;
+  --harbor-bg-tertiary: 218 28% 23%;
+  --harbor-bg-elevated: 218 32% 18%;
 
-  --harbor-surface-1: 222 41% 13%;
-  --harbor-surface-2: 222 41% 17%;
-  --harbor-surface-3: 222 41% 21%;
+  --harbor-surface-1: 218 32% 18%;
+  --harbor-surface-2: 217 25% 29%;
+  --harbor-surface-3: 226 50% 48%;
 
-  --harbor-border: 222 30% 22%;
-  --harbor-border-subtle: 222 30% 18%;
+  --harbor-border: 40 6% 89%;
+  --harbor-border-subtle: 217 25% 29%;
 
-  --harbor-text-primary: 220 14% 96%;
+  --harbor-text-primary: 40 6% 89%;
   --harbor-text-secondary: 220 9% 70%;
   --harbor-text-tertiary: 220 9% 50%;
 

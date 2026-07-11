@@ -18,9 +18,9 @@ export const ACCENT_COLORS: Record<
 > = {
   harbor: {
     primary: '214 81% 47%',
-    accent: '48 100% 45%',
+    accent: '50 100% 47%',
     label: 'Harbor',
-    swatch: '#1769d7',
+    swatch: '#F0C900',
   },
   blue: {
     primary: '220 91% 54%',
