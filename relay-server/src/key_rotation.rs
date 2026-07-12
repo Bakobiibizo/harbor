@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RotationRecord {
+    pub domain: String,
     pub version: u8,
     pub relay: String,
     pub sequence: u64,
@@ -19,7 +20,12 @@ pub struct RotationRecord {
 fn bytes(r: &RotationRecord) -> Result<Vec<u8>, String> {
     let mut u = r.clone();
     u.signature.clear();
-    serde_json::to_vec(&u).map_err(|e| e.to_string())
+    if u.domain != "harbor/relay-key-rotation/1" {
+        return Err("invalid rotation domain".into());
+    }
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(&u, &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
 }
 #[derive(Clone)]
 struct Pin {
@@ -112,6 +118,7 @@ mod tests {
         prev: &str,
     ) -> RotationRecord {
         let mut r = RotationRecord {
+            domain: "harbor/relay-key-rotation/1".into(),
             version: 1,
             relay: "relay.test".into(),
             sequence: seq,

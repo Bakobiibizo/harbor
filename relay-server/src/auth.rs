@@ -11,6 +11,7 @@ const SESSION_TTL_SECS: i64 = 900;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthChallenge {
+    pub domain: String,
     pub version: u8,
     pub id: String,
     pub relay: String,
@@ -25,6 +26,7 @@ pub struct AuthChallenge {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionClaims {
+    domain: String,
     version: u8,
     id: String,
     relay: String,
@@ -70,6 +72,7 @@ impl AuthService {
         let mut random = [0u8; 32];
         OsRng.fill_bytes(&mut random);
         let mut challenge = AuthChallenge {
+            domain: "harbor/relay-challenge/1".into(),
             version: 1,
             id: uuid::Uuid::new_v4().to_string(),
             relay: self.relay.clone(),
@@ -133,6 +136,7 @@ impl AuthService {
         self.outstanding.remove(&challenge.id);
         self.used_challenges.insert(challenge.id.clone());
         let claims = SessionClaims {
+            domain: "harbor/relay-session/1".into(),
             version: 1,
             id: uuid::Uuid::new_v4().to_string(),
             relay: self.relay.clone(),
@@ -154,7 +158,10 @@ impl AuthService {
         if !self.signing_key.public().verify(&bytes, &signature) {
             return Err("invalid token signature".into());
         }
-        let claims: SessionClaims = serde_json::from_slice(&bytes).map_err(|_| "invalid token")?;
+        let claims: SessionClaims = cbor_decode(&bytes)?;
+        if claims.domain != "harbor/relay-session/1" {
+            return Err("invalid token domain".into());
+        }
         if claims.relay != self.relay || claims.key_id != self.key_id || claims.audience != audience
         {
             return Err("token scope mismatch".into());
@@ -172,7 +179,7 @@ impl AuthService {
     }
 
     fn encode_token(&self, claims: &SessionClaims) -> Result<String, String> {
-        let bytes = serde_json::to_vec(claims).map_err(|e| e.to_string())?;
+        let bytes = cbor(claims)?;
         let signature = self.signing_key.sign(&bytes).map_err(|e| e.to_string())?;
         Ok(format!(
             "{}.{}",
@@ -197,7 +204,18 @@ fn validate_audience(value: &str) -> Result<(), String> {
 fn challenge_bytes(value: &AuthChallenge) -> Result<Vec<u8>, String> {
     let mut unsigned = value.clone();
     unsigned.relay_signature.clear();
-    serde_json::to_vec(&unsigned).map_err(|e| e.to_string())
+    if unsigned.domain != "harbor/relay-challenge/1" {
+        return Err("invalid challenge domain".into());
+    }
+    cbor(&unsigned)
+}
+fn cbor<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(value, &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+fn cbor_decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, String> {
+    ciborium::de::from_reader(bytes).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

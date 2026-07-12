@@ -1,8 +1,9 @@
 //! Layered relay abuse controls for privacy-preserving introduction requests.
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkChallenge {
     pub id: String,
     pub relay: String,
