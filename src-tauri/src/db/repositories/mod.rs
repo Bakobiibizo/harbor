@@ -6,6 +6,7 @@ pub mod contacts_repo;
 pub mod group_calls_repo;
 pub mod identity_repo;
 pub mod likes_repo;
+pub mod mentions_repo;
 pub mod messages_repo;
 pub mod permissions_repo;
 pub mod posts_repo;
@@ -23,6 +24,7 @@ pub use contacts_repo::{Contact, ContactData, ContactsRepository};
 pub use group_calls_repo::{GroupCallRoom, GroupCallsRepository};
 pub use identity_repo::IdentityRepository;
 pub use likes_repo::{LikeData, LikeSummary, LikesRepository, PostLike};
+pub use mentions_repo::{MentionsRepository, StoredMention};
 pub use messages_repo::{
     Conversation, Message, MessageData, MessageStatus, MessagesRepository, RecordMessageEventParams,
 };

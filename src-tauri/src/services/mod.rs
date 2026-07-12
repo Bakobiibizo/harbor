@@ -7,6 +7,7 @@ pub mod crypto_service;
 pub mod feed_service;
 pub mod identity_service;
 pub mod media_service;
+pub mod mentions_service;
 pub mod messaging_service;
 pub mod name_claim_service;
 pub mod permissions_service;
@@ -28,6 +29,10 @@ pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
 pub use identity_service::IdentityService;
 pub use media_service::MediaStorageService;
+pub use mentions_service::{
+    MentionReceipt, MentionsService, PublishMentionedPostRequest, PublishMentionedPostResult,
+    ResolvedMention,
+};
 pub use messaging_service::{DecryptedMessage, MessagingService, OutgoingMessage};
 pub use permissions_service::{
     PermissionGrantMessage, PermissionRequestMessage, PermissionRevokeMessage, PermissionsService,

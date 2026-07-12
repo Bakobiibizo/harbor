@@ -12,8 +12,8 @@ use db::Database;
 use logging::{get_log_directory, LogConfig};
 use services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
-    FeedService, IdentityService, MediaStorageService, MessagingService, PermissionsService,
-    PostsService, WallSocialService,
+    FeedService, IdentityService, MediaStorageService, MentionsService, MessagingService,
+    PermissionsService, PostsService, WallSocialService,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -252,6 +252,12 @@ pub fn run() {
                 permissions_service.clone(),
                 contacts_service.clone(),
             ));
+            let mentions_service = Arc::new(MentionsService::new(
+                db.clone(),
+                identity_service.clone(),
+                contacts_service.clone(),
+                posts_service.clone(),
+            ));
             let calling_service = Arc::new(CallingService::new(
                 db.clone(),
                 identity_service.clone(),
@@ -289,6 +295,7 @@ pub fn run() {
             app.manage(permissions_service);
             app.manage(messaging_service);
             app.manage(posts_service);
+            app.manage(mentions_service);
             app.manage(content_sync_service);
             app.manage(feed_service);
             app.manage(wall_social_service);
@@ -401,6 +408,10 @@ pub fn run() {
             commands::get_posts_by_author,
             commands::add_post_media,
             commands::get_post_media,
+            commands::resolve_private_mention,
+            commands::create_post_with_mentions,
+            commands::list_pending_mentions,
+            commands::review_private_mention,
             // Feed commands
             commands::get_feed,
             commands::get_wall,
