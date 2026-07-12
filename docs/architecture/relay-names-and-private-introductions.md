@@ -202,7 +202,7 @@ No email address, password, or social-login account is required for relay authen
 
 ## 8. Private name resolution
 
-A normal name lookup must not return the target's peer ID or keys. Instead, a client submits an introduction request to the qualified name.
+A normal name lookup must not return the target's peer ID, Ed25519 signing key, routing addresses, profile, or existence flag. To seal an introduction without already knowing the target, the relay-signed work challenge carries a 32-byte X25519 delivery key. For an active target this is the delivery key from the countersigned claim; for every other case it is a deterministic relay-derived decoy with the same wire shape. Clients keep this key only in a short-lived in-memory cache and never present it as identity authority.
 
 The relay response must use uniform status and timing envelopes for:
 
@@ -223,6 +223,8 @@ The standard response is equivalent to:
 ```
 
 This response does not confirm that the target exists. Relays should add bounded timing jitter and must not expose directory-listing or prefix-search endpoints.
+
+The delivery key is an encryption input, not a resolved identity. The sender leaves the recipient peer-ID field empty and signs the qualified target name. A recipient accepts that form only after AEAD decryption succeeds and the signed qualified name matches its own current verified claim. Once two users later approve a relationship and exchange identity material, they may be able to recognize that an earlier delivery key belonged to the same user; version 1 prevents unauthenticated directory enumeration, not all post-contact correlation.
 
 ## 9. Introduction requests
 
