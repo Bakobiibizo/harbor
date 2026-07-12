@@ -90,3 +90,108 @@ impl<'a> PrivateIntroductionsRepository<'a> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_review_decision_and_block_survives_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("harbor.db");
+        let decisions = [
+            IntroductionDecision::Approved,
+            IntroductionDecision::Ignored,
+            IntroductionDecision::Rejected,
+            IntroductionDecision::Blocked,
+        ];
+
+        {
+            let db = Database::new(path.clone()).unwrap();
+            let repo = PrivateIntroductionsRepository::new(&db);
+            for (index, decision) in decisions.iter().copied().enumerate() {
+                let id = format!("request-{index}");
+                let peer = format!("peer-{index}");
+                assert!(repo
+                    .receive(
+                        &id,
+                        &peer,
+                        &format!("@user{index}@relay.test"),
+                        &[index as u8; 32],
+                        100
+                    )
+                    .unwrap());
+                assert!(repo.decide(&id, decision, 101).unwrap());
+            }
+        }
+
+        let reopened = Database::new(path).unwrap();
+        for (index, decision) in decisions.iter().copied().enumerate() {
+            let stored: String = reopened
+                .with_connection(|connection| {
+                    connection.query_row(
+                        "SELECT decision FROM introduction_decisions WHERE request_id=?",
+                        [format!("request-{index}")],
+                        |row| row.get(0),
+                    )
+                })
+                .unwrap();
+            assert_eq!(stored, decision.as_str());
+        }
+        let repo = PrivateIntroductionsRepository::new(&reopened);
+        assert!(repo.is_blocked("peer-3").unwrap());
+        assert!(!repo.is_blocked("peer-0").unwrap());
+    }
+
+    #[test]
+    fn offline_revocation_survives_restart_and_rejects_stale_grants() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("harbor.db");
+        let grant = |revision| CapabilityGrantRecord {
+            domain: "harbor/capability-grant/1".into(),
+            version: 1,
+            grant_id: "grant-1".into(),
+            issuer_peer_id: "alice".into(),
+            subject_peer_id: "bob".into(),
+            capability: "wall:read".into(),
+            revision,
+            issued_at: 100 + revision as i64,
+            expires_at: Some(1_000),
+            revocation_id: "revoke-1".into(),
+        };
+
+        {
+            let db = Database::new(path.clone()).unwrap();
+            let repo = PrivateIntroductionsRepository::new(&db);
+            assert!(repo.apply_grant(&grant(3), 103).unwrap());
+            assert!(repo
+                .is_authorized("alice", "bob", "wall:read", 104)
+                .unwrap());
+            assert!(repo
+                .apply_revocation(&CapabilityRevocationRecord {
+                    domain: "harbor/capability-revocation/1".into(),
+                    version: 1,
+                    grant_id: "grant-1".into(),
+                    issuer_peer_id: "alice".into(),
+                    revision: 5,
+                    revoked_at: 105,
+                    revocation_id: "revoke-1".into(),
+                })
+                .unwrap());
+        }
+
+        let reopened = Database::new(path).unwrap();
+        let repo = PrivateIntroductionsRepository::new(&reopened);
+        assert!(!repo
+            .is_authorized("alice", "bob", "wall:read", 106)
+            .unwrap());
+        assert!(!repo.apply_grant(&grant(4), 106).unwrap());
+        assert!(!repo
+            .is_authorized("alice", "bob", "wall:read", 106)
+            .unwrap());
+        assert!(repo.apply_grant(&grant(6), 106).unwrap());
+        assert!(repo
+            .is_authorized("alice", "bob", "wall:read", 107)
+            .unwrap());
+    }
+}
