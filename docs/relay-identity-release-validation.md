@@ -16,7 +16,7 @@ Retain the log with the release evidence. A command that selects zero tests is n
 
 ## Recorded release result
 
-On 2026-07-12, commit `d9159b81685f6bbad17eedbc49142a47d68e5650` passed the canonical gate. The run included 394 frontend tests, 258 client tests, 44 relay tests, strict TypeScript and ESLint checks, production frontend compilation, and Rust formatting, checking, and Clippy for all targets. The production JavaScript dependency audit and both Rust `cargo deny` audits passed. A tracked-file credential-pattern scan found no secrets. The only remaining step before broad distribution is the packaged-app UX smoke described below.
+On 2026-07-12, commit `8fab4bdda4a640494631fa48327e4636c846f088` passed the canonical gate. The run included 407 frontend tests, 260 client tests plus the CLI test, 44 relay tests, strict TypeScript and ESLint checks, production frontend compilation, and Rust formatting, checking, and Clippy for all targets. The production JavaScript dependency audit and both Rust `cargo deny` audits passed. A tracked-file credential-pattern scan found no secrets. The packaged-app UX and restart smoke also passed; its evidence is recorded in [packaged-app-smoke-2026-07-12.md](packaged-app-smoke-2026-07-12.md).
 
 ## Isolated topology
 
@@ -93,3 +93,14 @@ Do not mark work item 0501 complete while a matrix row is untested, while the to
 ## Packaged-app smoke
 
 Before distributing a release candidate broadly, run the required scenario once with packaged builds to confirm onboarding wording, qualified-name presentation, mention review controls, and stale/revoked status presentation. This smoke is a UX and packaging check. The reproducible security decision comes from the automated matrix above, which uses real cryptographic records, isolated databases, authority restart, stale-session rejection, and direct service boundaries rather than screenshots.
+
+Run the repeatable packaged harness with an intentionally selected relay name and a disposable profile root:
+
+```bash
+HARBOR_SMOKE_NAME=<intentional-test-name> \
+HARBOR_SMOKE_PASSPHRASE=<test-only-passphrase> \
+HARBOR_SMOKE_PROFILE_ROOT=/tmp/harbor-packaged-smoke-profile \
+./scripts/validate-packaged-ux-smoke.sh
+```
+
+The name is permanently registered with the configured relay. The harness therefore refuses to invent one. It validates the packaged binary, isolated persistence, camel-case Tauri DTO boundary, verified relay claim, migration state, restart, unlock, and claim recovery. It also captures screenshots for visual review; those screenshots supplement but do not replace the automated security matrix.
