@@ -855,7 +855,33 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 15);
+            assert_eq!(version, 19);
+
+            for table in [
+                "relay_trust_keys",
+                "relay_name_claims",
+                "introduction_decisions",
+                "introduction_blocks",
+                "contact_capability_state",
+                "private_mentions",
+                "private_mention_outbox",
+                "private_mention_blocks",
+                "identity_migration_state",
+            ] {
+                let exists: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+                    [table],
+                    |row| row.get(0),
+                )?;
+                assert!(exists, "migration did not create {table}");
+            }
+
+            let migration_states: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM identity_migration_state",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(migration_states, 0, "migration must not invent identity state");
 
             let row: (String, String, Option<String>, Option<String>, String, Option<String>) = conn
                 .query_row(
