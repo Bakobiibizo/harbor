@@ -41,6 +41,29 @@ const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
 /// How often to purge stale entries from the rate limiter (in seconds)
 const RATE_LIMITER_CLEANUP_INTERVAL_SECS: u64 = 300;
+fn source_bucket(addr: &Multiaddr) -> String {
+    use libp2p::multiaddr::Protocol;
+    for p in addr.iter() {
+        match p {
+            Protocol::Ip4(ip) => {
+                let o = ip.octets();
+                return format!("{}.{}.{}.0/24", o[0], o[1], o[2]);
+            }
+            Protocol::Ip6(ip) => {
+                let s = ip.segments();
+                return format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3]);
+            }
+            _ => {}
+        }
+    }
+    "unknown".into()
+}
+fn response_delay(request_id: &str) -> Duration {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    request_id.hash(&mut h);
+    Duration::from_millis(20 + h.finish() % 21)
+}
 
 struct IdentityTransport {
     auth: auth::AuthService,
@@ -49,6 +72,30 @@ struct IdentityTransport {
     relay_name: String,
     relay_key_id: String,
     relay_signing_key: ed25519_dalek::SigningKey,
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    #[test]
+    fn source_network_uses_privacy_preserving_prefix() {
+        assert_eq!(
+            source_bucket(&"/ip4/203.0.113.47/tcp/4001".parse().unwrap()),
+            "203.0.113.0/24"
+        );
+        assert_eq!(
+            source_bucket(&"/ip6/2001:db8:1:2::7/tcp/4001".parse().unwrap()),
+            "2001:db8:1:2::/64"
+        );
+    }
+    #[test]
+    fn response_jitter_is_deterministic_and_bounded() {
+        for id in ["known", "unknown", "blocked", "offline"] {
+            let d = response_delay(id);
+            assert!(d >= Duration::from_millis(20) && d <= Duration::from_millis(40));
+            assert_eq!(d, response_delay(id));
+        }
+    }
 }
 
 /// Per-peer rate limiter for board sync requests.
@@ -661,6 +708,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let local_peer_id = *swarm.local_peer_id();
+    let mut source_networks: HashMap<PeerId, String> = HashMap::new();
     info!("Local Peer ID: {}", local_peer_id);
 
     // Listen on all interfaces
@@ -750,14 +798,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Check per-peer rate limit before processing the request
                             let response = if let Some(ref mut limiter) = rate_limiter {
                                 match limiter.check_rate_limit(&peer) {
-                                    Ok(()) => handle_board_request(service, identity_transport.as_mut(), &local_peer_id, &peer, request),
+                                    Ok(()) => handle_board_request(service, identity_transport.as_mut(), source_networks.get(&peer).map(String::as_str).unwrap_or("unknown"), &local_peer_id, &peer, request),
                                     Err(rate_limit_error) => BoardSyncResponse::Error {
                                         error: rate_limit_error,
                                     },
                                 }
                             } else {
-                                handle_board_request(service, identity_transport.as_mut(), &local_peer_id, &peer, request)
+                                handle_board_request(service, identity_transport.as_mut(), source_networks.get(&peer).map(String::as_str).unwrap_or("unknown"), &local_peer_id, &peer, request)
                             };
+
+                            if let BoardSyncResponse::IntroductionAccepted{request_id,..}=&response{tokio::time::sleep(response_delay(request_id)).await;}
 
                             if let Err(send_error) = swarm
                                 .behaviour_mut()
@@ -775,9 +825,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } => {
+                    source_networks.insert(peer_id,source_bucket(endpoint.get_remote_address()));
                     info!("Connection established with: {} via {:?} ({:?})", peer_id, connection_id, endpoint);
                 }
                 SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, endpoint, .. } => {
+                    source_networks.remove(&peer_id);
                     info!("Connection closed with: {} via {:?} ({:?}), cause: {:?}", peer_id, connection_id, endpoint, cause);
                 }
                 _ => {}
@@ -789,6 +841,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn handle_board_request(
     service: &BoardService,
     identity: Option<&mut IdentityTransport>,
+    source_network: &str,
     local_peer_id: &PeerId,
     peer: &PeerId,
     request: BoardSyncRequest,
@@ -908,7 +961,7 @@ fn handle_board_request(
                     |mut s| {
                         s.submit(
                             &session_token,
-                            &peer.to_string(),
+                            source_network,
                             envelope,
                             chrono::Utc::now().timestamp(),
                             false,

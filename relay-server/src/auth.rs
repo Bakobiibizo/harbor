@@ -36,6 +36,7 @@ struct SessionClaims {
     issued_at: i64,
     expires_at: i64,
     key_id: String,
+    epoch: String,
 }
 
 pub struct AuthService {
@@ -45,6 +46,7 @@ pub struct AuthService {
     outstanding: HashMap<String, AuthChallenge>,
     used_challenges: HashSet<String>,
     revoked_sessions: HashSet<String>,
+    epoch: String,
 }
 
 impl AuthService {
@@ -63,6 +65,7 @@ impl AuthService {
             outstanding: HashMap::new(),
             used_challenges: HashSet::new(),
             revoked_sessions: HashSet::new(),
+            epoch: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -150,6 +153,7 @@ impl AuthService {
             issued_at: at,
             expires_at: at + SESSION_TTL_SECS,
             key_id: self.key_id.clone(),
+            epoch: self.epoch.clone(),
         };
         self.encode_token(&claims)
     }
@@ -167,7 +171,10 @@ impl AuthService {
         if claims.domain != "harbor/relay-session/1" {
             return Err("invalid token domain".into());
         }
-        if claims.relay != self.relay || claims.key_id != self.key_id || claims.audience != audience
+        if claims.relay != self.relay
+            || claims.key_id != self.key_id
+            || claims.epoch != self.epoch
+            || claims.audience != audience
         {
             return Err("token scope mismatch".into());
         }
@@ -276,5 +283,16 @@ mod tests {
         for _ in 0..8 {
             assert!(s.authorize(&token, "introduce", 102).is_ok());
         }
+    }
+    #[test]
+    fn relay_restart_invalidates_prior_session_epoch() {
+        let (mut s, c, p) = setup();
+        let ch = s.issue_challenge(&p, "introduce", 100).unwrap();
+        let sig = c.sign(&challenge_bytes(&ch).unwrap()).unwrap();
+        let token = s
+            .complete(&ch, &c.public().encode_protobuf(), &sig, 101)
+            .unwrap();
+        let restarted = AuthService::new("relay.test", "k1", s.signing_key());
+        assert!(restarted.authorize(&token, "introduce", 102).is_err());
     }
 }

@@ -94,7 +94,7 @@ impl<'a> IntroductionService<'a> {
         source_network: &str,
         envelope: IntroductionEnvelope,
         at: i64,
-        known_contact: bool,
+        _known_contact_hint: bool,
     ) -> AcceptedResponse {
         let response = AcceptedResponse::generic(envelope.request_id.clone());
         let Ok(peer_id) = self.auth.authorize(session_token, "introduce", at) else {
@@ -112,6 +112,11 @@ impl<'a> IntroductionService<'a> {
         {
             return response;
         }
+        self.purge_expired(at);
+        let target_peer: Option<String> = self.conn.query_row(
+            "SELECT peer_id FROM relay_name_claims WHERE ('@' || local_name || '@' || relay)=? AND status='active' AND not_before<=? AND not_after>=? ORDER BY sequence DESC LIMIT 1",
+            params![envelope.target, at, at], |r| r.get(0)).optional().unwrap_or(None);
+        let known_contact=target_peer.as_ref().is_some_and(|target|self.conn.query_row("SELECT EXISTS(SELECT 1 FROM wall_read_grants WHERE issuer_peer_id=? AND subject_peer_id=? AND capability IN ('wall_read','wall:read') AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?))",params![target,envelope.requester_peer_id,at],|r|r.get::<_,bool>(0)).unwrap_or(false));
         if self
             .abuse
             .check_and_record(
@@ -125,10 +130,6 @@ impl<'a> IntroductionService<'a> {
         {
             return response;
         }
-        self.purge_expired(at);
-        let target_peer: Option<String> = self.conn.query_row(
-            "SELECT peer_id FROM relay_name_claims WHERE ('@' || local_name || '@' || relay)=? AND status='active' AND not_before<=? AND not_after>=? ORDER BY sequence DESC LIMIT 1",
-            params![envelope.target, at, at], |r| r.get(0)).optional().unwrap_or(None);
         let Some(target_peer) = target_peer else {
             return response;
         };
