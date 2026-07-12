@@ -1806,7 +1806,7 @@ mod tests {
             "12D3KooWSomeoneElse",
             "sdp",
             1000,
-            &vec![0u8; 64],
+            &[0u8; 64],
         );
 
         assert!(result.is_err());
@@ -1829,14 +1829,8 @@ mod tests {
         };
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
 
-        let result = service.process_incoming_offer(
-            "call-1",
-            caller_id,
-            &peer_id,
-            "sdp",
-            1000,
-            &vec![0u8; 64],
-        );
+        let result =
+            service.process_incoming_offer("call-1", caller_id, &peer_id, "sdp", 1000, &[0u8; 64]);
 
         assert!(result.is_err());
     }
@@ -1940,7 +1934,7 @@ mod tests {
         ContactsRepository::add_contact(&db, &contact_data).unwrap();
 
         let result =
-            service.process_incoming_hangup("call-1", sender_id, "normal", 1000, &vec![0u8; 64]);
+            service.process_incoming_hangup("call-1", sender_id, "normal", 1000, &[0u8; 64]);
 
         assert!(result.is_err());
     }

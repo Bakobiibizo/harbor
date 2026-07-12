@@ -8,7 +8,6 @@ mod auth;
 mod board_service;
 mod db;
 mod introduction;
-mod key_rotation;
 mod name_registration;
 
 use board_service::{BoardService, WallReadGrantProof};

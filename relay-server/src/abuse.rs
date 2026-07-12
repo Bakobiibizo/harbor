@@ -77,6 +77,8 @@ impl AbuseGuard {
             issued: HashMap::new(),
         }
     }
+    // Challenge issuance binds all security-relevant dimensions explicitly.
+    #[allow(clippy::too_many_arguments)]
     pub fn issue(
         &mut self,
         relay: &str,
@@ -285,6 +287,37 @@ mod tests {
         assert!(g
             .check_and_record(&swapped, solve(&original), "net", 100, false)
             .is_err());
+    }
+    #[test]
+    fn server_issued_challenge_is_single_use_and_target_bound() {
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let mut g = AbuseGuard::new(Limits {
+            peer: 10,
+            network: 10,
+            target: 10,
+            action: 10,
+            global: 20,
+            window_secs: 60,
+        });
+        let c = g
+            .issue(
+                "relay.test",
+                "peer",
+                "@alice@relay.test",
+                "introduce",
+                100,
+                "k1",
+                &key,
+            )
+            .unwrap();
+        let nonce = solve(&c);
+        let mut swapped = c.clone();
+        swapped.target = "@mallory@relay.test".into();
+        assert!(g
+            .check_and_record(&swapped, nonce, "net", 100, false)
+            .is_err());
+        assert!(g.check_and_record(&c, nonce, "net", 100, false).is_ok());
+        assert!(g.check_and_record(&c, nonce, "net", 100, false).is_err());
     }
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()

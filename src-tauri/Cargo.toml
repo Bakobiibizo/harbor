@@ -3,6 +3,7 @@ name = "harbor"
 version = "1.4.1-beta.4"
 description = "A decentralized P2P chat application with local-first data and permission-based sharing"
 authors = ["Harbor Contributors"]
+license = "MIT"
 edition = "2021"
 default-run = "harbor"
 

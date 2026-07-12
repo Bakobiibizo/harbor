@@ -343,6 +343,11 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         == 0
 }
 
+// Keep state types visible to rustdoc and ensure control setup stays aligned
+// with application-managed state.
+#[allow(dead_code)]
+fn managed_state_contract(_db: Arc<Database>, _feed: Arc<FeedService>, _pending: PendingDeepLink) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,8 +382,3 @@ mod tests {
         ));
     }
 }
-
-// Keep state types visible to rustdoc and ensure control setup stays aligned
-// with application-managed state.
-#[allow(dead_code)]
-fn managed_state_contract(_db: Arc<Database>, _feed: Arc<FeedService>, _pending: PendingDeepLink) {}

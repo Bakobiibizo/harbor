@@ -39,6 +39,11 @@ struct Pin {
 pub struct PinStore {
     pins: HashMap<String, Pin>,
 }
+impl Default for PinStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl PinStore {
     pub fn new() -> Self {
         Self {

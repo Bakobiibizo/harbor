@@ -190,7 +190,7 @@ impl NetworkHandle {
             Ok(NetworkResponse::RelayNameClaim {
                 claim,
                 relay_public_key,
-            }) => Ok((claim, relay_public_key)),
+            }) => Ok((*claim, relay_public_key)),
             Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
             _ => Err(AppError::Internal("Unexpected relay-name response".into())),
         }
@@ -2637,7 +2637,7 @@ impl NetworkService {
             WireBoardSyncResponse::RelayNameRegistered { claim } => {
                 if let Some(p) = self.pending_name_registration.remove(&peer) {
                     let _ = p.response_tx.send(NetworkResponse::RelayNameClaim {
-                        claim,
+                        claim: Box::new(claim),
                         relay_public_key: p.relay_public_key,
                     });
                 }

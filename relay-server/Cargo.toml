@@ -3,6 +3,7 @@ name = "harbor-relay-server"
 version = "0.1.3"
 edition = "2021"
 description = "libp2p relay server for Harbor chat app - enables NAT traversal"
+license = "MIT"
 
 [[bin]]
 name = "harbor-relay"
@@ -56,6 +57,9 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 lto = true

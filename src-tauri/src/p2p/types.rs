@@ -355,7 +355,7 @@ pub enum NetworkResponse {
     Peers(Vec<PeerInfo>),
     Addresses(Vec<String>),
     RelayNameClaim {
-        claim: super::protocols::board_sync::NameClaim,
+        claim: Box<super::protocols::board_sync::NameClaim>,
         relay_public_key: Vec<u8>,
     },
     IntroductionAccepted {

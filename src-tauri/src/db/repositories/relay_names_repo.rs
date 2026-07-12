@@ -24,6 +24,10 @@ impl<'a> RelayNamesRepository<'a> {
     pub fn trusted_key(&self, relay: &str, key_id: &str, now: i64) -> Result<Option<Vec<u8>>> {
         self.db.with_connection(|c| c.query_row("SELECT public_key FROM relay_trust_keys WHERE relay=? AND key_id=? AND retired_at IS NULL AND not_before<=? AND (not_after IS NULL OR not_after>=?)", params![relay,key_id,now,now], |r| r.get(0)).optional())
     }
+    // The claim is persisted as a single normalized row whose columns mirror the
+    // signed protocol object. Keeping the parameters explicit prevents accidental
+    // omission when the SQL schema changes.
+    #[allow(clippy::too_many_arguments)]
     pub fn cache_verified(
         &self,
         qualified: &str,
