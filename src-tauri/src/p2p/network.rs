@@ -38,12 +38,13 @@ use crate::db::Capability;
 use crate::error::{AppError, Result};
 use crate::services::board_service::StorableBoardPost;
 use crate::services::content_sync_service::RemotePostParams;
+use crate::services::mentions_service::IncomingMentionEnvelope;
 use crate::services::messaging_service::IncomingMessageParams;
 use crate::services::{
     BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
-    IncomingWallSocialEventParams, MediaStorageService, MessagingService, PermissionsService,
-    PostsService, SignableGetWallPosts, SignableGetWallSocialEvents, SignableWallPostSubmit,
-    SignableWallSocialEventSubmit, WallSocialService,
+    IncomingWallSocialEventParams, MediaStorageService, MentionsService, MessagingService,
+    PermissionsService, PostsService, SignableGetWallPosts, SignableGetWallSocialEvents,
+    SignableWallPostSubmit, SignableWallSocialEventSubmit, WallSocialService,
 };
 use std::sync::Arc;
 fn solve_work(c: &super::protocols::board_sync::WorkChallenge) -> u64 {
@@ -74,6 +75,9 @@ fn solve_work(c: &super::protocols::board_sync::WorkChallenge) -> u64 {
     }
     0
 }
+fn should_ack_ingest<T, E>(result: &std::result::Result<T, E>) -> bool {
+    result.is_ok()
+}
 
 /// Handle to interact with the network service
 #[derive(Clone)]
@@ -82,6 +86,20 @@ pub struct NetworkHandle {
 }
 
 impl NetworkHandle {
+    pub async fn active_relay(&self) -> Result<PeerId> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::GetActiveRelay, Some(tx)))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+        match rx.await {
+            Ok(NetworkResponse::ActiveRelay(p)) => Ok(p),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("No active relay".into())),
+        }
+    }
     pub async fn fetch_introductions(
         &self,
         relay_peer_id: PeerId,
@@ -798,6 +816,7 @@ pub struct NetworkService {
     content_sync_service: Option<Arc<ContentSyncService>>,
     wall_social_service: Option<Arc<WallSocialService>>,
     board_service: Option<Arc<BoardService>>,
+    mentions_service: Option<Arc<MentionsService>>,
     media_service: Option<Arc<MediaStorageService>>,
     command_rx: mpsc::Receiver<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
     event_tx: mpsc::Sender<NetworkEvent>,
@@ -835,7 +854,7 @@ pub struct NetworkService {
         HashMap<request_response::OutboundRequestId, oneshot::Sender<NetworkResponse>>,
     pending_name_registration: HashMap<PeerId, PendingNameRegistration>,
     pending_introduction_submit: HashMap<PeerId, PendingIntroductionSubmit>,
-    pending_introduction_fetch: HashMap<PeerId, (u32, oneshot::Sender<NetworkResponse>)>,
+    pending_introduction_fetch: HashMap<PeerId, PendingIntroductionFetch>,
 }
 
 struct PendingNameRegistration {
@@ -851,6 +870,11 @@ struct PendingIntroductionSubmit {
     ephemeral_public_key: Vec<u8>,
     ciphertext: Vec<u8>,
     expires_at: i64,
+    session_token: Option<String>,
+    response_tx: oneshot::Sender<NetworkResponse>,
+}
+struct PendingIntroductionFetch {
+    limit: u32,
     session_token: Option<String>,
     response_tx: oneshot::Sender<NetworkResponse>,
 }
@@ -881,6 +905,7 @@ impl NetworkService {
             content_sync_service: None,
             wall_social_service: None,
             board_service: None,
+            mentions_service: None,
             media_service: None,
             command_rx,
             event_tx,
@@ -914,6 +939,9 @@ impl NetworkService {
     /// Set the calling service for validating incoming signaling.
     pub fn set_calling_service(&mut self, service: Arc<CallingService>) {
         self.calling_service = Some(service);
+    }
+    pub fn set_mentions_service(&mut self, service: Arc<MentionsService>) {
+        self.mentions_service = Some(service)
     }
 
     /// Set the contacts service for storing contacts from identity exchange
@@ -2556,12 +2584,13 @@ impl NetworkService {
                     );
                     return;
                 }
-                if let Some((limit, _)) = self.pending_introduction_fetch.get(&peer) {
+                if let Some(pending) = self.pending_introduction_fetch.get_mut(&peer) {
+                    pending.session_token = Some(token.clone());
                     self.swarm.behaviour_mut().board_sync.send_request(
                         &peer,
                         WireBoardSyncRequest::FetchIntroductions {
                             session_token: token,
-                            limit: *limit,
+                            limit: pending.limit,
                         },
                     );
                     return;
@@ -2656,8 +2685,39 @@ impl NetworkService {
                 }
             }
             WireBoardSyncResponse::Introductions { envelopes } => {
-                if let Some((_, tx)) = self.pending_introduction_fetch.remove(&peer) {
-                    let _ = tx.send(NetworkResponse::Introductions(envelopes));
+                if let Some(pending) = self.pending_introduction_fetch.remove(&peer) {
+                    let mut ack = Vec::new();
+                    if let Some(service) = &self.mentions_service {
+                        for e in &envelopes {
+                            let incoming = IncomingMentionEnvelope {
+                                request_id: e.request_id.clone(),
+                                requester_peer_id: e.requester_peer_id.clone(),
+                                ephemeral_public_key: e.requester_ephemeral_x25519_key.clone(),
+                                ciphertext: e.message_ciphertext.clone(),
+                                issued_at: e.issued_at,
+                                expires_at: e.expires_at,
+                            };
+                            if should_ack_ingest(
+                                &service.ingest_queued_envelope(&incoming, Utc::now().timestamp()),
+                            ) {
+                                ack.push(e.request_id.clone())
+                            }
+                        }
+                    }
+                    if !ack.is_empty() {
+                        if let Some(token) = pending.session_token {
+                            self.swarm.behaviour_mut().board_sync.send_request(
+                                &peer,
+                                WireBoardSyncRequest::AckIntroductions {
+                                    session_token: token,
+                                    request_ids: ack,
+                                },
+                            );
+                        }
+                    }
+                    let _ = pending
+                        .response_tx
+                        .send(NetworkResponse::Introductions(envelopes));
                 }
             }
             WireBoardSyncResponse::IntroductionsAcked { .. } => {}
@@ -3605,6 +3665,19 @@ impl NetworkService {
 
     async fn handle_command(&mut self, command: NetworkCommand) -> NetworkResponse {
         match command {
+            NetworkCommand::GetActiveRelay => self
+                .community_relays
+                .keys()
+                .next()
+                .copied()
+                .or_else(|| {
+                    PUBLIC_RELAYS
+                        .iter()
+                        .filter_map(|a| a.rsplit("/p2p/").next()?.parse().ok())
+                        .find(|p| self.connected_peers.contains_key(p))
+                })
+                .map(NetworkResponse::ActiveRelay)
+                .unwrap_or_else(|| NetworkResponse::Error("NO_ACTIVE_RELAY".into())),
             NetworkCommand::FetchIntroductions {
                 relay_peer_id,
                 limit,
@@ -3617,8 +3690,14 @@ impl NetworkService {
                     return NetworkResponse::Ok;
                 }
                 let peer_id = self.identity_service.get_peer_id().unwrap_or_default();
-                self.pending_introduction_fetch
-                    .insert(relay_peer_id, (limit.clamp(1, 100), response_tx));
+                self.pending_introduction_fetch.insert(
+                    relay_peer_id,
+                    PendingIntroductionFetch {
+                        limit: limit.clamp(1, 100),
+                        session_token: None,
+                        response_tx,
+                    },
+                );
                 self.swarm.behaviour_mut().board_sync.send_request(
                     &relay_peer_id,
                     WireBoardSyncRequest::RelayAuthChallenge {
@@ -4595,5 +4674,19 @@ impl NetworkService {
             return;
         }
         self.connect_to_relays().await;
+    }
+}
+
+#[cfg(test)]
+mod introduction_ack_tests {
+    use super::should_ack_ingest;
+    #[test]
+    fn success_duplicate_and_blocked_are_acked() {
+        assert!(should_ack_ingest(&Ok::<bool, &str>(true)));
+        assert!(should_ack_ingest(&Ok::<bool, &str>(false)));
+    }
+    #[test]
+    fn tamper_or_validation_error_is_not_acked() {
+        assert!(!should_ack_ingest(&Err::<bool, &str>("tampered")));
     }
 }

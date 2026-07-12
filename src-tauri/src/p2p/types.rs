@@ -187,7 +187,9 @@ pub enum NetworkCommand {
         addresses: Vec<Multiaddr>,
     },
     /// Disconnect from a peer
-    Disconnect { peer_id: PeerId },
+    Disconnect {
+        peer_id: PeerId,
+    },
     /// Send a message to a peer
     SendMessage {
         peer_id: PeerId,
@@ -205,7 +207,9 @@ pub enum NetworkCommand {
         response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
     },
     /// Request identity from a peer
-    RequestIdentity { peer_id: PeerId },
+    RequestIdentity {
+        peer_id: PeerId,
+    },
     /// Get current network stats
     GetStats,
     /// Get list of connected peers
@@ -213,11 +217,15 @@ pub enum NetworkCommand {
     /// Get listening addresses
     GetListeningAddresses,
     /// Add a bootstrap node address
-    AddBootstrapNode { address: Multiaddr },
+    AddBootstrapNode {
+        address: Multiaddr,
+    },
     /// Bootstrap the DHT
     Bootstrap,
     /// Add a custom relay server address
-    AddRelayServer { address: Multiaddr },
+    AddRelayServer {
+        address: Multiaddr,
+    },
     /// Connect to public relay servers
     ConnectToPublicRelays,
     /// Request content manifest from a peer
@@ -233,14 +241,18 @@ pub enum NetworkCommand {
         include_media: bool,
     },
     /// Sync feed content from connected peers
-    SyncFeed { limit: u32 },
+    SyncFeed {
+        limit: u32,
+    },
     /// Join a community (register peer + list boards)
     JoinCommunity {
         relay_peer_id: PeerId,
         relay_address: String,
     },
     /// List boards on a relay
-    ListBoards { relay_peer_id: PeerId },
+    ListBoards {
+        relay_peer_id: PeerId,
+    },
     /// Get board posts from a relay
     GetBoardPosts {
         relay_peer_id: PeerId,
@@ -278,7 +290,10 @@ pub enum NetworkCommand {
         media_items: Vec<WallPostMediaItem>,
     },
     /// Fetch media by hash from a peer
-    FetchMedia { peer_id: PeerId, media_hash: String },
+    FetchMedia {
+        peer_id: PeerId,
+        media_hash: String,
+    },
     /// Get wall posts for a specific author from a relay
     GetWallPostsFromRelay {
         relay_peer_id: PeerId,
@@ -327,6 +342,7 @@ pub enum NetworkCommand {
         limit: u32,
         response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
     },
+    GetActiveRelay,
     /// Shutdown the network
     Shutdown,
 }
@@ -347,6 +363,7 @@ pub enum NetworkResponse {
         retry_after: u32,
     },
     Introductions(Vec<super::protocols::board_sync::QueuedEnvelope>),
+    ActiveRelay(PeerId),
     Error(String),
 }
 

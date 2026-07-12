@@ -13,7 +13,6 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
-const HARBOR_RELAY_PEER: &str = "12D3KooWMfwHKfzDrZ2V3Zniw3Qu797bHrKsFKAdG9CtQiaEhbQ3";
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRelayNameRequest {
@@ -50,9 +49,7 @@ pub async fn register_relay_name(
     network: State<'_, NetworkState>,
     db: State<'_, Arc<Database>>,
 ) -> Result<NameClaim> {
-    let peer = HARBOR_RELAY_PEER
-        .parse()
-        .map_err(|_| AppError::Internal("Invalid Harbor relay peer ID".into()))?;
+    let peer = network.get_handle().await?.active_relay().await?;
     let (wire, key) = network
         .get_handle()
         .await?
@@ -154,9 +151,7 @@ pub async fn drain_private_mention_outbox(
     network: State<'_, NetworkState>,
     db: State<'_, Arc<Database>>,
 ) -> Result<u32> {
-    let relay = HARBOR_RELAY_PEER
-        .parse()
-        .map_err(|_| AppError::Internal("Invalid Harbor relay peer ID".into()))?;
+    let relay = network.get_handle().await?.active_relay().await?;
     let queued =
         MentionsRepository::new(&db).queued_outbound(chrono::Utc::now().timestamp(), 25)?;
     let mut delivered = 0;

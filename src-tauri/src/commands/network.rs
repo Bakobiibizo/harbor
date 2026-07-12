@@ -2,7 +2,8 @@ use crate::error::AppError;
 use crate::p2p::{NetworkConfig, NetworkHandle, NetworkService, NetworkStats, PeerInfo};
 use crate::services::{
     BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
-    MediaStorageService, MessagingService, PermissionsService, PostsService, WallSocialService,
+    MediaStorageService, MentionsService, MessagingService, PermissionsService, PostsService,
+    WallSocialService,
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -84,6 +85,7 @@ pub struct StartNetworkServices {
     pub wall_social_service: Arc<WallSocialService>,
     pub board_service: Arc<BoardService>,
     pub media_service: Arc<MediaStorageService>,
+    pub mentions_service: Arc<MentionsService>,
 }
 
 /// Start the P2P network (called after identity is unlocked)
@@ -106,6 +108,7 @@ pub async fn start_network(
     wall_social_service: State<'_, Arc<WallSocialService>>,
     board_service: State<'_, Arc<BoardService>>,
     media_service: State<'_, Arc<MediaStorageService>>,
+    mentions_service: State<'_, Arc<MentionsService>>,
 ) -> Result<(), AppError> {
     let services = StartNetworkServices {
         identity_service: (*identity_service).clone(),
@@ -118,6 +121,7 @@ pub async fn start_network(
         wall_social_service: (*wall_social_service).clone(),
         board_service: (*board_service).clone(),
         media_service: (*media_service).clone(),
+        mentions_service: (*mentions_service).clone(),
     };
     start_network_with_services(app, network, services).await
 }
@@ -186,9 +190,43 @@ async fn start_network_with_services(
     service.set_wall_social_service(services.wall_social_service.clone());
     service.set_board_service(services.board_service.clone());
     service.set_media_service(services.media_service.clone());
+    service.set_mentions_service(services.mentions_service.clone());
 
     // Store the handle
     network.set_handle(handle).await;
+
+    let relay_handle = network.get_handle().await?;
+    let mention_delivery = services.mentions_service.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let Ok(relay) = relay_handle.active_relay().await else {
+                continue;
+            };
+            if let Ok(items) = mention_delivery.queued_outbound(chrono::Utc::now().timestamp(), 25)
+            {
+                for item in items {
+                    if let Ok((id, _)) = relay_handle
+                        .submit_introduction(
+                            relay,
+                            item.target,
+                            item.mention_id.clone(),
+                            item.ephemeral_public_key,
+                            item.ciphertext,
+                            item.expires_at,
+                        )
+                        .await
+                    {
+                        if id == item.mention_id {
+                            let _ = mention_delivery.mark_outbound_delivered(&id);
+                        }
+                    }
+                }
+            }
+            let _ = relay_handle.fetch_introductions(relay, 50).await;
+        }
+    });
 
     // Spawn the network service in a background task
     tokio::spawn(async move {

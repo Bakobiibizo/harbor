@@ -4,8 +4,8 @@ use crate::commands;
 use crate::models::CreateIdentityRequest;
 use crate::services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
-    FeedService, IdentityService, MediaStorageService, MessagingService, PermissionsService,
-    PostsService, WallSocialService,
+    FeedService, IdentityService, MediaStorageService, MentionsService, MessagingService,
+    PermissionsService, PostsService, WallSocialService,
 };
 use crate::{Database, PendingDeepLink};
 use serde::{Deserialize, Serialize};
@@ -246,6 +246,7 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
             app.state::<Arc<WallSocialService>>(),
             app.state::<Arc<BoardService>>(),
             app.state::<Arc<MediaStorageService>>(),
+            app.state::<Arc<MentionsService>>(),
         )
         .await
         .map(|_| json!({}))
