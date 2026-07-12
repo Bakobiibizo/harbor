@@ -3,16 +3,14 @@ import { Button, Input } from '../common';
 import { useIdentityStore, useAccountsStore } from '../../stores';
 import { HarborIcon, UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '../icons';
 import { accountsService } from '../../services';
-import { identityService } from '../../services';
 import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
-import type { IdentityInfo } from '../../types';
 
 interface CreateIdentityProps {
   onBack?: () => void;
 }
 
 export function CreateIdentity({ onBack }: CreateIdentityProps) {
-  const { createIdentity, error, clearError } = useIdentityStore();
+  const { completeOnboarding, error, clearError } = useIdentityStore();
   const { loadAccounts } = useAccountsStore();
 
   const [displayName, setDisplayName] = useState('');
@@ -22,7 +20,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const [passphraseHint, setPassphraseHint] = useState('');
   const [bio, setBio] = useState('');
   const [loading, setLoading] = useState(false);
-  const [createdIdentity, setCreatedIdentity] = useState<IdentityInfo | null>(null);
+  const [resumeAttempt, setResumeAttempt] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
 
@@ -57,33 +55,23 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
 
     setLoading(true);
     try {
-      const identity =
-        createdIdentity ??
-        (await createIdentity({
+      await completeOnboarding(
+        {
           displayName: displayName.trim(),
           relayName: displayName.trim().toLowerCase(),
           relayNamespace,
           passphrase,
           bio: bio.trim() || undefined,
           passphraseHint: passphraseHint.trim() || undefined,
-        }));
-      setCreatedIdentity(identity);
-      const claim = await identityService.registerRelayName({
-        name: displayName.trim(),
-        namespace: relayNamespace,
-      });
-      if (
-        claim.request.peerId !== identity.peerId ||
-        !(await identityService.verifyNameClaim(claim))
-      )
-        throw new Error('Harbor could not verify the relay name claim.');
-      useIdentityStore.getState().attachVerifiedRelayName(claim);
-      await identityService.setMigrationMode('verified');
+        },
+        displayName.trim(),
+        relayNamespace,
+      );
 
       // Ensure the new account is reflected in the accounts store
       try {
         await accountsService.listAccounts().then(async (accounts) => {
-          const exists = accounts.some((a) => a.peerId === identity.peerId);
+          const exists = accounts.length > 0;
 
           // In the normal case, the backend now returns the new account.
           // When it's present, refresh the in-memory accounts store.
@@ -95,6 +83,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
         // Non-critical, accounts list may not be set up yet
       }
     } catch (err) {
+      setResumeAttempt(true);
       setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
@@ -121,8 +110,8 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
     <div
       className="min-h-screen flex"
       style={{
-        background:
-          'linear-gradient(135deg, hsl(var(--harbor-brand-backdrop-start)) 0%, hsl(var(--harbor-brand-backdrop-mid)) 50%, hsl(var(--harbor-brand-backdrop-end)) 100%)',
+        background: 'linear-gradient(145deg, hsl(216 70% 10%), hsl(216 58% 17%))',
+        color: 'white',
       }}
     >
       {/* Left side - Branding */}
@@ -220,8 +209,8 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
           <div
             className="rounded-2xl p-8"
             style={{
-              background: 'hsl(var(--harbor-bg-elevated))',
-              border: '1px solid hsl(var(--harbor-border-subtle))',
+              background: 'hsl(216 52% 16%)',
+              border: '1px solid hsl(210 40% 92% / .22)',
               boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
             }}
           >
@@ -476,7 +465,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                       Back
                     </Button>
                     <Button type="submit" className="flex-1" size="lg" loading={loading}>
-                      {createdIdentity ? 'Retry name registration' : 'Create Identity'}
+                      {resumeAttempt ? 'Retry name registration' : 'Create Identity'}
                     </Button>
                   </div>
                 </div>

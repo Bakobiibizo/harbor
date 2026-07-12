@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useIdentityStore } from './identity';
-import { identityService } from '../services';
+import { identityService, networkService } from '../services';
 
 vi.mock('../services', () => ({
   identityService: {
@@ -13,7 +13,11 @@ vi.mock('../services', () => ({
     updateDisplayName: vi.fn(),
     updateBio: vi.fn(),
     updatePassphraseHint: vi.fn(),
+    registerRelayName: vi.fn(),
+    verifyNameClaim: vi.fn(),
+    setMigrationMode: vi.fn(),
   },
+  networkService: { startNetwork: vi.fn(), connectToPublicRelays: vi.fn() },
 }));
 
 const mockIdentity = {
@@ -112,6 +116,28 @@ describe('useIdentityStore', () => {
 
       expect(useIdentityStore.getState().error).toBe('Creation failed');
     });
+  });
+
+  it('resumes an unlocked half-created identity without creating it again', async () => {
+    vi.mocked(identityService.hasIdentity).mockResolvedValue(true);
+    vi.mocked(identityService.getIdentityInfo).mockResolvedValue(mockIdentity);
+    vi.mocked(identityService.isUnlocked).mockResolvedValue(true);
+    vi.mocked(networkService.startNetwork).mockResolvedValue();
+    vi.mocked(networkService.connectToPublicRelays).mockResolvedValue();
+    const claim = { request: { peerId: mockIdentity.peerId } } as never;
+    vi.mocked(identityService.registerRelayName).mockResolvedValue(claim);
+    vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
+    vi.mocked(identityService.setMigrationMode).mockResolvedValue();
+    await useIdentityStore
+      .getState()
+      .completeOnboarding(
+        { displayName: 'Test User', passphrase: 'secret-passphrase' },
+        'test-user',
+        'relay.test',
+      );
+    expect(identityService.createIdentity).not.toHaveBeenCalled();
+    expect(identityService.setMigrationMode).toHaveBeenCalledWith('verified');
+    expect(useIdentityStore.getState().state.status).toBe('unlocked');
   });
 
   describe('unlock', () => {

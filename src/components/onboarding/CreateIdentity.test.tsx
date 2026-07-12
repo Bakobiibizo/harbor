@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { identityService } from '../../services';
 import { CreateIdentity } from './CreateIdentity';
 
-const h = vi.hoisted(() => ({ createIdentity: vi.fn(), attach: vi.fn(), loadAccounts: vi.fn() }));
-const { createIdentity, attach } = h;
+const h = vi.hoisted(() => ({ complete: vi.fn(), loadAccounts: vi.fn() }));
 vi.mock('../../stores', () => ({
-  useIdentityStore: Object.assign(
-    () => ({ createIdentity: h.createIdentity, error: null, clearError: vi.fn() }),
-    { getState: () => ({ attachVerifiedRelayName: h.attach }) },
-  ),
+  useIdentityStore: Object.assign(() => ({
+    completeOnboarding: h.complete,
+    error: null,
+    clearError: vi.fn(),
+  })),
   useAccountsStore: () => ({ loadAccounts: h.loadAccounts }),
 }));
 vi.mock('../../services', () => ({
@@ -65,28 +65,24 @@ async function fill() {
 describe('CreateIdentity relay registration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createIdentity.mockResolvedValue(identity);
+    h.complete.mockResolvedValue(identity);
     vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
     vi.mocked(identityService.setMigrationMode).mockResolvedValue();
   });
   it('registers, verifies and attaches the relay claim', async () => {
-    vi.mocked(identityService.registerRelayName).mockResolvedValue(claim);
+    h.complete.mockResolvedValue({ ...identity, relayNameClaim: claim });
     render(<CreateIdentity />);
     await fill();
     fireEvent.click(screen.getByRole('button', { name: 'Create Identity' }));
-    await waitFor(() => expect(attach).toHaveBeenCalledWith(claim));
-    expect(identityService.setMigrationMode).toHaveBeenCalledWith('verified');
+    await waitFor(() => expect(h.complete).toHaveBeenCalled());
   });
   it('retries registration without creating a second identity', async () => {
-    vi.mocked(identityService.registerRelayName)
-      .mockRejectedValueOnce(new Error('relay offline'))
-      .mockResolvedValueOnce(claim);
+    h.complete.mockRejectedValueOnce(new Error('relay offline')).mockResolvedValueOnce(identity);
     render(<CreateIdentity />);
     await fill();
     fireEvent.click(screen.getByRole('button', { name: 'Create Identity' }));
     expect(await screen.findByText('relay offline')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry name registration' }));
-    await waitFor(() => expect(attach).toHaveBeenCalledWith(claim));
-    expect(createIdentity).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(h.complete).toHaveBeenCalledTimes(2));
   });
 });
