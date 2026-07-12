@@ -768,15 +768,18 @@ export function SettingsPage() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Display Name
+                  {identity?.relayNameVerified
+                    ? 'Verified Harbor name'
+                    : 'Legacy name (unverified)'}
                 </label>
                 <input
                   type="text"
-                  value={displayName}
-                  onChange={(e) => {
-                    setDisplayName(e.target.value);
-                    setHasUnsavedChanges(true);
-                  }}
+                  value={
+                    identity?.relayNameVerified && identity.relayNameClaim
+                      ? `@${identity.relayNameClaim.name}@${identity.relayNameClaim.namespace}`
+                      : displayName
+                  }
+                  disabled
                   className="w-full px-4 py-3 rounded-lg text-sm"
                   style={{
                     background: 'hsl(var(--harbor-surface-1))',
@@ -784,6 +787,9 @@ export function SettingsPage() {
                     color: 'hsl(var(--harbor-text-primary))',
                   }}
                 />
+                <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Relay-verified names cannot be changed as arbitrary profile text.
+                </p>
               </div>
 
               {/* Bio - now 5 lines tall */}

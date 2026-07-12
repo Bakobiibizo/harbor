@@ -45,6 +45,7 @@ interface IdentityStore {
   updateBio: (bio: string | null) => Promise<void>;
   updatePassphraseHint: (hint: string | null) => Promise<void>;
   clearError: () => void;
+  attachVerifiedRelayName: (claim: import('../types').RelayNameClaim) => void;
 }
 
 export const useIdentityStore = create<IdentityStore>((set, get) => ({
@@ -170,4 +171,18 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+  attachVerifiedRelayName: (claim) => {
+    const { state } = get();
+    if (
+      (state.status === 'unlocked' || state.status === 'locked') &&
+      claim.peerId === state.identity.peerId
+    ) {
+      set({
+        state: {
+          ...state,
+          identity: { ...state.identity, relayNameClaim: claim, relayNameVerified: true },
+        },
+      });
+    }
+  },
 }));

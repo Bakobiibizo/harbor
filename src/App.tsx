@@ -6,6 +6,7 @@ import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore }
 import { useTauriEvents } from './hooks';
 import { MainLayout } from './components/layout';
 import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/onboarding';
+import { LegacyIdentityMigration } from './components/identity';
 import { AddContactDialog, ErrorBoundary } from './components/common';
 import { CallOverlay } from './components/calling/CallOverlay';
 import { HarborIcon } from './components/icons';
@@ -208,27 +209,29 @@ function AppContent() {
 
   // Identity unlocked - show main app
   return (
-    <>
-      <MainLayout>
-        <Routes>
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/wall" element={<WallPage />} />
-          <Route path="/contacts/:peerId/wall" element={<ContactWallPage />} />
-          <Route path="/feed" element={<FeedPage />} />
-          <Route path="/boards" element={<BoardsPage />} />
-          <Route path="/network" element={<NetworkPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/chat" replace />} />
-        </Routes>
-      </MainLayout>
-      <CallOverlay />
-      {pendingDeepLinkContact && (
-        <AddContactDialog
-          contactString={pendingDeepLinkContact}
-          onClose={() => setPendingDeepLinkContact(null)}
-        />
-      )}
-    </>
+    <LegacyIdentityMigration identity={state.identity}>
+      <>
+        <MainLayout>
+          <Routes>
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/wall" element={<WallPage />} />
+            <Route path="/contacts/:peerId/wall" element={<ContactWallPage />} />
+            <Route path="/feed" element={<FeedPage />} />
+            <Route path="/boards" element={<BoardsPage />} />
+            <Route path="/network" element={<NetworkPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/chat" replace />} />
+          </Routes>
+        </MainLayout>
+        <CallOverlay />
+        {pendingDeepLinkContact && (
+          <AddContactDialog
+            contactString={pendingDeepLinkContact}
+            onClose={() => setPendingDeepLinkContact(null)}
+          />
+        )}
+      </>
+    </LegacyIdentityMigration>
   );
 }
 

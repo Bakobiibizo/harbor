@@ -13,6 +13,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const { loadAccounts } = useAccountsStore();
 
   const [displayName, setDisplayName] = useState('');
+  const [relayNamespace, setRelayNamespace] = useState('harbor.social');
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [passphraseHint, setPassphraseHint] = useState('');
@@ -24,7 +25,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const handleNextStep = () => {
     setLocalError(null);
     if (!displayName.trim()) {
-      setLocalError('Display name is required');
+      setLocalError('A Harbor name is required');
       return;
     }
     setStep(2);
@@ -49,6 +50,8 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
     try {
       const identity = await createIdentity({
         displayName: displayName.trim(),
+        relayName: displayName.trim().toLowerCase(),
+        relayNamespace,
         passphrase,
         bio: bio.trim() || undefined,
         passphraseHint: passphraseHint.trim() || undefined,
@@ -290,7 +293,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
               </h2>
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {step === 1
-                  ? 'Choose how others will see you on the network'
+                  ? 'Choose your relay-unique Harbor address'
                   : 'Your passphrase encrypts your private keys locally'}
               </p>
             </div>
@@ -309,13 +312,28 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
               {step === 1 ? (
                 <div className="space-y-4">
                   <Input
-                    label="Display Name"
+                    label="Harbor name"
                     type="text"
                     value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="How others will see you"
+                    onChange={(e) =>
+                      setDisplayName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))
+                    }
+                    placeholder="your-name"
                     autoFocus
                   />
+
+                  <Input
+                    label="Relay namespace"
+                    value={relayNamespace}
+                    onChange={(e) => setRelayNamespace(e.target.value.toLowerCase().trim())}
+                  />
+                  <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                    People will know you as{' '}
+                    <strong>
+                      @{displayName || 'your-name'}@{relayNamespace}
+                    </strong>
+                    . Names are unique within each relay and bound to your cryptographic identity.
+                  </p>
 
                   <Input
                     label="Bio (optional)"

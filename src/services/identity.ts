@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { IdentityInfo, CreateIdentityRequest } from '../types';
+import type {
+  IdentityInfo,
+  CreateIdentityRequest,
+  RegisterRelayNameRequest,
+  RelayNameClaim,
+} from '../types';
 
 /** Identity service - wraps Tauri commands */
 export const identityService = {
@@ -51,5 +56,14 @@ export const identityService = {
   /** Get the local peer ID */
   async getPeerId(): Promise<string> {
     return invoke<string>('get_peer_id');
+  },
+  async registerRelayName(request: RegisterRelayNameRequest): Promise<RelayNameClaim> {
+    return invoke<RelayNameClaim>('register_relay_name', { request });
+  },
+  async getLocalNameClaim(): Promise<RelayNameClaim | null> {
+    return invoke<RelayNameClaim | null>('get_local_name_claim');
+  },
+  async verifyNameClaim(claim: RelayNameClaim): Promise<boolean> {
+    return invoke<boolean>('verify_name_claim', { claim });
   },
 };
