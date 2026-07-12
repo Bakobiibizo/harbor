@@ -9,8 +9,8 @@
 5. Review the AWS cost estimate and permissions acknowledgement, then choose **Create stack**.
 6. Enter the **Identity namespace** hostname you control, such as `relay.example.com`.
 7. Wait until CloudFormation reports `CREATE_COMPLETE` (usually several minutes).
-7. Open the stack's **Outputs** tab and follow `SSMConsoleLink`, or copy the command in `GetRelayAddress`.
-8. Copy the complete `/ip4/.../p2p/...` address into **Harbor → Network → Add relay**.
+8. Open the stack's **Outputs** tab and follow `SSMConsoleLink`, or copy the command in `GetRelayAddress`.
+9. Copy the complete `/ip4/.../p2p/...` address into **Harbor → Network → Add relay**.
 
 If creation fails, open the stack's **Events** tab. The first red event normally contains the useful error. Deleting the stack removes the deployment resources and stops ongoing compute charges.
 

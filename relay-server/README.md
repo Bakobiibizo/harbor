@@ -5,6 +5,7 @@ A standalone libp2p relay server that enables NAT traversal for Harbor chat app 
 ## What it does
 
 This relay server allows Harbor users behind NAT/firewalls to connect with each other by:
+
 1. Accepting relay reservations from clients
 2. Forwarding libp2p traffic between peers who can't connect directly
 3. Supporting DCUtR (Direct Connection Upgrade through Relay) for hole punching
@@ -24,11 +25,13 @@ The binary will be at `target/release/harbor-relay`.
 ## Running
 
 ### Basic usage (local testing)
+
 ```bash
 ./harbor-relay --port 4001 --identity-namespace relay.example.com
 ```
 
 ### Community/wall-sync testing
+
 ```bash
 ./harbor-relay \
   --port 4001 \
@@ -38,11 +41,13 @@ The binary will be at `target/release/harbor-relay`.
 ```
 
 ### Production usage (with public IP)
+
 ```bash
 ./harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP --identity-namespace relay.example.com
 ```
 
 ### Full options
+
 ```bash
 ./harbor-relay \
   --port 4001 \
@@ -107,6 +112,7 @@ WantedBy=multi-user.target
 ```
 
 Then:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable harbor-relay
