@@ -4,7 +4,7 @@ import { identityService } from '../../services';
 import { CreateIdentity } from './CreateIdentity';
 
 const h = vi.hoisted(() => ({ createIdentity: vi.fn(), attach: vi.fn(), loadAccounts: vi.fn() }));
-const { createIdentity, attach, loadAccounts } = h;
+const { createIdentity, attach } = h;
 vi.mock('../../stores', () => ({
   useIdentityStore: Object.assign(
     () => ({ createIdentity: h.createIdentity, error: null, clearError: vi.fn() }),
