@@ -12,4 +12,3 @@ all implementation work ───────────── 0501
 ```
 
 `010x` and `020x` may proceed concurrently after `0001`. UI replacement starts only after claims can be registered and verified. Private mentions require real introduction transport and contact capabilities.
-

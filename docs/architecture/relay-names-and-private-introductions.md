@@ -1,7 +1,9 @@
 # Relay Names and Private Introductions
 
-Status: Draft protocol specification  
-Target: Required identity-safety slice before Harbor 1.0  
+Status: Draft protocol specification
+
+Target: Required identity-safety slice before Harbor 1.0
+
 Last updated: 2026-07-12
 
 ## 1. Purpose
@@ -48,28 +50,36 @@ This specification does not introduce a blockchain, cryptocurrency, global DID r
 
 ## 4. Terminology
 
-**Local name**  
+**Local name**
+
 The normalized name unique within a relay, such as `alice`.
 
-**Relay authority**  
+**Relay authority**
+
 The DNS hostname and signing identity of the relay assigning a local name, such as `relay.example`.
 
-**Qualified name**  
+**Qualified name**
+
 The complete human-readable address, such as `@alice@relay.example`.
 
-**Name claim**  
+**Name claim**
+
 A record countersigned by the user and relay that binds a qualified name to a peer ID.
 
-**Introduction request**  
+**Introduction request**
+
 A signed request asking a relay to deliver an opaque envelope to a qualified name.
 
-**Contact card**  
+**Contact card**
+
 An identity and routing record encrypted specifically for an approved requester.
 
-**Capability grant**  
+**Capability grant**
+
 A signed authorization defining what a specific peer may do or read.
 
-**Public card**  
+**Public card**
+
 An optional, deliberately published subset of identity information available without contact approval.
 
 ## 5. Name syntax and normalization

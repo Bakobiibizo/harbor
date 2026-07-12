@@ -35,4 +35,3 @@ This program is a Harbor 1.0 identity-safety release gate. It adds relay-unique 
 | 0501 | [Validate privacy and identity release gates](epoch-5-release-validation/0501-release-validation.md) | all implementation items |
 
 No ticket permits a display-name fallback to appear verified, a public username directory, relay storage of contact graphs, or mock-only completion.
-
