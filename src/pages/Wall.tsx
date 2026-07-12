@@ -17,6 +17,7 @@ import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
 import { PostMedia } from '../components/common/PostMedia';
 import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
+import { safeIdentityLabel } from '../utils/relayName';
 import type { Comment } from '../services/comments';
 
 const log = createLogger('Wall');
@@ -879,7 +880,7 @@ export function WallPage() {
                         'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                     }}
                   >
-                    {getInitials(identity.displayName)}
+                    {getInitials(safeIdentityLabel(identity))}
                   </div>
                 )}
                 <div>
@@ -887,7 +888,7 @@ export function WallPage() {
                     className="font-medium text-sm"
                     style={{ color: 'hsl(var(--harbor-text-primary))' }}
                   >
-                    {identity?.displayName || 'You'}
+                    {identity ? safeIdentityLabel(identity) : 'You'}
                   </p>
                   <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     Creating a new {currentTypeConfig.label.toLowerCase()}
@@ -1660,7 +1661,7 @@ export function WallPage() {
                             'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                         }}
                       >
-                        {getInitials(identity.displayName)}
+                        {getInitials(safeIdentityLabel(identity))}
                       </div>
                     )}
                     <div>
@@ -1669,7 +1670,7 @@ export function WallPage() {
                           className="font-semibold text-sm"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {identity?.displayName || 'You'}
+                          {identity ? safeIdentityLabel(identity) : 'You'}
                         </p>
                         {/* Content type badge */}
                         {post.contentType !== 'post' && (

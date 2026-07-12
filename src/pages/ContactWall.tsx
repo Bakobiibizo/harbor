@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
@@ -7,6 +7,7 @@ import { useContactWallStore, useContactsStore, useIdentityStore } from '../stor
 import { postsService } from '../services/posts';
 import { getContactColor, getInitials, formatDate } from '../utils/formatting';
 import { createLogger } from '../utils/logger';
+import { safePeerLabel } from '../utils/relayName';
 
 const log = createLogger('ContactWall');
 const PAGE_SIZE = 20;
@@ -26,7 +27,7 @@ export function ContactWallPage() {
     identityState.status === 'unlocked' || identityState.status === 'locked'
       ? identityState.identity.peerId
       : '';
-  const { contacts, loadContacts } = useContactsStore();
+  const { loadContacts } = useContactsStore();
   const {
     wallItems,
     isLoading,
@@ -97,8 +98,7 @@ export function ContactWallPage() {
     };
   }, [wallItems]);
 
-  const contact = useMemo(() => contacts.find((c) => c.peerId === peerId), [contacts, peerId]);
-  const displayName = wallItems[0]?.authorDisplayName || contact?.displayName || 'Contact wall';
+  const displayName = safePeerLabel(peerId || 'unknown');
   const authorPeerId = peerId || '';
 
   const handleRefresh = useCallback(async () => {

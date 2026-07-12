@@ -4,8 +4,7 @@ import type { IdentityInfo, RelayNameClaim } from '../../types';
 import { qualifiedRelayName } from '../../types';
 import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
-
-const COMPAT_KEY = 'harbor.identity.betaCompatibility';
+import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
 
 export function LegacyIdentityMigration({
   identity,
@@ -17,34 +16,33 @@ export function LegacyIdentityMigration({
   const attachVerifiedRelayName = useIdentityStore((state) => state.attachVerifiedRelayName);
   const [claim, setClaim] = useState<RelayNameClaim | null>(identity.relayNameClaim ?? null);
   const [checked, setChecked] = useState(false);
-  const [compatible, setCompatible] = useState(
-    () => localStorage.getItem(COMPAT_KEY) === identity.peerId,
-  );
+  const [compatible, setCompatible] = useState(false);
   const [name, setName] = useState(
     identity.displayName
       .toLowerCase()
       .replace(/[^a-z0-9_-]/g, '')
       .slice(0, 32),
   );
-  const [namespace, setNamespace] = useState('harbor.social');
+  const [namespace] = useState(configuredRelayNamespace);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
-    identityService
-      .getLocalNameClaim()
-      .then(async (local) => {
+    Promise.all([identityService.getLocalNameClaim(), identityService.getMigrationState()])
+      .then(async ([local, mode]) => {
+        setCompatible(mode === 'compatibility');
         if (
           active &&
-          local?.peerId === identity.peerId &&
+          local?.request.peerId === identity.peerId &&
           (await identityService.verifyNameClaim(local))
         ) {
           setClaim(local);
           attachVerifiedRelayName(local);
+          await identityService.setMigrationMode('verified');
         }
       })
-      .catch(() => undefined)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => {
         if (active) setChecked(true);
       });
@@ -61,11 +59,15 @@ export function LegacyIdentityMigration({
     setBusy(true);
     setError(null);
     try {
+      const validation = validateRelayLocalName(name);
+      if (validation) throw new Error(validation);
+      if (!namespace) throw new Error('Connect to or configure a relay before claiming a name.');
       const next = await identityService.registerRelayName({ name, namespace });
-      if (next.peerId !== identity.peerId || !(await identityService.verifyNameClaim(next)))
+      if (next.request.peerId !== identity.peerId || !(await identityService.verifyNameClaim(next)))
         throw new Error('The relay returned a claim Harbor could not verify.');
       setClaim(next);
       attachVerifiedRelayName(next);
+      await identityService.setMigrationMode('verified');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -97,11 +99,7 @@ export function LegacyIdentityMigration({
           value={name}
           onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
         />
-        <Input
-          label="Relay namespace"
-          value={namespace}
-          onChange={(e) => setNamespace(e.target.value.toLowerCase().trim())}
-        />
+        <Input label="Relay namespace" value={namespace} disabled />
         <p className="text-sm">
           Your address will be{' '}
           <strong>
@@ -123,9 +121,13 @@ export function LegacyIdentityMigration({
         </Button>
         <button
           className="w-full text-sm underline"
-          onClick={() => {
-            localStorage.setItem(COMPAT_KEY, identity.peerId);
-            setCompatible(true);
+          onClick={async () => {
+            try {
+              await identityService.setMigrationMode('compatibility');
+              setCompatible(true);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err));
+            }
           }}
         >
           Continue in beta compatibility mode

@@ -9,7 +9,7 @@ export function presentRelayName(
 ): RelayNamePresentation {
   if (!claim) return { label: legacyName, qualifiedName: null, trust: 'unverified' };
   const label = qualifiedRelayName(claim);
-  if (claim.expiresAt <= now) return { label, qualifiedName: label, trust: 'expired' };
+  if (claim.notAfter <= now) return { label, qualifiedName: label, trust: 'expired' };
   return { label, qualifiedName: label, trust: verified ? 'verified' : 'untrusted' };
 }
 
@@ -19,4 +19,12 @@ export function presentIdentityName(identity: IdentityInfo): RelayNamePresentati
     identity.displayName,
     identity.relayNameVerified === true,
   );
+}
+export function safeIdentityLabel(identity: IdentityInfo): string {
+  return identity.relayNameVerified && identity.relayNameClaim
+    ? qualifiedRelayName(identity.relayNameClaim)
+    : `Peer ${identity.peerId.slice(0, 8)}… (unverified)`;
+}
+export function safePeerLabel(peerId: string): string {
+  return `Peer ${peerId.slice(0, 8)}… (unverified)`;
 }

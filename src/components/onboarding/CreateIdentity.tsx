@@ -3,6 +3,8 @@ import { Button, Input } from '../common';
 import { useIdentityStore, useAccountsStore } from '../../stores';
 import { HarborIcon, UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '../icons';
 import { accountsService } from '../../services';
+import { identityService } from '../../services';
+import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
 
 interface CreateIdentityProps {
   onBack?: () => void;
@@ -13,7 +15,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const { loadAccounts } = useAccountsStore();
 
   const [displayName, setDisplayName] = useState('');
-  const [relayNamespace, setRelayNamespace] = useState('harbor.social');
+  const [relayNamespace] = useState(configuredRelayNamespace);
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [passphraseHint, setPassphraseHint] = useState('');
@@ -24,8 +26,13 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
 
   const handleNextStep = () => {
     setLocalError(null);
-    if (!displayName.trim()) {
-      setLocalError('A Harbor name is required');
+    const nameError = validateRelayLocalName(displayName.trim());
+    if (nameError) {
+      setLocalError(nameError);
+      return;
+    }
+    if (!relayNamespace) {
+      setLocalError('Connect to or configure a relay before creating your Harbor name.');
       return;
     }
     setStep(2);
@@ -56,6 +63,17 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
         bio: bio.trim() || undefined,
         passphraseHint: passphraseHint.trim() || undefined,
       });
+      const claim = await identityService.registerRelayName({
+        name: displayName.trim(),
+        namespace: relayNamespace,
+      });
+      if (
+        claim.request.peerId !== identity.peerId ||
+        !(await identityService.verifyNameClaim(claim))
+      )
+        throw new Error('Harbor could not verify the relay name claim.');
+      useIdentityStore.getState().attachVerifiedRelayName(claim);
+      await identityService.setMigrationMode('verified');
 
       // Ensure the new account is reflected in the accounts store
       try {
@@ -322,11 +340,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                     autoFocus
                   />
 
-                  <Input
-                    label="Relay namespace"
-                    value={relayNamespace}
-                    onChange={(e) => setRelayNamespace(e.target.value.toLowerCase().trim())}
-                  />
+                  <Input label="Relay namespace" value={relayNamespace} disabled />
                   <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                     People will know you as{' '}
                     <strong>

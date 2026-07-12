@@ -25,14 +25,24 @@ export interface CreateIdentityRequest {
 
 export type RelayNameTrust = 'verified' | 'expired' | 'untrusted' | 'unverified';
 export interface RelayNameClaim {
-  name: string;
-  namespace: string;
-  peerId: string;
-  sequence: number;
-  issuedAt: number;
-  expiresAt: number;
-  userSignature: string;
-  relaySignature: string;
+  request: {
+    domain: string;
+    version: number;
+    localName: string;
+    relay: string;
+    peerId: string;
+    ed25519PublicKey: number[];
+    x25519PublicKey: number[];
+    sequence: number;
+    issuedAt: number;
+    nonce: number[];
+  };
+  userSignature: number[];
+  status: string;
+  notBefore: number;
+  notAfter: number;
+  relayKeyId: string;
+  relaySignature: number[];
 }
 export interface RegisterRelayNameRequest {
   name: string;
@@ -43,8 +53,12 @@ export interface RelayNamePresentation {
   qualifiedName: string | null;
   trust: RelayNameTrust;
 }
-export function qualifiedRelayName(claim: Pick<RelayNameClaim, 'name' | 'namespace'>): string {
-  return `@${claim.name}@${claim.namespace}`;
+export function qualifiedRelayName(
+  claim: RelayNameClaim | { name: string; namespace: string },
+): string {
+  return 'request' in claim
+    ? `@${claim.request.localName}@${claim.request.relay}`
+    : `@${claim.name}@${claim.namespace}`;
 }
 
 /** Application state for identity */

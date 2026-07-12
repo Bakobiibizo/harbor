@@ -175,7 +175,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     const { state } = get();
     if (
       (state.status === 'unlocked' || state.status === 'locked') &&
-      claim.peerId === state.identity.peerId
+      claim.request.peerId === state.identity.peerId
     ) {
       set({
         state: {

@@ -66,4 +66,14 @@ export const identityService = {
   async verifyNameClaim(claim: RelayNameClaim): Promise<boolean> {
     return invoke<boolean>('verify_name_claim', { claim });
   },
+  async getMigrationState(): Promise<'required' | 'compatibility' | 'verified'> {
+    return (
+      await invoke<{ mode: 'required' | 'compatibility' | 'verified' }>(
+        'get_identity_migration_state',
+      )
+    ).mode;
+  },
+  async setMigrationMode(mode: 'compatibility' | 'verified'): Promise<void> {
+    return invoke('set_identity_migration_mode', { mode });
+  },
 };

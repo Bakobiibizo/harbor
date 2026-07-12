@@ -6,6 +6,7 @@ import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
 import { useFeedStore, useContactsStore, useWallStore, useSettingsStore } from '../stores';
 import { postsService } from '../services/posts';
 import { createLogger } from '../utils/logger';
+import { safePeerLabel } from '../utils/relayName';
 import type { FeedItem } from '../types';
 import type { SharedFrom, Comment } from '../stores';
 import { useIdentityStore } from '../stores';
@@ -587,7 +588,6 @@ export function FeedPage() {
 
   const toUnifiedPost = useCallback(
     (item: FeedItem): UnifiedPost => {
-      const contact = contacts.find((c) => c.peerId === item.authorPeerId);
       return {
         id: `real-${item.postId}`,
         postId: item.postId,
@@ -598,7 +598,7 @@ export function FeedPage() {
         likedByUser: item.likedByUser ?? false,
         author: {
           peerId: item.authorPeerId,
-          name: item.authorDisplayName || contact?.displayName || 'Unknown',
+          name: safePeerLabel(item.authorPeerId),
           avatarGradient: getContactColor(item.authorPeerId),
         },
         isReal: true,
@@ -612,7 +612,6 @@ export function FeedPage() {
   const allPosts: UnifiedPost[] = useMemo(() => {
     return feedItems
       .map((item: FeedItem): UnifiedPost => {
-        const contact = contacts.find((c) => c.peerId === item.authorPeerId);
         return {
           id: `real-${item.postId}`,
           postId: item.postId,
@@ -623,7 +622,7 @@ export function FeedPage() {
           likedByUser: item.likedByUser ?? false,
           author: {
             peerId: item.authorPeerId,
-            name: item.authorDisplayName || contact?.displayName || 'Unknown',
+            name: safePeerLabel(item.authorPeerId),
             avatarGradient: getContactColor(item.authorPeerId),
           },
           isReal: true,

@@ -778,7 +778,7 @@ export function SettingsPage() {
                   type="text"
                   value={
                     identity?.relayNameVerified && identity.relayNameClaim
-                      ? `@${identity.relayNameClaim.name}@${identity.relayNameClaim.namespace}`
+                      ? `@${identity.relayNameClaim.request.localName}@${identity.relayNameClaim.request.relay}`
                       : displayName
                   }
                   disabled
