@@ -3,6 +3,7 @@ use libp2p::{identity, PeerId};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use x25519_dalek::{PublicKey as X25519Public, StaticSecret};
 
 const REQUEST_DOMAIN: &str = "harbor/name-claim-request/1";
 const MAX_SKEW: i64 = 300;
@@ -96,6 +97,17 @@ pub fn register(
         || r.sequence == 0
         || r.nonce.len() < 16
         || (r.issued_at - now).abs() > MAX_SKEW
+    {
+        return Err(RegistrationError::Invalid);
+    }
+    let x_raw: [u8; 32] = r
+        .x25519_public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| RegistrationError::Invalid)?;
+    if !StaticSecret::from([1u8; 32])
+        .diffie_hellman(&X25519Public::from(x_raw))
+        .was_contributory()
     {
         return Err(RegistrationError::Invalid);
     }

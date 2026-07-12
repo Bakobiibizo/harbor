@@ -1,6 +1,7 @@
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use libp2p::{identity, PeerId};
 use thiserror::Error;
+use x25519_dalek::{PublicKey as X25519Public, StaticSecret};
 
 use crate::{
     db::repositories::RelayNamesRepository,
@@ -70,6 +71,19 @@ pub fn verify_and_cache(
     if claim.request.domain != domain::NAME_CLAIM_REQUEST
         || claim.request.version != PROTOCOL_VERSION
         || claim.request.sequence == 0
+        || claim.request.nonce.len() < 16
+    {
+        return Err(ClaimVerificationError::InvalidEncoding);
+    }
+    let x_raw: [u8; 32] = claim
+        .request
+        .x25519_public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| ClaimVerificationError::InvalidEncoding)?;
+    if !StaticSecret::from([1u8; 32])
+        .diffie_hellman(&X25519Public::from(x_raw))
+        .was_contributory()
     {
         return Err(ClaimVerificationError::InvalidEncoding);
     }

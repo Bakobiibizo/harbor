@@ -13,7 +13,10 @@ use x25519_dalek::{PublicKey as X25519Public, StaticSecret};
 
 use crate::{
     db::repositories::{IntroductionDecision, PrivateIntroductionsRepository},
-    models::{ContactCard, IntroductionRequest, QualifiedRelayName},
+    models::{
+        domain, CapabilityGrantRecord, CapabilityRevocationRecord, ContactCard,
+        IntroductionRequest, QualifiedRelayName, PROTOCOL_VERSION,
+    },
     services::signing::canonical_cbor,
 };
 
@@ -58,6 +61,72 @@ pub struct EncryptedContactCard {
     pub recipient_peer_id: String,
     pub nonce: Vec<u8>,
     pub ciphertext: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedCapabilityGrant {
+    pub grant: CapabilityGrantRecord,
+    pub signature: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedCapabilityRevocation {
+    pub revocation: CapabilityRevocationRecord,
+    pub signature: Vec<u8>,
+}
+
+fn peer_for_key(raw: [u8; 32]) -> Result<PeerId, IntroductionError> {
+    let key = identity::ed25519::PublicKey::try_from_bytes(&raw)
+        .map_err(|_| IntroductionError::Invalid)?;
+    Ok(PeerId::from_public_key(&identity::PublicKey::from(key)))
+}
+pub fn verify_and_apply_grant(
+    repo: &PrivateIntroductionsRepository<'_>,
+    signed: &SignedCapabilityGrant,
+    issuer_key: [u8; 32],
+    now: i64,
+) -> Result<bool, IntroductionError> {
+    let g = &signed.grant;
+    if g.domain != domain::CAPABILITY_GRANT
+        || g.version != PROTOCOL_VERSION
+        || g.revision == 0
+        || g.issuer_peer_id != peer_for_key(issuer_key)?.to_string()
+        || g.issued_at > now
+        || g.expires_at.is_some_and(|e| e <= now)
+        || !ALLOWED_CAPABILITIES.contains(&g.capability.as_str())
+    {
+        return Err(IntroductionError::Capability);
+    }
+    let key = VerifyingKey::from_bytes(&issuer_key).map_err(|_| IntroductionError::Invalid)?;
+    let sig = Signature::from_slice(&signed.signature).map_err(|_| IntroductionError::Crypto)?;
+    key.verify(
+        &canonical_cbor(g).map_err(|_| IntroductionError::Invalid)?,
+        &sig,
+    )
+    .map_err(|_| IntroductionError::Crypto)?;
+    repo.apply_grant(g, now)
+        .map_err(|_| IntroductionError::Database)
+}
+pub fn verify_and_apply_revocation(
+    repo: &PrivateIntroductionsRepository<'_>,
+    signed: &SignedCapabilityRevocation,
+    issuer_key: [u8; 32],
+) -> Result<bool, IntroductionError> {
+    let r = &signed.revocation;
+    if r.domain != domain::CAPABILITY_REVOCATION
+        || r.version != PROTOCOL_VERSION
+        || r.revision == 0
+        || r.issuer_peer_id != peer_for_key(issuer_key)?.to_string()
+    {
+        return Err(IntroductionError::Capability);
+    }
+    let key = VerifyingKey::from_bytes(&issuer_key).map_err(|_| IntroductionError::Invalid)?;
+    let sig = Signature::from_slice(&signed.signature).map_err(|_| IntroductionError::Crypto)?;
+    key.verify(
+        &canonical_cbor(r).map_err(|_| IntroductionError::Invalid)?,
+        &sig,
+    )
+    .map_err(|_| IntroductionError::Crypto)?;
+    repo.apply_revocation(r)
+        .map_err(|_| IntroductionError::Database)
 }
 
 pub fn receive(
@@ -194,6 +263,7 @@ pub fn decrypt_contact_card(
     envelope: &EncryptedContactCard,
     recipient_secret: &StaticSecret,
     expected_issuer: [u8; 32],
+    expected_claim_digest: &[u8],
     recipient_peer_id: &str,
     now: i64,
 ) -> Result<SignedContactCard, IntroductionError> {
@@ -230,10 +300,27 @@ pub fn decrypt_contact_card(
         &sig,
     )
     .map_err(|_| IntroductionError::Crypto)?;
-    if signed.card.expires_at <= now
+    let derived_peer = peer_for_key(expected_issuer)?;
+    if signed.card.domain != domain::CONTACT_CARD
+        || signed.card.version != PROTOCOL_VERSION
+        || signed.card.revision == 0
+        || signed.card.ed25519_public_key != expected_issuer
+        || signed.card.peer_id != derived_peer.to_string()
+        || signed.card.name_claim_digest != expected_claim_digest
+        || signed.card.x25519_public_key.len() != 32
+        || signed.card.issued_at > now
+        || signed.card.expires_at <= signed.card.issued_at
+        || signed.card.expires_at <= now
         || signed.card.capabilities.iter().any(|g| {
-            g.subject_peer_id != recipient_peer_id
+            g.domain != domain::CAPABILITY_GRANT
+                || g.version != PROTOCOL_VERSION
+                || g.issuer_peer_id != signed.card.peer_id
+                || g.subject_peer_id != recipient_peer_id
+                || g.revision == 0
+                || g.issued_at < signed.card.issued_at
+                || g.issued_at > now
                 || g.expires_at.is_some_and(|e| e <= now)
+                || g.expires_at.is_some_and(|e| e > signed.card.expires_at)
                 || !ALLOWED_CAPABILITIES.contains(&g.capability.as_str())
         })
     {
@@ -247,20 +334,22 @@ mod tests {
     use super::*;
     use crate::models::{domain, CapabilityGrantRecord};
 
-    fn card(subject: &str, now: i64) -> ContactCard {
+    fn card(subject: &str, now: i64, issuer: &SigningKey) -> ContactCard {
+        let public = issuer.verifying_key().to_bytes();
+        let peer_id = peer_for_key(public).unwrap().to_string();
         ContactCard {
             domain: domain::CONTACT_CARD.into(),
             version: 1,
             name_claim_digest: vec![1; 32],
-            peer_id: "issuer".into(),
-            ed25519_public_key: vec![2; 32],
+            peer_id: peer_id.clone(),
+            ed25519_public_key: public.to_vec(),
             x25519_public_key: vec![3; 32],
             routing: vec![],
             capabilities: vec![CapabilityGrantRecord {
                 domain: domain::CAPABILITY_GRANT.into(),
                 version: 1,
                 grant_id: "g1".into(),
-                issuer_peer_id: "issuer".into(),
+                issuer_peer_id: peer_id,
                 subject_peer_id: subject.into(),
                 capability: "wall:read".into(),
                 revision: 1,
@@ -282,13 +371,18 @@ mod tests {
         let recipient = StaticSecret::from([8; 32]);
         let recipient_public = X25519Public::from(&recipient);
         let peer = "recipient";
-        let envelope =
-            encrypt_contact_card(card(peer, now), &issuer, peer, recipient_public.to_bytes())
-                .unwrap();
+        let envelope = encrypt_contact_card(
+            card(peer, now, &issuer),
+            &issuer,
+            peer,
+            recipient_public.to_bytes(),
+        )
+        .unwrap();
         let decoded = decrypt_contact_card(
             &envelope,
             &recipient,
             issuer.verifying_key().to_bytes(),
+            &[1; 32],
             peer,
             now,
         )
@@ -301,6 +395,7 @@ mod tests {
                 &altered,
                 &recipient,
                 issuer.verifying_key().to_bytes(),
+                &[1; 32],
                 peer,
                 now
             ),
@@ -311,6 +406,7 @@ mod tests {
                 &envelope,
                 &StaticSecret::from([9; 32]),
                 issuer.verifying_key().to_bytes(),
+                &[1; 32],
                 peer,
                 now
             ),
@@ -322,7 +418,7 @@ mod tests {
     fn rejects_broad_or_wrong_subject_grants() {
         let issuer = SigningKey::from_bytes(&[7; 32]);
         let recipient = StaticSecret::from([8; 32]);
-        let mut value = card("someone-else", 1_000);
+        let mut value = card("someone-else", 1_000, &issuer);
         assert!(matches!(
             encrypt_contact_card(
                 value.clone(),
@@ -343,5 +439,84 @@ mod tests {
             ),
             Err(IntroductionError::Capability)
         ));
+    }
+
+    #[test]
+    fn signed_grant_and_revocation_are_verified_monotonically() {
+        let db = crate::db::Database::in_memory().unwrap();
+        let repo = PrivateIntroductionsRepository::new(&db);
+        let issuer = SigningKey::from_bytes(&[11; 32]);
+        let peer = peer_for_key(issuer.verifying_key().to_bytes())
+            .unwrap()
+            .to_string();
+        let now = 2_000;
+        let grant = CapabilityGrantRecord {
+            domain: domain::CAPABILITY_GRANT.into(),
+            version: PROTOCOL_VERSION,
+            grant_id: "g".into(),
+            issuer_peer_id: peer.clone(),
+            subject_peer_id: "subject".into(),
+            capability: "wall:read".into(),
+            revision: 1,
+            issued_at: now,
+            expires_at: Some(now + 100),
+            revocation_id: "r".into(),
+        };
+        let signed = SignedCapabilityGrant {
+            signature: issuer
+                .sign(&canonical_cbor(&grant).unwrap())
+                .to_bytes()
+                .to_vec(),
+            grant,
+        };
+        assert!(
+            verify_and_apply_grant(&repo, &signed, issuer.verifying_key().to_bytes(), now).unwrap()
+        );
+        assert!(
+            !verify_and_apply_grant(&repo, &signed, issuer.verifying_key().to_bytes(), now)
+                .unwrap()
+        );
+        let mut forged = signed.clone();
+        forged.grant.subject_peer_id = "attacker".into();
+        assert!(matches!(
+            verify_and_apply_grant(&repo, &forged, issuer.verifying_key().to_bytes(), now),
+            Err(IntroductionError::Crypto)
+        ));
+        let rev = CapabilityRevocationRecord {
+            domain: domain::CAPABILITY_REVOCATION.into(),
+            version: PROTOCOL_VERSION,
+            grant_id: "g".into(),
+            issuer_peer_id: peer,
+            revision: 2,
+            revoked_at: now + 1,
+            revocation_id: "r".into(),
+        };
+        let signed_rev = SignedCapabilityRevocation {
+            signature: issuer
+                .sign(&canonical_cbor(&rev).unwrap())
+                .to_bytes()
+                .to_vec(),
+            revocation: rev,
+        };
+        assert!(
+            verify_and_apply_revocation(&repo, &signed_rev, issuer.verifying_key().to_bytes())
+                .unwrap()
+        );
+        assert!(!verify_and_apply_revocation(
+            &repo,
+            &signed_rev,
+            issuer.verifying_key().to_bytes()
+        )
+        .unwrap());
+        assert_eq!(
+            repo.capability_decision(
+                &signed_rev.revocation.issuer_peer_id,
+                "subject",
+                "wall:read",
+                now + 2
+            )
+            .unwrap(),
+            Some(false)
+        );
     }
 }
