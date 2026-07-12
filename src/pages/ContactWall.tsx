@@ -12,11 +12,14 @@ import { safePeerLabel } from '../utils/relayName';
 const log = createLogger('ContactWall');
 const PAGE_SIZE = 20;
 
-function publicOnlyText(canReadContactsOnly: boolean | null): string {
+export function publicOnlyText(canReadContactsOnly: boolean | null): string {
   if (canReadContactsOnly) {
     return 'WallRead grant active: public and contacts-only posts stored locally are visible.';
   }
-  return 'Public-only view. Ask this contact for WallRead access to see contacts-only posts.';
+  if (canReadContactsOnly === false) {
+    return 'Contacts-only access is not active: it may be ungranted, expired, or revoked. New private posts are not served; previously downloaded posts may remain on this device.';
+  }
+  return 'Checking WallRead access. Public posts remain available while Harbor verifies the current grant.';
 }
 
 export function ContactWallPage() {
