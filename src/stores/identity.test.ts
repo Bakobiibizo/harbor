@@ -17,7 +17,11 @@ vi.mock('../services', () => ({
     verifyNameClaim: vi.fn(),
     setMigrationMode: vi.fn(),
   },
-  networkService: { startNetwork: vi.fn(), connectToPublicRelays: vi.fn() },
+  networkService: {
+    startNetwork: vi.fn(),
+    connectToPublicRelays: vi.fn(),
+    getNetworkStats: vi.fn(),
+  },
 }));
 
 const mockIdentity = {
@@ -39,6 +43,15 @@ describe('useIdentityStore', () => {
       error: null,
     });
     vi.clearAllMocks();
+    vi.mocked(networkService.getNetworkStats).mockResolvedValue({
+      connectedPeers: 1,
+      totalBytesIn: 0,
+      totalBytesOut: 0,
+      uptimeSeconds: 1,
+      natStatus: 'private',
+      relayAddresses: ['/p2p/relay/p2p-circuit/p2p/local'],
+      externalAddresses: [],
+    });
   });
 
   describe('initialize', () => {
@@ -138,6 +151,49 @@ describe('useIdentityStore', () => {
     expect(identityService.createIdentity).not.toHaveBeenCalled();
     expect(identityService.setMigrationMode).toHaveBeenCalledWith('verified');
     expect(useIdentityStore.getState().state.status).toBe('unlocked');
+  });
+
+  it('waits for a relay reservation before requesting a name claim', async () => {
+    vi.mocked(identityService.hasIdentity).mockResolvedValue(false);
+    vi.mocked(identityService.createIdentity).mockResolvedValue(mockIdentity);
+    vi.mocked(networkService.startNetwork).mockResolvedValue();
+    vi.mocked(networkService.connectToPublicRelays).mockResolvedValue();
+    vi.mocked(networkService.getNetworkStats)
+      .mockResolvedValueOnce({
+        connectedPeers: 1,
+        totalBytesIn: 0,
+        totalBytesOut: 0,
+        uptimeSeconds: 1,
+        natStatus: 'unknown',
+        relayAddresses: [],
+        externalAddresses: [],
+      })
+      .mockResolvedValue({
+        connectedPeers: 1,
+        totalBytesIn: 0,
+        totalBytesOut: 0,
+        uptimeSeconds: 2,
+        natStatus: 'private',
+        relayAddresses: ['/p2p/relay/p2p-circuit/p2p/local'],
+        externalAddresses: [],
+      });
+    const claim = { request: { peerId: mockIdentity.peerId } } as never;
+    vi.mocked(identityService.registerRelayName).mockResolvedValue(claim);
+    vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
+    vi.mocked(identityService.setMigrationMode).mockResolvedValue();
+
+    await useIdentityStore
+      .getState()
+      .completeOnboarding(
+        { displayName: 'Test User', passphrase: 'secret-passphrase' },
+        'test-user',
+        'relay.test',
+      );
+
+    expect(networkService.getNetworkStats).toHaveBeenCalledTimes(2);
+    expect(identityService.registerRelayName).toHaveBeenCalledAfter(
+      vi.mocked(networkService.getNetworkStats),
+    );
   });
 
   describe('unlock', () => {

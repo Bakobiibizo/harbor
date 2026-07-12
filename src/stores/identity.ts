@@ -32,6 +32,24 @@ function getErrorMessage(err: unknown): string {
   return 'An unknown error occurred';
 }
 
+const relayRetryPattern =
+  /NO_ACTIVE_RELAY|no active relay|offline|unavailable|not initialized|network service|old relay/i;
+
+async function waitForActiveRelay(): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      const stats = await networkService.getNetworkStats();
+      if (stats.relayAddresses.length > 0) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  const detail = lastError ? ` ${getErrorMessage(lastError)}` : '';
+  throw new Error(`Harbor connected to the network, but the relay is not ready yet.${detail}`);
+}
+
 interface IdentityStore {
   state: IdentityState;
   error: string | null;
@@ -114,6 +132,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       }
       await networkService.startNetwork();
       await networkService.connectToPublicRelays();
+      await waitForActiveRelay();
       let claim;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -122,9 +141,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         } catch (err) {
           if (
             attempt >= 9 ||
-            !/NO_ACTIVE_RELAY|offline|unavailable|not initialized|old relay/i.test(
-              getErrorMessage(err),
-            )
+            !relayRetryPattern.test(getErrorMessage(err))
           )
             throw err;
           await new Promise((r) => setTimeout(r, 300));
@@ -140,8 +157,9 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       set({ state: { status: 'unlocked', identity: complete } });
       return complete;
     } catch (err) {
-      set({ error: getErrorMessage(err) });
-      throw err;
+      const message = getErrorMessage(err);
+      set({ error: message });
+      throw new Error(message);
     }
   },
 

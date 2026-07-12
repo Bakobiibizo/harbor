@@ -4,9 +4,10 @@ import { identityService } from '../../services';
 import { LegacyIdentityMigration } from './LegacyIdentityMigration';
 
 const attach = vi.fn();
+const complete = vi.fn();
 vi.mock('../../stores', () => ({
   useIdentityStore: (selector: (s: unknown) => unknown) =>
-    selector({ attachVerifiedRelayName: attach }),
+    selector({ attachVerifiedRelayName: attach, completeOnboarding: complete }),
 }));
 vi.mock('../../utils/relayNameInput', async () => {
   const actual = await vi.importActual<typeof import('../../utils/relayNameInput')>(
@@ -64,10 +65,9 @@ describe('LegacyIdentityMigration release gates', () => {
     vi.mocked(identityService.setMigrationMode).mockResolvedValue();
   });
   it('recovers from a collision and retries without losing the legacy profile', async () => {
-    vi.mocked(identityService.registerRelayName)
+    complete
       .mockRejectedValueOnce(new Error('name already taken'))
-      .mockResolvedValueOnce(claim);
-    vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
+      .mockResolvedValueOnce({ ...identity, relayNameClaim: claim, relayNameVerified: true });
     render(
       <LegacyIdentityMigration identity={identity}>
         <div>app restored</div>

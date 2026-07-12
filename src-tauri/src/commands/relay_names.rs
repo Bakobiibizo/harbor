@@ -16,6 +16,83 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NameClaimRequestDto {
+    pub domain: String,
+    pub version: u16,
+    pub local_name: String,
+    pub relay: String,
+    pub peer_id: String,
+    pub ed25519_public_key: Vec<u8>,
+    pub x25519_public_key: Vec<u8>,
+    pub sequence: u64,
+    pub issued_at: i64,
+    pub nonce: Vec<u8>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NameClaimDto {
+    pub request: NameClaimRequestDto,
+    pub user_signature: Vec<u8>,
+    pub status: String,
+    pub not_before: i64,
+    pub not_after: i64,
+    pub relay_key_id: String,
+    pub relay_signature: Vec<u8>,
+}
+
+impl From<NameClaim> for NameClaimDto {
+    fn from(claim: NameClaim) -> Self {
+        Self {
+            request: NameClaimRequestDto {
+                domain: claim.request.domain,
+                version: claim.request.version,
+                local_name: claim.request.local_name,
+                relay: claim.request.relay,
+                peer_id: claim.request.peer_id,
+                ed25519_public_key: claim.request.ed25519_public_key,
+                x25519_public_key: claim.request.x25519_public_key,
+                sequence: claim.request.sequence,
+                issued_at: claim.request.issued_at,
+                nonce: claim.request.nonce,
+            },
+            user_signature: claim.user_signature,
+            status: claim.status,
+            not_before: claim.not_before,
+            not_after: claim.not_after,
+            relay_key_id: claim.relay_key_id,
+            relay_signature: claim.relay_signature,
+        }
+    }
+}
+
+impl From<NameClaimDto> for NameClaim {
+    fn from(claim: NameClaimDto) -> Self {
+        Self {
+            request: crate::models::NameClaimRequest {
+                domain: claim.request.domain,
+                version: claim.request.version,
+                local_name: claim.request.local_name,
+                relay: claim.request.relay,
+                peer_id: claim.request.peer_id,
+                ed25519_public_key: claim.request.ed25519_public_key,
+                x25519_public_key: claim.request.x25519_public_key,
+                sequence: claim.request.sequence,
+                issued_at: claim.request.issued_at,
+                nonce: claim.request.nonce,
+            },
+            user_signature: claim.user_signature,
+            status: claim.status,
+            not_before: claim.not_before,
+            not_after: claim.not_after,
+            relay_key_id: claim.relay_key_id,
+            relay_signature: claim.relay_signature,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRelayNameRequest {
@@ -51,7 +128,7 @@ pub async fn register_relay_name(
     request: RegisterRelayNameRequest,
     network: State<'_, NetworkState>,
     db: State<'_, Arc<Database>>,
-) -> Result<NameClaim> {
+) -> Result<NameClaimDto> {
     let peer = network.get_handle().await?.active_relay().await?;
     let (wire, key) = network
         .get_handle()
@@ -82,24 +159,25 @@ pub async fn register_relay_name(
         chrono::Utc::now().timestamp(),
     )
     .map_err(|e| AppError::Crypto(e.to_string()))?;
-    Ok(claim)
+    Ok(claim.into())
 }
 #[tauri::command]
 pub fn get_local_name_claim(
     db: State<'_, Arc<Database>>,
     identity: State<'_, Arc<IdentityService>>,
-) -> Result<Option<NameClaim>> {
+) -> Result<Option<NameClaimDto>> {
     let Some(bytes) = RelayNamesRepository::new(&db)
         .active_for_peer(&identity.get_peer_id()?, chrono::Utc::now().timestamp())?
     else {
         return Ok(None);
     };
-    ciborium::de::from_reader(bytes.as_slice())
-        .map(Some)
+    ciborium::de::from_reader::<NameClaim, _>(bytes.as_slice())
+        .map(|claim| Some(claim.into()))
         .map_err(|e| AppError::Serialization(e.to_string()))
 }
 #[tauri::command]
-pub fn verify_name_claim(claim: NameClaim, db: State<'_, Arc<Database>>) -> Result<bool> {
+pub fn verify_name_claim(claim: NameClaimDto, db: State<'_, Arc<Database>>) -> Result<bool> {
+    let claim = NameClaim::from(claim);
     Ok(verify_and_cache(
         &RelayNamesRepository::new(&db),
         &claim,
@@ -202,4 +280,43 @@ pub async fn drain_private_mention_outbox(
         }
     }
     Ok(delivered)
+}
+
+#[cfg(test)]
+mod dto_tests {
+    use super::*;
+
+    fn claim() -> NameClaim {
+        NameClaim {
+            request: crate::models::NameClaimRequest {
+                domain: "harbor/name-claim-request/1".into(),
+                version: 1,
+                local_name: "alice".into(),
+                relay: "harbor.social".into(),
+                peer_id: "12D3KooWTest".into(),
+                ed25519_public_key: vec![1; 32],
+                x25519_public_key: vec![2; 32],
+                sequence: 1,
+                issued_at: 100,
+                nonce: vec![3; 32],
+            },
+            user_signature: vec![4; 64],
+            status: "active".into(),
+            not_before: 100,
+            not_after: 200,
+            relay_key_id: "key-1".into(),
+            relay_signature: vec![5; 64],
+        }
+    }
+
+    #[test]
+    fn tauri_name_claim_dto_uses_camel_case_without_changing_protocol_model() {
+        let protocol = claim();
+        let dto = NameClaimDto::from(protocol.clone());
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["request"]["localName"], "alice");
+        assert_eq!(json["request"]["peerId"], "12D3KooWTest");
+        assert!(json["request"].get("local_name").is_none());
+        assert_eq!(NameClaim::from(dto), protocol);
+    }
 }

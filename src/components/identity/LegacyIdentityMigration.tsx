@@ -19,6 +19,7 @@ export function LegacyIdentityMigration({
   children: ReactNode;
 }) {
   const attachVerifiedRelayName = useIdentityStore((state) => state.attachVerifiedRelayName);
+  const completeOnboarding = useIdentityStore((state) => state.completeOnboarding);
   const [claim, setClaim] = useState<RelayNameClaim | null>(identity.relayNameClaim ?? null);
   const [checked, setChecked] = useState(false);
   const [compatible, setCompatible] = useState(false);
@@ -69,12 +70,25 @@ export function LegacyIdentityMigration({
       const validation = validateRelayLocalName(name);
       if (validation) throw new Error(validation);
       if (!namespace) throw new Error('Connect to or configure a relay before claiming a name.');
-      const next = await identityService.registerRelayName({ name, namespace });
-      if (next.request.peerId !== identity.peerId || !(await identityService.verifyNameClaim(next)))
-        throw new Error('The relay returned a claim Harbor could not verify.');
+      const completed = await completeOnboarding(
+        {
+          displayName: identity.displayName,
+          relayName: name,
+          relayNamespace: namespace,
+          // Existing identities are already unlocked before this gate. The store never uses this
+          // placeholder unless it has to create a missing identity, which this migration path does
+          // not permit.
+          passphrase: 'existing-unlocked-identity',
+          bio: identity.bio ?? undefined,
+          passphraseHint: identity.passphraseHint ?? undefined,
+        },
+        name,
+        namespace,
+      );
+      const next = completed.relayNameClaim;
+      if (!next) throw new Error('Harbor completed registration without a verified name claim.');
       setClaim(next);
       attachVerifiedRelayName(next);
-      await identityService.setMigrationMode('verified');
       publishingPolicy.setMode('verified');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
