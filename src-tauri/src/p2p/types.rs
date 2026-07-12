@@ -307,6 +307,12 @@ pub enum NetworkCommand {
         after_timestamp: i64,
         limit: u32,
     },
+    RegisterRelayName {
+        relay_peer_id: PeerId,
+        local_name: String,
+        namespace: String,
+        response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
+    },
     /// Shutdown the network
     Shutdown,
 }
@@ -318,6 +324,10 @@ pub enum NetworkResponse {
     Stats(NetworkStats),
     Peers(Vec<PeerInfo>),
     Addresses(Vec<String>),
+    RelayNameClaim {
+        claim: super::protocols::board_sync::NameClaim,
+        relay_public_key: Vec<u8>,
+    },
     Error(String),
 }
 

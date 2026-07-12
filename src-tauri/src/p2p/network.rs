@@ -28,7 +28,7 @@ use super::behaviour::{
 use super::config::NetworkConfig;
 use super::protocols::board_sync::{
     BoardSyncRequest as WireBoardSyncRequest, BoardSyncResponse as WireBoardSyncResponse,
-    WallSocialEventItem,
+    NameClaimRequest, SignedNameClaimRequest, WallSocialEventItem,
 };
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
 use super::protocols::signaling::{SignalingEnvelope, SignalingResponse};
@@ -54,6 +54,36 @@ pub struct NetworkHandle {
 }
 
 impl NetworkHandle {
+    pub async fn register_relay_name(
+        &self,
+        relay_peer_id: PeerId,
+        local_name: String,
+        namespace: String,
+    ) -> Result<(super::protocols::board_sync::NameClaim, Vec<u8>)> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::RegisterRelayName {
+                    relay_peer_id,
+                    local_name,
+                    namespace,
+                    response_tx: tx,
+                },
+                None,
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+        match rx.await {
+            Ok(NetworkResponse::RelayNameClaim {
+                claim,
+                relay_public_key,
+            }) => Ok((claim, relay_public_key)),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal("Unexpected relay-name response".into())),
+        }
+    }
     /// Dial a peer at the given addresses
     pub async fn dial(&self, peer_id: PeerId, addresses: Vec<Multiaddr>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
@@ -710,6 +740,15 @@ pub struct NetworkService {
     /// Pending signaling requests waiting for a request-response outcome.
     pending_signaling_requests:
         HashMap<request_response::OutboundRequestId, oneshot::Sender<NetworkResponse>>,
+    pending_name_registration: HashMap<PeerId, PendingNameRegistration>,
+}
+
+struct PendingNameRegistration {
+    local_name: String,
+    namespace: String,
+    session_token: Option<String>,
+    relay_public_key: Vec<u8>,
+    response_tx: oneshot::Sender<NetworkResponse>,
 }
 
 impl NetworkService {
@@ -755,6 +794,7 @@ impl NetworkService {
             community_relays: HashMap::new(),
             pending_board_registrations: std::collections::HashSet::new(),
             pending_signaling_requests: HashMap::new(),
+            pending_name_registration: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -1140,13 +1180,6 @@ impl NetworkService {
         };
 
         match response {
-            WireBoardSyncResponse::RelayAuthChallenge { .. }
-            | WireBoardSyncResponse::RelaySession { .. }
-            | WireBoardSyncResponse::RelayNameRegistered { .. }
-            | WireBoardSyncResponse::IntroductionAccepted { .. }
-            | WireBoardSyncResponse::Introductions { .. } => {
-                debug!("Received relay identity protocol response from {}", peer);
-            }
             ContentSyncResponse::Manifest {
                 responder_peer_id,
                 posts,
@@ -2371,6 +2404,88 @@ impl NetworkService {
         let relay_peer_id = peer.to_string();
 
         match response {
+            WireBoardSyncResponse::RelayAuthChallenge { challenge } => {
+                let Some(pending) = self.pending_name_registration.get_mut(&peer) else {
+                    return;
+                };
+                pending.relay_public_key = challenge.relay_public_key.clone();
+                let mut unsigned = challenge.clone();
+                unsigned.relay_signature.clear();
+                let mut bytes = Vec::new();
+                if ciborium::ser::into_writer(&unsigned, &mut bytes).is_err() {
+                    return;
+                }
+                let Ok(signature) = self.identity_service.sign_raw(&bytes) else {
+                    return;
+                };
+                let Ok(keys) = self.identity_service.get_unlocked_keys() else {
+                    return;
+                };
+                let Ok(lp) = libp2p::identity::ed25519::PublicKey::try_from_bytes(
+                    &keys.ed25519_signing.verifying_key().to_bytes(),
+                ) else {
+                    return;
+                };
+                self.swarm.behaviour_mut().board_sync.send_request(
+                    &peer,
+                    WireBoardSyncRequest::RelayAuthComplete {
+                        challenge,
+                        public_key: libp2p::identity::PublicKey::from(lp).encode_protobuf(),
+                        signature,
+                    },
+                );
+            }
+            WireBoardSyncResponse::RelaySession { token } => {
+                let Some(pending) = self.pending_name_registration.get_mut(&peer) else {
+                    return;
+                };
+                pending.session_token = Some(token.clone());
+                let Ok(keys) = self.identity_service.get_unlocked_keys() else {
+                    return;
+                };
+                let request = NameClaimRequest {
+                    domain: "harbor/name-claim-request/1".into(),
+                    version: 1,
+                    local_name: pending.local_name.clone(),
+                    relay: pending.namespace.clone(),
+                    peer_id: self.identity_service.get_peer_id().unwrap_or_default(),
+                    ed25519_public_key: keys.ed25519_signing.verifying_key().to_bytes().to_vec(),
+                    x25519_public_key: x25519_dalek::PublicKey::from(&keys.x25519_secret)
+                        .to_bytes()
+                        .to_vec(),
+                    sequence: 1,
+                    issued_at: Utc::now().timestamp(),
+                    nonce: uuid::Uuid::new_v4().as_bytes().to_vec(),
+                };
+                let mut bytes = Vec::new();
+                if ciborium::ser::into_writer(&request, &mut bytes).is_err() {
+                    return;
+                };
+                let Ok(user_signature) = self.identity_service.sign_raw(&bytes) else {
+                    return;
+                };
+                self.swarm.behaviour_mut().board_sync.send_request(
+                    &peer,
+                    WireBoardSyncRequest::RegisterRelayName {
+                        session_token: token,
+                        signed_request: SignedNameClaimRequest {
+                            request,
+                            user_signature,
+                        },
+                    },
+                );
+            }
+            WireBoardSyncResponse::RelayNameRegistered { claim } => {
+                if let Some(p) = self.pending_name_registration.remove(&peer) {
+                    let _ = p.response_tx.send(NetworkResponse::RelayNameClaim {
+                        claim,
+                        relay_public_key: p.relay_public_key,
+                    });
+                }
+            }
+            WireBoardSyncResponse::IntroductionAccepted { .. }
+            | WireBoardSyncResponse::IntroductionWork { .. }
+            | WireBoardSyncResponse::Introductions { .. } => {}
             WireBoardSyncResponse::BoardList { boards, .. } => {
                 let board_count = boards.len();
                 let board_data: Vec<(String, String, Option<String>, bool)> = boards
@@ -3315,6 +3430,38 @@ impl NetworkService {
 
     async fn handle_command(&mut self, command: NetworkCommand) -> NetworkResponse {
         match command {
+            NetworkCommand::RegisterRelayName {
+                relay_peer_id,
+                local_name,
+                namespace,
+                response_tx,
+            } => {
+                if self.pending_name_registration.contains_key(&relay_peer_id) {
+                    let _ = response_tx.send(NetworkResponse::Error(
+                        "NAME_REGISTRATION_IN_PROGRESS".into(),
+                    ));
+                    return NetworkResponse::Ok;
+                }
+                let peer_id = self.identity_service.get_peer_id().unwrap_or_default();
+                self.pending_name_registration.insert(
+                    relay_peer_id,
+                    PendingNameRegistration {
+                        local_name,
+                        namespace,
+                        session_token: None,
+                        relay_public_key: Vec::new(),
+                        response_tx,
+                    },
+                );
+                self.swarm.behaviour_mut().board_sync.send_request(
+                    &relay_peer_id,
+                    WireBoardSyncRequest::RelayAuthChallenge {
+                        peer_id,
+                        audience: "name:register".into(),
+                    },
+                );
+                NetworkResponse::Ok
+            }
             NetworkCommand::Dial { peer_id, addresses } => {
                 for addr in addresses {
                     self.swarm

@@ -260,6 +260,8 @@ mod tests {
             action: "introduce".into(),
             expires_at: 300,
             difficulty,
+            key_id: "k1".into(),
+            relay_signature: vec![1],
         };
         let nonce = (0..).find(|n| work.verify(*n, 100)).unwrap();
         IntroductionEnvelope {
@@ -288,6 +290,9 @@ mod tests {
         let mut abuse = AbuseGuard::new(limits());
         let mut service = IntroductionService::new(&conn, &auth, &mut abuse).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
+        service.abuse.remember(
+            envelope(requester.public().to_peer_id().to_string(), id.clone(), 4).work_challenge,
+        );
         let response = service.submit(
             &submit,
             "10.0.0.0/24",

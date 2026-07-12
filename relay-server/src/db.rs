@@ -469,7 +469,9 @@ impl RelayDatabase {
                  lamport_clock = excluded.lamport_clock,
                  issued_at = excluded.issued_at,
                  expires_at = excluded.expires_at,
-                 signature = excluded.signature",
+                 signature = excluded.signature,
+                 revoked_at = NULL
+             WHERE excluded.lamport_clock > wall_read_grants.lamport_clock",
             params![
                 grant_id,
                 issuer_peer_id,
@@ -489,13 +491,22 @@ impl RelayDatabase {
         &self,
         grant_id: &str,
         issuer_peer_id: &str,
+        lamport_clock: u64,
         revoked_at: i64,
     ) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap();
         let rows = conn.execute(
-            "UPDATE wall_read_grants SET revoked_at = ?
-             WHERE grant_id = ? AND issuer_peer_id = ? AND revoked_at IS NULL",
-            params![revoked_at, grant_id, issuer_peer_id],
+            "UPDATE wall_read_grants SET revoked_at = ?, lamport_clock = ?
+             WHERE grant_id = ? AND issuer_peer_id = ? AND lamport_clock < ?
+               AND (revoked_at IS NULL OR revoked_at < ?)",
+            params![
+                revoked_at,
+                lamport_clock as i64,
+                grant_id,
+                issuer_peer_id,
+                lamport_clock as i64,
+                revoked_at
+            ],
         )?;
         Ok(rows > 0)
     }
@@ -511,7 +522,7 @@ impl RelayDatabase {
             "SELECT COUNT(*) FROM wall_read_grants
              WHERE issuer_peer_id = ?
                AND subject_peer_id = ?
-               AND capability = 'wall_read'
+               AND capability IN ('wall_read', 'wall:read')
                AND revoked_at IS NULL
                AND (expires_at IS NULL OR expires_at > ?)",
             params![issuer_peer_id, subject_peer_id, now],

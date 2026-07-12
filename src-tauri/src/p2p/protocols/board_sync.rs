@@ -16,6 +16,7 @@ pub struct RelayAuthChallenge {
     pub expires_at: i64,
     pub nonce: String,
     pub key_id: String,
+    pub relay_public_key: Vec<u8>,
     pub relay_signature: Vec<u8>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +56,8 @@ pub struct WorkChallenge {
     pub action: String,
     pub expires_at: i64,
     pub difficulty: u8,
+    pub key_id: String,
+    pub relay_signature: Vec<u8>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntroductionEnvelope {
@@ -133,6 +136,10 @@ pub enum BoardSyncRequest {
     SubmitIntroduction {
         session_token: String,
         envelope: IntroductionEnvelope,
+    },
+    RequestIntroductionWork {
+        session_token: String,
+        target: String,
     },
     FetchIntroductions {
         session_token: String,
@@ -290,6 +297,9 @@ pub enum BoardSyncResponse {
     IntroductionAccepted {
         request_id: String,
         retry_after: u32,
+    },
+    IntroductionWork {
+        challenge: WorkChallenge,
     },
     Introductions {
         envelopes: Vec<QueuedEnvelope>,

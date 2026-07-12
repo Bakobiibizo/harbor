@@ -346,6 +346,11 @@ pub fn run() {
             commands::update_bio,
             commands::update_passphrase_hint,
             commands::get_peer_id,
+            commands::get_identity_migration_state,
+            commands::set_identity_migration_mode,
+            commands::register_relay_name,
+            commands::get_local_name_claim,
+            commands::verify_name_claim,
             // Network commands
             commands::get_connected_peers,
             commands::get_network_stats,

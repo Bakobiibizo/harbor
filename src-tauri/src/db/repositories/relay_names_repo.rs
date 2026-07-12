@@ -5,6 +5,9 @@ pub struct RelayNamesRepository<'a> {
     db: &'a Database,
 }
 impl<'a> RelayNamesRepository<'a> {
+    pub fn active_for_peer(&self, peer_id: &str, now: i64) -> Result<Option<Vec<u8>>> {
+        self.db.with_connection(|c| c.query_row("SELECT claim_cbor FROM relay_name_claims WHERE peer_id=? AND status='active' AND not_after>=? ORDER BY sequence DESC LIMIT 1", params![peer_id,now], |r|r.get(0)).optional())
+    }
     pub fn new(db: &'a Database) -> Self {
         Self { db }
     }
@@ -16,7 +19,7 @@ impl<'a> RelayNamesRepository<'a> {
         not_before: i64,
         not_after: Option<i64>,
     ) -> Result<()> {
-        self.db.with_connection(|c| c.execute("INSERT INTO relay_trust_keys(relay,key_id,public_key,not_before,not_after) VALUES(?,?,?,?,?) ON CONFLICT(relay,key_id) DO UPDATE SET public_key=excluded.public_key,not_before=excluded.not_before,not_after=excluded.not_after", params![relay,key_id,key,not_before,not_after]).map(|_| ()))
+        self.db.with_connection(|c| { let existing:Option<Vec<u8>>=c.query_row("SELECT public_key FROM relay_trust_keys WHERE relay=? AND key_id=?",params![relay,key_id],|r|r.get(0)).optional()?;if existing.as_deref().is_some_and(|v|v!=key){return Err(rusqlite::Error::InvalidQuery)}c.execute("INSERT OR IGNORE INTO relay_trust_keys(relay,key_id,public_key,not_before,not_after) VALUES(?,?,?,?,?)", params![relay,key_id,key,not_before,not_after]).map(|_| ())})
     }
     pub fn trusted_key(&self, relay: &str, key_id: &str, now: i64) -> Result<Option<Vec<u8>>> {
         self.db.with_connection(|c| c.query_row("SELECT public_key FROM relay_trust_keys WHERE relay=? AND key_id=? AND retired_at IS NULL AND not_before<=? AND (not_after IS NULL OR not_after>=?)", params![relay,key_id,now,now], |r| r.get(0)).optional())

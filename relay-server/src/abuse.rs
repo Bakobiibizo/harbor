@@ -12,6 +12,8 @@ pub struct WorkChallenge {
     pub action: String,
     pub expires_at: i64,
     pub difficulty: u8,
+    pub key_id: String,
+    pub relay_signature: Vec<u8>,
 }
 
 impl WorkChallenge {
@@ -63,6 +65,7 @@ pub struct AbuseGuard {
     events: VecDeque<(i64, String, String, String, String)>,
     used: HashSet<String>,
     pressure: HashMap<String, u8>,
+    issued: HashMap<String, WorkChallenge>,
 }
 impl AbuseGuard {
     pub fn new(limits: Limits) -> Self {
@@ -71,7 +74,39 @@ impl AbuseGuard {
             events: VecDeque::new(),
             used: HashSet::new(),
             pressure: HashMap::new(),
+            issued: HashMap::new(),
         }
+    }
+    pub fn issue(
+        &mut self,
+        relay: &str,
+        requester: &str,
+        target: &str,
+        action: &str,
+        at: i64,
+        key_id: &str,
+        key: &libp2p::identity::Keypair,
+    ) -> Result<WorkChallenge, String> {
+        let mut c = WorkChallenge {
+            id: uuid::Uuid::new_v4().to_string(),
+            relay: relay.into(),
+            requester: requester.into(),
+            target: target.into(),
+            action: action.into(),
+            expires_at: at + 300,
+            difficulty: self.difficulty(requester, false),
+            key_id: key_id.into(),
+            relay_signature: vec![],
+        };
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&c, &mut bytes).map_err(|e| e.to_string())?;
+        c.relay_signature = key.sign(&bytes).map_err(|e| e.to_string())?;
+        self.issued.insert(c.id.clone(), c.clone());
+        Ok(c)
+    }
+    #[cfg(test)]
+    pub fn remember(&mut self, challenge: WorkChallenge) {
+        self.issued.insert(challenge.id.clone(), challenge);
     }
     pub fn difficulty(&self, peer: &str, known_contact: bool) -> u8 {
         if known_contact {
@@ -90,6 +125,20 @@ impl AbuseGuard {
         known_contact: bool,
     ) -> Result<(), String> {
         self.prune(at);
+        let Some(issued) = self.issued.get(&challenge.id) else {
+            return Err("request accepted for processing".into());
+        };
+        if issued.relay != challenge.relay
+            || issued.requester != challenge.requester
+            || issued.target != challenge.target
+            || issued.action != challenge.action
+            || issued.expires_at != challenge.expires_at
+            || issued.difficulty != challenge.difficulty
+            || issued.key_id != challenge.key_id
+            || issued.relay_signature != challenge.relay_signature
+        {
+            return Err("request accepted for processing".into());
+        }
         if self.used.contains(&challenge.id) {
             return Err("request accepted for processing".into());
         }
@@ -114,6 +163,7 @@ impl AbuseGuard {
             return Err("request accepted for processing".into());
         }
         self.used.insert(challenge.id.clone());
+        self.issued.remove(&challenge.id);
         self.events.push_back((
             at,
             challenge.requester.clone(),
@@ -161,6 +211,8 @@ mod tests {
             action: "introduce".into(),
             expires_at: 300,
             difficulty: d,
+            key_id: "k1".into(),
+            relay_signature: vec![1],
         }
     }
     fn solve(c: &WorkChallenge) -> u64 {
@@ -192,11 +244,13 @@ mod tests {
         let mut g = AbuseGuard::new(limits());
         for id in ["1", "2"] {
             let c = challenge(id, 4);
+            g.remember(c.clone());
             assert!(g
                 .check_and_record(&c, solve(&c), "10.0.0.0/24", 100, false)
                 .is_ok());
         }
         let c = challenge("3", 4);
+        g.remember(c.clone());
         assert_eq!(
             g.check_and_record(&c, solve(&c), "10.0.0.0/24", 100, false)
                 .unwrap_err(),
@@ -213,7 +267,24 @@ mod tests {
         assert_eq!(g.difficulty("peer", true), 0);
         assert_eq!(g.difficulty("peer", false), 14);
         let c = challenge("c", 24);
+        g.remember(c.clone());
         assert!(g.check_and_record(&c, 0, "net", 100, true).is_ok());
+    }
+    #[test]
+    fn rejects_difficulty_downgrade_and_target_swap() {
+        let mut g = AbuseGuard::new(limits());
+        let original = challenge("bound", 4);
+        g.remember(original.clone());
+        let mut downgraded = original.clone();
+        downgraded.difficulty = 0;
+        assert!(g
+            .check_and_record(&downgraded, 0, "net", 100, false)
+            .is_err());
+        let mut swapped = original.clone();
+        swapped.target = "@mallory@relay.test".into();
+        assert!(g
+            .check_and_record(&swapped, solve(&original), "net", 100, false)
+            .is_err());
     }
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()

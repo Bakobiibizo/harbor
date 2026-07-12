@@ -151,6 +151,10 @@ pub enum BoardSyncRequest {
         session_token: String,
         envelope: introduction::IntroductionEnvelope,
     },
+    RequestIntroductionWork {
+        session_token: String,
+        target: String,
+    },
     FetchIntroductions {
         session_token: String,
         limit: u32,
@@ -339,6 +343,9 @@ pub enum BoardSyncResponse {
     IntroductionAccepted {
         request_id: String,
         retry_after: u32,
+    },
+    IntroductionWork {
+        challenge: abuse::WorkChallenge,
     },
     Introductions {
         envelopes: Vec<introduction::QueuedEnvelope>,
@@ -878,6 +885,18 @@ fn handle_board_request(
                     error: "IDENTITY_SERVICE_DISABLED".into(),
                 };
             };
+            let now = chrono::Utc::now().timestamp();
+            if state
+                .auth
+                .authorize(&session_token, "introduce", now)
+                .ok()
+                .as_ref()
+                != Some(peer)
+            {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_UNAVAILABLE".into(),
+                };
+            }
             let response = state.database.with_connection(|conn| {
                 introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse).map(
                     |mut s| {
@@ -901,6 +920,41 @@ fn handle_board_request(
                 },
             }
         }
+        BoardSyncRequest::RequestIntroductionWork {
+            session_token,
+            target,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let now = chrono::Utc::now().timestamp();
+            let Ok(requester) = state.auth.authorize(&session_token, "introduce", now) else {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_WORK_REJECTED".into(),
+                };
+            };
+            if requester != *peer {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_WORK_REJECTED".into(),
+                };
+            }
+            match state.abuse.issue(
+                &state.relay_name,
+                &requester.to_string(),
+                &target,
+                "introduce",
+                now,
+                &state.relay_key_id,
+                &state.auth.signing_key(),
+            ) {
+                Ok(challenge) => BoardSyncResponse::IntroductionWork { challenge },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "INTRODUCTION_WORK_REJECTED".into(),
+                },
+            }
+        }
         BoardSyncRequest::FetchIntroductions {
             session_token,
             limit,
@@ -910,6 +964,18 @@ fn handle_board_request(
                     error: "IDENTITY_SERVICE_DISABLED".into(),
                 };
             };
+            let now = chrono::Utc::now().timestamp();
+            if state
+                .auth
+                .authorize(&session_token, "introductions:read", now)
+                .ok()
+                .as_ref()
+                != Some(peer)
+            {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_FETCH_REJECTED".into(),
+                };
+            }
             let response = state.database.with_connection(|conn| {
                 introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse)
                     .map_err(|e| e.to_string())?
@@ -1164,6 +1230,11 @@ fn handle_board_request(
             }
         }
         BoardSyncRequest::RegisterWallReadGrant { grant } => {
+            if grant.issuer_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "authenticated peer is not the grant issuer".to_string(),
+                };
+            }
             let grant_id = grant.grant_id.clone();
             match service.process_wall_read_grant(&grant) {
                 Ok(()) => BoardSyncResponse::WallReadGrantStored { grant_id },
@@ -1176,16 +1247,23 @@ fn handle_board_request(
             lamport_clock,
             revoked_at,
             signature,
-        } => match service.process_wall_read_revoke(
-            &grant_id,
-            &issuer_peer_id,
-            lamport_clock,
-            revoked_at,
-            &signature,
-        ) {
-            Ok(()) => BoardSyncResponse::WallReadGrantRevoked { grant_id },
-            Err(e) => BoardSyncResponse::Error { error: e },
-        },
+        } => {
+            if issuer_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "authenticated peer is not the revocation issuer".to_string(),
+                };
+            }
+            match service.process_wall_read_revoke(
+                &grant_id,
+                &issuer_peer_id,
+                lamport_clock,
+                revoked_at,
+                &signature,
+            ) {
+                Ok(()) => BoardSyncResponse::WallReadGrantRevoked { grant_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
         BoardSyncRequest::DeleteWallPost {
             author_peer_id,
             post_id,

@@ -21,6 +21,7 @@ pub struct AuthChallenge {
     pub expires_at: i64,
     pub nonce: String,
     pub key_id: String,
+    pub relay_public_key: Vec<u8>,
     pub relay_signature: Vec<u8>,
 }
 
@@ -47,6 +48,9 @@ pub struct AuthService {
 }
 
 impl AuthService {
+    pub fn signing_key(&self) -> libp2p::identity::Keypair {
+        self.signing_key.clone()
+    }
     pub fn new(
         relay: impl Into<String>,
         key_id: impl Into<String>,
@@ -82,6 +86,7 @@ impl AuthService {
             expires_at: at + CHALLENGE_TTL_SECS,
             nonce: URL_SAFE_NO_PAD.encode(random),
             key_id: self.key_id.clone(),
+            relay_public_key: self.signing_key.public().encode_protobuf(),
             relay_signature: vec![],
         };
         challenge.relay_signature = self

@@ -17,6 +17,7 @@ pub mod messaging;
 pub mod network;
 pub mod permissions;
 pub mod posts;
+pub mod relay_names;
 pub mod rss;
 pub mod wall_sync;
 
@@ -39,5 +40,6 @@ pub use messaging::*;
 pub use network::*;
 pub use permissions::*;
 pub use posts::*;
+pub use relay_names::*;
 pub use rss::*;
 pub use wall_sync::*;
