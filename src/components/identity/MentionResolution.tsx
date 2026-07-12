@@ -11,14 +11,17 @@ export function MentionResolution({
   onResolved: (mentions: ResolvedMention[]) => void;
 }) {
   const [mentions, setMentions] = useState<ResolvedMention[]>([]);
+  const [error, setError] = useState(false);
   useEffect(() => {
     let active = true;
     const names = extractQualifiedMentions(text);
+    setError(false);
     Promise.all(
       names.map(async (qualifiedName) => {
         try {
           return await mentionsService.resolve(qualifiedName);
         } catch {
+          setError(true);
           return { qualifiedName, status: 'unknown' as const };
         }
       }),
@@ -32,9 +35,14 @@ export function MentionResolution({
       active = false;
     };
   }, [text, onResolved]);
-  if (!mentions.length) return null;
+  if (!mentions.length && !error) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-2" aria-label="Mention recipients">
+      {error && (
+        <p role="alert" className="text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
+          Harbor could not verify one or more mentions. Check your connection before publishing.
+        </p>
+      )}
       {mentions.map((mention) => (
         <span
           key={mention.qualifiedName}

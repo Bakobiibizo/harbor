@@ -5,6 +5,7 @@ import { HarborIcon, UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '..
 import { accountsService } from '../../services';
 import { identityService } from '../../services';
 import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
+import type { IdentityInfo } from '../../types';
 
 interface CreateIdentityProps {
   onBack?: () => void;
@@ -21,6 +22,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   const [passphraseHint, setPassphraseHint] = useState('');
   const [bio, setBio] = useState('');
   const [loading, setLoading] = useState(false);
+  const [createdIdentity, setCreatedIdentity] = useState<IdentityInfo | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
 
@@ -55,14 +57,17 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
 
     setLoading(true);
     try {
-      const identity = await createIdentity({
-        displayName: displayName.trim(),
-        relayName: displayName.trim().toLowerCase(),
-        relayNamespace,
-        passphrase,
-        bio: bio.trim() || undefined,
-        passphraseHint: passphraseHint.trim() || undefined,
-      });
+      const identity =
+        createdIdentity ??
+        (await createIdentity({
+          displayName: displayName.trim(),
+          relayName: displayName.trim().toLowerCase(),
+          relayNamespace,
+          passphrase,
+          bio: bio.trim() || undefined,
+          passphraseHint: passphraseHint.trim() || undefined,
+        }));
+      setCreatedIdentity(identity);
       const claim = await identityService.registerRelayName({
         name: displayName.trim(),
         namespace: relayNamespace,
@@ -89,8 +94,8 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
       } catch {
         // Non-critical, accounts list may not be set up yet
       }
-    } catch {
-      // Error is handled by store
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -471,7 +476,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                       Back
                     </Button>
                     <Button type="submit" className="flex-1" size="lg" loading={loading}>
-                      Create Identity
+                      {createdIdentity ? 'Retry name registration' : 'Create Identity'}
                     </Button>
                   </div>
                 </div>

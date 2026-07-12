@@ -104,4 +104,33 @@ describe('LegacyIdentityMigration release gates', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('save cancelled'));
     expect(screen.queryByText('must not open')).not.toBeInTheDocument();
   });
+  it('attaches an existing verified claim on startup and persists verified mode', async () => {
+    vi.mocked(identityService.getLocalNameClaim).mockResolvedValue(claim);
+    vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
+    render(
+      <LegacyIdentityMigration identity={identity}>
+        <div>verified app</div>
+      </LegacyIdentityMigration>,
+    );
+    expect(await screen.findByText('verified app')).toBeInTheDocument();
+    expect(attach).toHaveBeenCalledWith(claim);
+    expect(identityService.setMigrationMode).toHaveBeenCalledWith('verified');
+  });
+  it('restores explicitly persisted compatibility mode after remount', async () => {
+    vi.mocked(identityService.getMigrationState).mockResolvedValue('compatibility');
+    const first = render(
+      <LegacyIdentityMigration identity={identity}>
+        <div>restored app</div>
+      </LegacyIdentityMigration>,
+    );
+    expect(await screen.findByText('restored app')).toBeInTheDocument();
+    first.unmount();
+    render(
+      <LegacyIdentityMigration identity={identity}>
+        <div>restored again</div>
+      </LegacyIdentityMigration>,
+    );
+    expect(await screen.findByText('restored again')).toBeInTheDocument();
+    expect(identityService.getMigrationState).toHaveBeenCalledTimes(2);
+  });
 });
