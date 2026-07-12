@@ -4,7 +4,7 @@ use crate::{
     models::QualifiedRelayName,
     services::{ContactsService, CryptoService, IdentityService, PostsService, Signable},
 };
-use rand::{rngs::OsRng, RngCore};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -90,7 +90,7 @@ impl MentionsService {
             AppError::Validation("Mention must use canonical @name@relay form".into())
         })?;
         let found = MentionsRepository::new(&self.db).resolve_claim(name)?;
-        let Some((peer, digest)) = found else {
+        let Some((peer, digest, _)) = found else {
             return Ok(ResolvedMention {
                 qualified_name: name.into(),
                 status: "unknown".into(),
@@ -146,6 +146,11 @@ impl MentionsService {
                     "Private mentions cannot assert an authorized peer".into(),
                 ));
             }
+            if resolved.status == "unknown" {
+                return Err(AppError::Validation(
+                    "The relay name could not be resolved securely; reconnect and retry".into(),
+                ));
+            }
         }
         let out = self
             .posts
@@ -153,7 +158,7 @@ impl MentionsService {
         let sender = self.identity.get_peer_id()?;
         for m in &r.mentions {
             let signed = MentionSignature {
-                domain: "harbor/private-mention/1",
+                domain: crate::models::domain::MENTION,
                 post_id: &out.post_id,
                 qualified_name: &m.qualified_name,
                 intent: &m.intent,
@@ -165,31 +170,27 @@ impl MentionsService {
             let sig = self.identity.sign(&signed)?;
             let plain =
                 serde_json::to_vec(&signed).map_err(|e| AppError::Serialization(e.to_string()))?;
-            let cipher = if let Some(peer) = m.authorized_peer_id.as_deref() {
-                let p = self.contacts.get_x25519_public(peer)?.ok_or_else(|| {
-                    AppError::Validation("Contact encryption key unavailable".into())
+            let (_, _, recipient_key) = MentionsRepository::new(&self.db)
+                .resolve_claim(&m.qualified_name)?
+                .ok_or_else(|| {
+                    AppError::Validation("Verified recipient claim disappeared".into())
                 })?;
-                let raw: [u8; 32] = p
-                    .try_into()
-                    .map_err(|_| AppError::Validation("Invalid contact encryption key".into()))?;
-                let keys = self.identity.get_unlocked_keys()?;
-                let shared = keys
-                    .x25519_secret
-                    .diffie_hellman(&x25519_dalek::PublicKey::from(raw));
-                CryptoService::encrypt_message(
-                    &CryptoService::derive_symmetric_key(
-                        shared.as_bytes(),
-                        b"harbor/private-mention/1",
-                    ),
-                    &plain,
-                )?
-            } else {
-                let mut key = [0u8; 32];
-                OsRng.fill_bytes(&mut key);
-                CryptoService::encrypt_message(&key, &plain)?
-            };
+            let raw: [u8; 32] = recipient_key
+                .try_into()
+                .map_err(|_| AppError::Validation("Invalid recipient encryption key".into()))?;
+            let ephemeral_secret = x25519_dalek::StaticSecret::random_from_rng(OsRng);
+            let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral_secret);
+            let shared = ephemeral_secret.diffie_hellman(&x25519_dalek::PublicKey::from(raw));
+            let cipher = CryptoService::encrypt_message(
+                &CryptoService::derive_symmetric_key(
+                    shared.as_bytes(),
+                    crate::models::domain::MENTION.as_bytes(),
+                ),
+                &plain,
+            )?;
+            let mention_id = Uuid::new_v4().to_string();
             MentionsRepository::new(&self.db).insert(
-                &Uuid::new_v4().to_string(),
+                &mention_id,
                 &out.post_id,
                 &m.qualified_name,
                 &m.intent,
@@ -198,9 +199,17 @@ impl MentionsService {
                 m.claim_digest.as_deref(),
                 &r.content_text.chars().take(240).collect::<String>(),
                 &cipher,
+                ephemeral_public.as_bytes(),
                 &sig,
                 out.created_at,
-            )?
+            )?;
+            MentionsRepository::new(&self.db).enqueue_outbound(
+                &mention_id,
+                &m.qualified_name,
+                ephemeral_public.as_bytes(),
+                &cipher,
+                out.created_at + 300,
+            )?;
         }
         Ok(PublishMentionedPostResult {
             post_id: out.post_id,
@@ -213,8 +222,9 @@ impl MentionsService {
         })
     }
     pub fn pending(&self) -> Result<Vec<MentionReceipt>> {
+        let local_peer_id = self.identity.get_peer_id()?;
         Ok(MentionsRepository::new(&self.db)
-            .pending()?
+            .pending(&local_peer_id)?
             .into_iter()
             .map(|m| MentionReceipt {
                 mention_id: m.mention_id,
@@ -236,11 +246,20 @@ impl MentionsService {
         let status = match decision {
             "accept-notification" => "accepted",
             "accept-repost" if mention.intent == "repost-request" => {
-                self.posts.create_post("shared", Some(&mention.preview), PostVisibility::Contacts)?;
+                let repost = format!(
+                    "{}\n\n[Harbor repost of {} by {}]",
+                    mention.preview, mention.post_id, mention.sender_peer_id
+                );
+                self.posts
+                    .create_post("shared", Some(&repost), PostVisibility::Contacts)?;
                 "accepted"
-            },
+            }
             "decline" => "declined",
-            "block" => "blocked",
+            "block" => {
+                self.contacts.block_contact(&mention.sender_peer_id)?;
+                repo.block_sender(&mention.sender_peer_id, chrono::Utc::now().timestamp())?;
+                "blocked"
+            }
             _ => {
                 return Err(AppError::Validation(
                     "Decision is not allowed for this mention".into(),

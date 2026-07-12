@@ -24,7 +24,7 @@ pub use contacts_repo::{Contact, ContactData, ContactsRepository};
 pub use group_calls_repo::{GroupCallRoom, GroupCallsRepository};
 pub use identity_repo::IdentityRepository;
 pub use likes_repo::{LikeData, LikeSummary, LikesRepository, PostLike};
-pub use mentions_repo::{MentionsRepository, StoredMention};
+pub use mentions_repo::{MentionsRepository, QueuedMentionEnvelope, StoredMention};
 pub use messages_repo::{
     Conversation, Message, MessageData, MessageStatus, MessagesRepository, RecordMessageEventParams,
 };
