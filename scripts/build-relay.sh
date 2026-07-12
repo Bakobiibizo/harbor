@@ -5,6 +5,16 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 cargo build --release --manifest-path relay-server/Cargo.toml
+EXPECTED_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' relay-server/Cargo.toml | head -n 1)
+ACTUAL_VERSION=$(relay-server/target/release/harbor-relay --version)
+if [[ "$ACTUAL_VERSION" != *" $EXPECTED_VERSION" ]]; then
+  echo "Relay version mismatch: expected $EXPECTED_VERSION, got $ACTUAL_VERSION" >&2
+  exit 1
+fi
+if ! relay-server/target/release/harbor-relay --help | grep -q -- '--identity-namespace'; then
+  echo "Relay artifact is missing identity namespace support" >&2
+  exit 1
+fi
 cp relay-server/target/release/harbor-relay relay-server/bin/harbor-relay
 SHA256=$(sha256sum "relay-server/bin/harbor-relay" | awk '{print $1}')
 echo "$SHA256  relay-server/bin/harbor-relay" > "relay-server/bin/harbor-relay.sha256"

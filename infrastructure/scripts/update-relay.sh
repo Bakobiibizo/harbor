@@ -18,7 +18,7 @@ set -euo pipefail
 STACK_NAME="harbor-relay"
 REGION="us-east-1"
 TEMPLATE_TYPE="community"
-EXPECTED_SHA256="a4b5f161fa78cb1d5453831a3c0bb28c3281b0db581352989a83eb088bf6e079"
+EXPECTED_SHA256="b6d3a64b27c818ca67b1d9cccbb8a0629da641b5d10438e93001f751221eba40"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
