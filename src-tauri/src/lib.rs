@@ -351,6 +351,7 @@ pub fn run() {
             commands::register_relay_name,
             commands::get_local_name_claim,
             commands::verify_name_claim,
+            commands::drain_private_mention_outbox,
             // Network commands
             commands::get_connected_peers,
             commands::get_network_stats,

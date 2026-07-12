@@ -191,15 +191,29 @@ impl<'a> IntroductionService<'a> {
             })
             .map_err(|e| e.to_string())?;
         let values: Vec<_> = rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
-        for value in &values {
-            self.conn
-                .execute(
-                    "DELETE FROM introduction_envelopes WHERE request_id=?",
-                    [&value.request_id],
-                )
-                .map_err(|e| e.to_string())?;
-        }
         Ok(values)
+    }
+    pub fn acknowledge(
+        &self,
+        session_token: &str,
+        request_ids: &[String],
+        at: i64,
+    ) -> Result<u32, String> {
+        let peer = self
+            .auth
+            .authorize(session_token, "introductions:read", at)?
+            .to_string();
+        let mut removed = 0;
+        for id in request_ids.iter().take(100) {
+            removed += self
+                .conn
+                .execute(
+                    "DELETE FROM introduction_envelopes WHERE request_id=? AND target_peer_id=?",
+                    params![id, peer],
+                )
+                .map_err(|e| e.to_string())? as u32
+        }
+        Ok(removed)
     }
 
     fn purge_expired(&self, at: i64) {
@@ -304,6 +318,7 @@ mod tests {
         let queued = service.take(&read, 101, 10).unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].message_ciphertext, vec![9; 48]);
+        service.acknowledge(&read, &[id], 101).unwrap();
         assert!(service.take(&read, 101, 10).unwrap().is_empty());
     }
     #[test]

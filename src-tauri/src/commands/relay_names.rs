@@ -1,6 +1,9 @@
 use crate::{
     commands::network::NetworkState,
-    db::{repositories::RelayNamesRepository, Database},
+    db::{
+        repositories::{MentionsRepository, RelayNamesRepository},
+        Database,
+    },
     error::{AppError, Result},
     models::NameClaim,
     services::{name_claim_service::verify_and_cache, IdentityService},
@@ -144,4 +147,48 @@ pub fn set_identity_migration_mode(
     let peer = identity.get_peer_id()?;
     db.with_connection(|c|c.execute("INSERT INTO identity_migration_state VALUES(?,?,?) ON CONFLICT(peer_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at",rusqlite::params![peer,mode,chrono::Utc::now().timestamp()]).map(|_|()))?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn drain_private_mention_outbox(
+    network: State<'_, NetworkState>,
+    db: State<'_, Arc<Database>>,
+) -> Result<u32> {
+    let relay = HARBOR_RELAY_PEER
+        .parse()
+        .map_err(|_| AppError::Internal("Invalid Harbor relay peer ID".into()))?;
+    let queued =
+        MentionsRepository::new(&db).queued_outbound(chrono::Utc::now().timestamp(), 25)?;
+    let mut delivered = 0;
+    for item in queued {
+        let mut delay = 200u64;
+        for attempt in 0..3 {
+            match network
+                .get_handle()
+                .await?
+                .submit_introduction(
+                    relay,
+                    item.target.clone(),
+                    item.mention_id.clone(),
+                    item.ephemeral_public_key.clone(),
+                    item.ciphertext.clone(),
+                    item.expires_at,
+                )
+                .await
+            {
+                Ok((id, _)) if id == item.mention_id => {
+                    if MentionsRepository::new(&db).mark_delivered(&id)? {
+                        delivered += 1
+                    }
+                    break;
+                }
+                _ if attempt < 2 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    delay *= 2
+                }
+                _ => break,
+            }
+        }
+    }
+    Ok(delivered)
 }

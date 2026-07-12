@@ -145,6 +145,10 @@ pub enum BoardSyncRequest {
         session_token: String,
         limit: u32,
     },
+    AckIntroductions {
+        session_token: String,
+        request_ids: Vec<String>,
+    },
     /// List all boards on the relay
     ListBoards {
         requester_peer_id: String,
@@ -303,6 +307,9 @@ pub enum BoardSyncResponse {
     },
     Introductions {
         envelopes: Vec<QueuedEnvelope>,
+    },
+    IntroductionsAcked {
+        count: u32,
     },
     /// List of boards
     BoardList {

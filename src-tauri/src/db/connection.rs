@@ -21,6 +21,7 @@ const MIGRATION_015: &str = include_str!("migrations/015_group_call_rooms.sql");
 const MIGRATION_016: &str = include_str!("migrations/016_relay_name_claims.sql");
 const MIGRATION_017: &str = include_str!("migrations/017_private_introductions.sql");
 const MIGRATION_018: &str = include_str!("migrations/018_private_mentions.sql");
+const MIGRATION_019: &str = include_str!("migrations/019_identity_migration_state.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -358,6 +359,11 @@ impl Database {
             conn.execute_batch(MIGRATION_018)?;
             conn.execute("UPDATE schema_version SET version = 18 WHERE id = 1", [])?;
             info!("Migration 018 complete");
+        }
+        if version < 19 {
+            conn.execute_batch(MIGRATION_019)?;
+            conn.execute("UPDATE schema_version SET version = 19 WHERE id = 1", [])?;
+            info!("Migration 019 complete");
         }
 
         Ok(())

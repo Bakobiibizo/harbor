@@ -159,6 +159,10 @@ pub enum BoardSyncRequest {
         session_token: String,
         limit: u32,
     },
+    AckIntroductions {
+        session_token: String,
+        request_ids: Vec<String>,
+    },
     ListBoards {
         requester_peer_id: String,
         timestamp: i64,
@@ -349,6 +353,9 @@ pub enum BoardSyncResponse {
     },
     Introductions {
         envelopes: Vec<introduction::QueuedEnvelope>,
+    },
+    IntroductionsAcked {
+        count: u32,
     },
     BoardList {
         boards: Vec<BoardInfoProto>,
@@ -985,6 +992,39 @@ fn handle_board_request(
                 Ok(envelopes) => BoardSyncResponse::Introductions { envelopes },
                 Err(_) => BoardSyncResponse::Error {
                     error: "INTRODUCTION_FETCH_REJECTED".into(),
+                },
+            }
+        }
+        BoardSyncRequest::AckIntroductions {
+            session_token,
+            request_ids,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let now = chrono::Utc::now().timestamp();
+            if state
+                .auth
+                .authorize(&session_token, "introductions:read", now)
+                .ok()
+                .as_ref()
+                != Some(peer)
+            {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_ACK_REJECTED".into(),
+                };
+            }
+            let result = state.database.with_connection(|conn| {
+                introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse)
+                    .map_err(|e| e.to_string())?
+                    .acknowledge(&session_token, &request_ids, now)
+            });
+            match result {
+                Ok(count) => BoardSyncResponse::IntroductionsAcked { count },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "INTRODUCTION_ACK_REJECTED".into(),
                 },
             }
         }

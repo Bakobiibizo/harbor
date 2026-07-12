@@ -313,6 +313,20 @@ pub enum NetworkCommand {
         namespace: String,
         response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
     },
+    SubmitIntroduction {
+        relay_peer_id: PeerId,
+        target: String,
+        request_id: String,
+        ephemeral_public_key: Vec<u8>,
+        ciphertext: Vec<u8>,
+        expires_at: i64,
+        response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
+    },
+    FetchIntroductions {
+        relay_peer_id: PeerId,
+        limit: u32,
+        response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
+    },
     /// Shutdown the network
     Shutdown,
 }
@@ -328,6 +342,11 @@ pub enum NetworkResponse {
         claim: super::protocols::board_sync::NameClaim,
         relay_public_key: Vec<u8>,
     },
+    IntroductionAccepted {
+        request_id: String,
+        retry_after: u32,
+    },
+    Introductions(Vec<super::protocols::board_sync::QueuedEnvelope>),
     Error(String),
 }
 
