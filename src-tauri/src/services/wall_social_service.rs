@@ -513,6 +513,14 @@ mod tests {
                 passphrase_hint: None,
             })
             .unwrap();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                [&identity.peer_id],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
         let service = WallSocialService::new(
             db.clone(),
             identity_service.clone(),

@@ -1159,6 +1159,14 @@ mod tests {
             .unwrap();
 
         let peer_id = info.peer_id;
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                [&peer_id],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
 
         (
             db,
