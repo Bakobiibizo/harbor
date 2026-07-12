@@ -5,11 +5,13 @@ pub mod error;
 pub mod logging;
 pub mod models;
 pub mod p2p;
+pub mod profile_root;
 pub mod services;
 
 use commands::NetworkState;
 use db::Database;
 use logging::{get_log_directory, LogConfig};
+use profile_root::ProfileRoot;
 use services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
     FeedService, IdentityService, MediaStorageService, MentionsService, MessagingService,
@@ -83,31 +85,6 @@ fn allow_headless_webkit_media_capture(_window: &tauri::WebviewWindow) -> tauri:
     Ok(())
 }
 
-/// Get the database path for the application
-fn get_db_path(app: &tauri::AppHandle) -> PathBuf {
-    // Check for custom data directory first
-    let base_dir = if let Some(custom_dir) = get_custom_data_dir() {
-        custom_dir
-    } else {
-        let app_data = app
-            .path()
-            .app_data_dir()
-            .expect("Failed to get app data directory");
-
-        // If a profile is specified, use a subdirectory for that profile
-        if let Some(profile) = get_profile_name() {
-            app_data.join(format!("profile-{}", profile))
-        } else {
-            app_data
-        }
-    };
-
-    // Ensure the directory exists
-    std::fs::create_dir_all(&base_dir).expect("Failed to create data directory");
-
-    base_dir.join("harbor.db")
-}
-
 /// Normalize, validate, and route a harbor:// URL to the frontend.
 /// Called from both the deep-link on_open_url handler and the single-instance callback.
 fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
@@ -164,9 +141,12 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data directory");
+            let profile_root =
+                ProfileRoot::resolve(&app_data_dir, get_custom_data_dir(), profile.as_deref());
+            std::fs::create_dir_all(profile_root.path()).expect("Failed to create profile root");
 
             // Set up log directory
-            let log_dir = get_log_directory(&app_data_dir);
+            let log_dir = profile_root.logs();
 
             // Initialize logging with appropriate config based on build type
             #[cfg(debug_assertions)]
@@ -207,10 +187,11 @@ pub fn run() {
             app.manage(LogDirectory(log_dir));
 
             // Initialize accounts service (manages multi-account registry)
-            let accounts_service = Arc::new(AccountsService::new(app_data_dir.clone()));
+            let accounts_service =
+                Arc::new(AccountsService::new(profile_root.path().to_path_buf()));
 
             // Initialize database
-            let db_path = get_db_path(app.handle());
+            let db_path = profile_root.database();
             info!("Database path: {:?}", db_path);
 
             // Migrate legacy single-account setup if needed
@@ -222,7 +203,7 @@ pub fn run() {
             let data_dir = db_path
                 .parent()
                 .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| app_data_dir.clone());
+                .unwrap_or_else(|| profile_root.path().to_path_buf());
 
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
 
