@@ -474,3 +474,198 @@ impl MentionsService {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        db::repositories::RelayNamesRepository,
+        models::{CreateIdentityRequest, NameClaimRequest},
+        services::{
+            name_claim_service::{relay_signing_bytes, verify_and_cache},
+            PermissionsService,
+        },
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+
+    struct Profile {
+        db: Arc<Database>,
+        identity: Arc<IdentityService>,
+        mentions: MentionsService,
+        info: crate::models::IdentityInfo,
+    }
+
+    fn profile(name: &str) -> Profile {
+        let db = Arc::new(Database::in_memory().unwrap());
+        let identity = Arc::new(IdentityService::new(db.clone()));
+        let info = identity
+            .create_identity(CreateIdentityRequest {
+                display_name: name.into(),
+                passphrase: "test passphrase".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let contacts = Arc::new(ContactsService::new(db.clone(), identity.clone()));
+        let permissions = Arc::new(PermissionsService::new(db.clone(), identity.clone()));
+        let posts = Arc::new(PostsService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            permissions,
+        ));
+        let mentions = MentionsService::new(db.clone(), identity.clone(), contacts, posts);
+        Profile {
+            db,
+            identity,
+            mentions,
+            info,
+        }
+    }
+
+    fn claim(profile: &Profile, local_name: &str, relay_key: &SigningKey, now: i64) -> NameClaim {
+        let stored = profile.identity.get_identity().unwrap().unwrap();
+        let request = NameClaimRequest {
+            domain: domain::NAME_CLAIM_REQUEST.into(),
+            version: PROTOCOL_VERSION,
+            local_name: local_name.into(),
+            relay: "relay.test".into(),
+            peer_id: profile.info.peer_id.clone(),
+            ed25519_public_key: stored.public_key,
+            x25519_public_key: stored.x25519_public,
+            sequence: 1,
+            issued_at: now - 1,
+            nonce: vec![9; 16],
+        };
+        let user_signature = profile
+            .identity
+            .get_unlocked_keys()
+            .unwrap()
+            .ed25519_signing
+            .sign(&canonical_cbor(&request).unwrap())
+            .to_bytes()
+            .to_vec();
+        let mut claim = NameClaim {
+            request,
+            user_signature,
+            status: "active".into(),
+            not_before: now - 1,
+            not_after: now + 3_600,
+            relay_key_id: "relay-key-1".into(),
+            relay_signature: Vec::new(),
+        };
+        claim.relay_signature = relay_key
+            .sign(&relay_signing_bytes(&claim).unwrap())
+            .to_bytes()
+            .to_vec();
+        claim
+    }
+
+    fn trust_and_cache(profile: &Profile, claim: &NameClaim, relay_key: &SigningKey, now: i64) {
+        let repo = RelayNamesRepository::new(&profile.db);
+        repo.pin_key(
+            "relay.test",
+            "relay-key-1",
+            &relay_key.verifying_key().to_bytes(),
+            now - 60,
+            Some(now + 3_600),
+        )
+        .unwrap();
+        verify_and_cache(&repo, claim, now).unwrap();
+    }
+
+    #[test]
+    fn unknown_name_sealed_delivery_round_trip_rejects_wrong_recipient_tamper_and_expiry() {
+        let now = chrono::Utc::now().timestamp();
+        let relay_key = SigningKey::from_bytes(&[71; 32]);
+        let alice = profile("alice");
+        let bob = profile("bob");
+        let charlie = profile("charlie");
+        let alice_claim = claim(&alice, "alice", &relay_key, now);
+        let bob_claim = claim(&bob, "bob", &relay_key, now);
+        trust_and_cache(&alice, &alice_claim, &relay_key, now);
+        trust_and_cache(&bob, &bob_claim, &relay_key, now);
+        RelayNamesRepository::new(&charlie.db)
+            .pin_key(
+                "relay.test",
+                "relay-key-1",
+                &relay_key.verifying_key().to_bytes(),
+                now - 60,
+                Some(now + 3_600),
+            )
+            .unwrap();
+        alice
+            .db
+            .with_connection(|connection| {
+                connection
+                    .execute(
+                        "INSERT INTO identity_migration_state VALUES(?, 'verified', ?)",
+                        rusqlite::params![alice.info.peer_id, now],
+                    )
+                    .map(|_| ())
+            })
+            .unwrap();
+
+        assert_eq!(
+            alice.mentions.resolve("@bob@relay.test").unwrap().status,
+            "unknown"
+        );
+        alice
+            .mentions
+            .cache_delivery_key(
+                "@bob@relay.test",
+                bob.identity.get_identity().unwrap().unwrap().x25519_public,
+                now + 300,
+            )
+            .unwrap();
+        alice
+            .mentions
+            .publish(PublishMentionedPostRequest {
+                content_type: "text".into(),
+                content_text: "hello @bob@relay.test".into(),
+                visibility: "public".into(),
+                mentions: vec![SignedMentionInput {
+                    qualified_name: "@bob@relay.test".into(),
+                    intent: "notify".into(),
+                    authorized_peer_id: None,
+                    claim_digest: None,
+                }],
+            })
+            .unwrap();
+        let queued = alice.mentions.queued_outbound(now - 1, 10).unwrap();
+        assert_eq!(queued.len(), 1);
+        let item = &queued[0];
+        let envelope = IncomingMentionEnvelope {
+            request_id: item.mention_id.clone(),
+            requester_peer_id: alice.info.peer_id.clone(),
+            ephemeral_public_key: item.ephemeral_public_key.clone(),
+            ciphertext: item.ciphertext.clone(),
+            issued_at: item.expires_at - 300,
+            expires_at: item.expires_at,
+        };
+        let delivery_time = envelope.issued_at + 1;
+
+        assert!(charlie
+            .mentions
+            .ingest_queued_envelope(&envelope, delivery_time)
+            .is_err());
+        let mut tampered = envelope.clone();
+        tampered.ciphertext[0] ^= 1;
+        assert!(bob
+            .mentions
+            .ingest_queued_envelope(&tampered, delivery_time)
+            .is_err());
+        assert!(bob
+            .mentions
+            .ingest_queued_envelope(&envelope, item.expires_at)
+            .is_err());
+        assert!(bob
+            .mentions
+            .ingest_queued_envelope(&envelope, delivery_time)
+            .unwrap());
+        let pending = bob.mentions.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].qualified_name, "@alice@relay.test");
+        assert_eq!(pending[0].sender_peer_id, alice.info.peer_id);
+    }
+}
