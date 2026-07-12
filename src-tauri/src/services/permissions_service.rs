@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use crate::db::{
     Capability, Database, GrantData, Permission, PermissionsRepository,
-    PrivateIntroductionsRepository, RecordPermissionEventParams,
+    RecordPermissionEventParams,
 };
+use crate::db::repositories::PrivateIntroductionsRepository;
 use crate::error::{AppError, Result};
 use crate::services::{
     verify, IdentityService, Signable, SignablePermissionGrant, SignablePermissionRequest,

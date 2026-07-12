@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(decoded.card.capabilities[0].capability, "wall:read");
         let mut altered = envelope.clone();
         altered.ciphertext[0] ^= 1;
-        assert_eq!(
+        assert!(matches!(
             decrypt_contact_card(
                 &altered,
                 &recipient,
@@ -305,8 +305,8 @@ mod tests {
                 now
             ),
             Err(IntroductionError::Crypto)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             decrypt_contact_card(
                 &envelope,
                 &StaticSecret::from([9; 32]),
@@ -315,7 +315,7 @@ mod tests {
                 now
             ),
             Err(IntroductionError::Crypto)
-        );
+        ));
     }
 
     #[test]
@@ -323,7 +323,7 @@ mod tests {
         let issuer = SigningKey::from_bytes(&[7; 32]);
         let recipient = StaticSecret::from([8; 32]);
         let mut value = card("someone-else", 1_000);
-        assert_eq!(
+        assert!(matches!(
             encrypt_contact_card(
                 value.clone(),
                 &issuer,
@@ -331,10 +331,10 @@ mod tests {
                 X25519Public::from(&recipient).to_bytes()
             ),
             Err(IntroductionError::Capability)
-        );
+        ));
         value.capabilities[0].subject_peer_id = "recipient".into();
         value.capabilities[0].capability = "admin:*".into();
-        assert_eq!(
+        assert!(matches!(
             encrypt_contact_card(
                 value,
                 &issuer,
@@ -342,6 +342,6 @@ mod tests {
                 X25519Public::from(&recipient).to_bytes()
             ),
             Err(IntroductionError::Capability)
-        );
+        ));
     }
 }
