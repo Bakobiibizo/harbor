@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { publishingPolicy } from './publishingPolicy';
 
 /** A comment on a post */
 export interface Comment {
@@ -22,6 +23,7 @@ export interface CommentCount {
 export const commentsService = {
   /** Add a comment to a post */
   async addComment(postId: string, content: string): Promise<Comment> {
+    publishingPolicy.assertAllowed();
     return invoke<Comment>('add_comment', { postId, content });
   },
 

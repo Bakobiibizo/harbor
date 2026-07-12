@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { publishingPolicy } from './publishingPolicy';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
 
 /** Boards service - wraps Tauri commands for community board functionality */
@@ -40,6 +41,7 @@ export const boardsService = {
 
   /** Submit a post to a board */
   async submitBoardPost(relayPeerId: string, boardId: string, contentText: string): Promise<void> {
+    publishingPolicy.assertAllowed();
     return invoke<void>('submit_board_post', {
       relayPeerId,
       boardId,

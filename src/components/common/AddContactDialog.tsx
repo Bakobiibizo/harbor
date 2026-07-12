@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { XIcon } from '../icons';
 import { Button } from './Button';
 import { addContactFromString } from '../../services/network';
+import { safePeerLabel } from '../../utils/relayName';
 
 interface Props {
   contactString: string;
@@ -101,7 +102,7 @@ export function AddContactDialog({ contactString, onClose }: Props) {
               className="font-semibold text-base"
               style={{ color: 'hsl(var(--harbor-text-primary))' }}
             >
-              {preview?.displayName ?? 'Unknown contact'}
+              {preview ? safePeerLabel(preview.peerId) : 'Unknown contact'}
             </p>
             {preview?.bio && (
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>

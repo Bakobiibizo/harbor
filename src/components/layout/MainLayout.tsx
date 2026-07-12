@@ -411,6 +411,18 @@ export function MainLayout({ children }: MainLayoutProps) {
         className="flex-1 overflow-auto"
         style={{ background: 'hsl(var(--harbor-bg-primary))' }}
       >
+        {identity && !identity.relayNameVerified && (
+          <div
+            className="px-4 py-2 text-sm text-center"
+            style={{
+              background: 'hsl(var(--harbor-warning) / .16)',
+              color: 'hsl(var(--harbor-warning))',
+            }}
+          >
+            Beta compatibility identity · posts and messages are signed, but this peer ID does not
+            yet have a verified relay name.
+          </div>
+        )}
         {children}
       </main>
 

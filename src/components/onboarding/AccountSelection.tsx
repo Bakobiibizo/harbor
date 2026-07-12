@@ -4,6 +4,7 @@ import { useAccountsStore } from '../../stores';
 import { HarborIcon, UserPlusIcon, TrashIcon, LockIcon } from '../icons';
 import type { AccountInfo } from '../../types';
 import toast from 'react-hot-toast';
+import { safePeerLabel } from '../../utils/relayName';
 
 interface AccountSelectionProps {
   onSelectAccount: (account: AccountInfo) => void;
@@ -165,7 +166,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                           className="w-full h-full rounded-full object-cover"
                         />
                       ) : (
-                        getInitials(account.displayName)
+                        getInitials(safePeerLabel(account.peerId))
                       )}
                     </div>
 
@@ -175,7 +176,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         className="font-semibold truncate"
                         style={{ color: 'hsl(var(--harbor-text-primary))' }}
                       >
-                        {account.displayName}
+                        {safePeerLabel(account.peerId)}
                       </p>
                       <p
                         className="text-xs truncate font-mono"

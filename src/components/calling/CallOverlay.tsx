@@ -109,18 +109,15 @@ export function CallOverlay() {
   const peerName = useMemo(() => {
     const peerId = snapshot.peerId;
     if (!peerId) return 'Unknown peer';
-    return (
-      contacts.find((contact) => contact.peerId === peerId)?.displayName ?? compactPeer(peerId)
-    );
+    return `${compactPeer(peerId)} (unverified)`;
   }, [contacts, snapshot.peerId]);
 
   if (groupSnapshot.state !== 'idle') {
     const isTerminalGroup = groupSnapshot.state === 'ended' || groupSnapshot.state === 'failed';
-    const isIncomingGroup = groupSnapshot.state === 'ringing' && groupSnapshot.participants.every(
-      (participant) => participant.state === 'invited',
-    );
-    const contactName = (peerId: string) =>
-      contacts.find((contact) => contact.peerId === peerId)?.displayName ?? compactPeer(peerId);
+    const isIncomingGroup =
+      groupSnapshot.state === 'ringing' &&
+      groupSnapshot.participants.every((participant) => participant.state === 'invited');
+    const contactName = (peerId: string) => `${compactPeer(peerId)} (unverified)`;
     return (
       <div className="fixed inset-x-4 bottom-4 z-[150] sm:left-auto sm:w-[36rem]">
         <div
@@ -226,24 +223,26 @@ export function CallOverlay() {
                 )}
               </>
             )}
-            {!isIncomingGroup && <button
-              onClick={() => {
-                if (isTerminalGroup) dismissCallUi();
-                else void leaveGroupCall('normal');
-              }}
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              style={{
-                background: isTerminalGroup
-                  ? 'hsl(var(--harbor-surface-2))'
-                  : 'hsl(var(--harbor-error) / 0.16)',
-                color: isTerminalGroup
-                  ? 'hsl(var(--harbor-text-secondary))'
-                  : 'hsl(var(--harbor-error))',
-              }}
-            >
-              {isTerminalGroup ? <XIcon className="w-4 h-4" /> : null}
-              {isTerminalGroup ? 'Dismiss' : 'Leave'}
-            </button>}
+            {!isIncomingGroup && (
+              <button
+                onClick={() => {
+                  if (isTerminalGroup) dismissCallUi();
+                  else void leaveGroupCall('normal');
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                style={{
+                  background: isTerminalGroup
+                    ? 'hsl(var(--harbor-surface-2))'
+                    : 'hsl(var(--harbor-error) / 0.16)',
+                  color: isTerminalGroup
+                    ? 'hsl(var(--harbor-text-secondary))'
+                    : 'hsl(var(--harbor-error))',
+                }}
+              >
+                {isTerminalGroup ? <XIcon className="w-4 h-4" /> : null}
+                {isTerminalGroup ? 'Dismiss' : 'Leave'}
+              </button>
+            )}
           </div>
         </div>
       </div>

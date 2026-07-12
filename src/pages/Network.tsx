@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
+import { safePeerLabel } from '../utils/relayName';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
 import { contactsService } from '../services/contacts';
 import * as networkService from '../services/network';
@@ -392,8 +393,9 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-    const contactName =
-      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
+    const contactName = contacts.find((contact) => contact.peerId === peer.peerId)
+      ? safePeerLabel(peer.peerId).toLowerCase()
+      : '';
     return (
       friendlyName.includes(query) ||
       contactName.includes(query) ||
@@ -408,7 +410,7 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     return (
-      contact.displayName.toLowerCase().includes(query) ||
+      safePeerLabel(contact.peerId).toLowerCase().includes(query) ||
       contact.peerId.toLowerCase().includes(query)
     );
   });
@@ -1149,7 +1151,9 @@ export function NetworkPage() {
                         <PeerRow
                           key={peer.peerId}
                           peerId={peer.peerId}
-                          displayName={knownContact?.displayName}
+                          displayName={
+                            knownContact ? safePeerLabel(knownContact.peerId) : undefined
+                          }
                           actionLabel="Connect"
                           actionStyle="primary"
                           onAction={async () => {
@@ -1200,7 +1204,9 @@ export function NetworkPage() {
                       const knownContact = contacts.find(
                         (contact) => contact.peerId === peer.peerId,
                       );
-                      const displayName = knownContact?.displayName;
+                      const displayName = knownContact
+                        ? safePeerLabel(knownContact.peerId)
+                        : undefined;
                       return (
                         <PeerRow
                           key={peer.peerId}
@@ -1260,7 +1266,7 @@ export function NetworkPage() {
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                         style={{ background: getPeerColor(contact.peerId) }}
                       >
-                        {contact.displayName
+                        {safePeerLabel(contact.peerId)
                           .split(' ')
                           .map((word) => word[0])
                           .join('')
@@ -1272,7 +1278,7 @@ export function NetworkPage() {
                           className="font-medium text-sm"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {contact.displayName}
+                          {safePeerLabel(contact.peerId)}
                         </p>
                         <p
                           className="text-xs font-mono truncate"
@@ -1293,7 +1299,7 @@ export function NetworkPage() {
                       <button
                         className="px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 text-xs font-medium"
                         style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                        title={`Open ${contact.displayName}'s wall`}
+                        title={`Open ${safePeerLabel(contact.peerId)}'s wall`}
                         onClick={() =>
                           navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)
                         }
@@ -1308,7 +1314,7 @@ export function NetworkPage() {
                           try {
                             await contactsService.removeContact(contact.peerId);
                             await refreshContacts();
-                            toast.success(`Removed ${contact.displayName} from contacts`);
+                            toast.success(`Removed ${safePeerLabel(contact.peerId)} from contacts`);
                           } catch (err) {
                             toast.error(`Failed to remove contact: ${err}`);
                           }

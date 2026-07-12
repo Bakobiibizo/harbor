@@ -5,6 +5,7 @@ import { qualifiedRelayName } from '../../types';
 import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
 import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
+import { publishingPolicy } from '../../services/publishingPolicy';
 
 export function LegacyIdentityMigration({
   identity,
@@ -32,6 +33,7 @@ export function LegacyIdentityMigration({
     Promise.all([identityService.getLocalNameClaim(), identityService.getMigrationState()])
       .then(async ([local, mode]) => {
         setCompatible(mode === 'compatibility');
+        publishingPolicy.setMode(mode);
         if (
           active &&
           local?.request.peerId === identity.peerId &&
@@ -40,6 +42,7 @@ export function LegacyIdentityMigration({
           setClaim(local);
           attachVerifiedRelayName(local);
           await identityService.setMigrationMode('verified');
+          publishingPolicy.setMode('verified');
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
@@ -68,6 +71,7 @@ export function LegacyIdentityMigration({
       setClaim(next);
       attachVerifiedRelayName(next);
       await identityService.setMigrationMode('verified');
+      publishingPolicy.setMode('verified');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -124,6 +128,7 @@ export function LegacyIdentityMigration({
           onClick={async () => {
             try {
               await identityService.setMigrationMode('compatibility');
+              publishingPolicy.setMode('compatibility');
               setCompatible(true);
             } catch (err) {
               setError(err instanceof Error ? err.message : String(err));

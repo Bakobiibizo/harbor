@@ -54,11 +54,11 @@ function PostCard({
                 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
             }}
           >
-            {(post.authorDisplayName || post.authorPeerId).slice(0, 2).toUpperCase()}
+            {post.authorPeerId.slice(0, 2).toUpperCase()}
           </div>
           <div>
             <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-              {post.authorDisplayName || shortPeerId(post.authorPeerId)}
+              {shortPeerId(post.authorPeerId)} (unverified)
             </p>
             <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               {formatTimeAgo(post.createdAt)}
