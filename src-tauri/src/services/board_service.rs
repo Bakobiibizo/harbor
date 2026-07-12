@@ -531,6 +531,14 @@ mod tests {
                 passphrase_hint: None,
             })
             .unwrap();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                [&info.peer_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
 
         let board_service = BoardService::new(db.clone(), identity_service.clone());
 
