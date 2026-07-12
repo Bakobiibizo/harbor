@@ -134,7 +134,7 @@ fn two_relays_three_identities_collision_restart_and_cross_namespace_intro() {
     assert!(winner == alice_peer || winner == carol_peer);
     // Route Bob's opaque cross-namespace introduction to the collision winner.
     let relay_auth = identity::Keypair::generate_ed25519();
-    let mut auth = AuthService::new("alpha.test", "k1", relay_auth);
+    let mut auth = AuthService::new("alpha.test", "k1", relay_auth.clone());
     let submit = token(&mut auth, &bob, &bob_peer, &bob_pb, "introduce");
     let target_key = if winner == alice_peer { &alice } else { &carol };
     let target_pb = identity::PublicKey::from(
@@ -183,9 +183,53 @@ fn two_relays_three_identities_collision_restart_and_cross_namespace_intro() {
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].requester_peer_id, bob_peer);
         assert_eq!(queued[0].message_ciphertext, vec![8; 64]);
-        assert_eq!(service.acknowledge(&read, &[id], 101).unwrap(), 1);
-        assert!(service.take(&read, 101, 10).unwrap().is_empty());
     });
+
+    // Simulate Relay A becoming unavailable before the target acknowledges the
+    // queued envelope. No in-memory service/auth state survives the outage.
+    drop(auth);
+    drop(abuse);
+    drop(alpha);
+
+    let alpha = RelayDatabase::open(alpha_path.to_str().unwrap()).unwrap();
+    let mut restarted_auth = AuthService::new("alpha.test", "k1", relay_auth);
+    assert!(restarted_auth
+        .authorize(&read, "introductions:read", 102)
+        .is_err());
+    let fresh_read = token(
+        &mut restarted_auth,
+        target_key,
+        &winner,
+        &target_pb,
+        "introductions:read",
+    );
+    let mut restarted_abuse = AbuseGuard::new(limits());
+    alpha.with_connection(|connection| {
+        let service =
+            IntroductionService::new(connection, &restarted_auth, &mut restarted_abuse).unwrap();
+        let recovered = service.take(&fresh_read, 102, 10).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].request_id, id);
+        assert_eq!(recovered[0].message_ciphertext, vec![8; 64]);
+        assert_eq!(
+            service
+                .acknowledge(&fresh_read, &[id.clone()], 102)
+                .unwrap(),
+            1
+        );
+        assert!(service.take(&fresh_read, 102, 10).unwrap().is_empty());
+    });
+    let recovered_winner: String = alpha.with_connection(|connection| {
+        connection
+            .query_row(
+                "SELECT peer_id FROM relay_name_claims
+                 WHERE relay='alpha.test' AND local_name='alice' AND status='active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    });
+    assert_eq!(recovered_winner, winner);
     // Both independent namespace assignments survive reopening.
     drop(beta);
     let beta = RelayDatabase::open(beta_path.to_str().unwrap()).unwrap();

@@ -1233,6 +1233,26 @@ mod tests {
         )
     }
 
+    fn signed_get_social(
+        requester_key: &SigningKey,
+        requester_peer_id: &str,
+        author_peer_id: &str,
+        post_ids: &[String],
+        timestamp: i64,
+    ) -> Vec<u8> {
+        sign(
+            requester_key,
+            &SignableGetWallSocialEvents {
+                requester_peer_id: requester_peer_id.to_string(),
+                author_peer_id: author_peer_id.to_string(),
+                post_ids: post_ids.to_vec(),
+                after_timestamp: 0,
+                limit: 20,
+                timestamp,
+            },
+        )
+    }
+
     fn wall_read_grant(
         author_key: &SigningKey,
         author_peer_id: &str,
@@ -1313,6 +1333,90 @@ mod tests {
 
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].post_id, "public-post");
+    }
+
+    #[test]
+    fn unauthorized_wall_response_excludes_private_posts_media_and_social_events() {
+        let (service, _author_key, requester_key) = service_with_wall_posts();
+        for (post_id, hash, signature) in [
+            ("public-post", "a".repeat(64), vec![10; 64]),
+            ("contacts-post", "b".repeat(64), vec![11; 64]),
+        ] {
+            service
+                .db
+                .insert_wall_post_media(
+                    post_id,
+                    &hash,
+                    "image",
+                    "image/png",
+                    &format!("{post_id}.png"),
+                    128,
+                    Some(10),
+                    Some(10),
+                    None,
+                    0,
+                    &signature,
+                )
+                .unwrap();
+            service
+                .db
+                .insert_wall_social_event(&WallSocialEventRow {
+                    event_id: format!("event-{post_id}"),
+                    event_type: "comment_create".into(),
+                    post_id: post_id.into(),
+                    actor_peer_id: "requester".into(),
+                    author_name: None,
+                    comment_id: Some(format!("comment-{post_id}")),
+                    content: Some(format!("comment on {post_id}")),
+                    reaction_type: None,
+                    timestamp: 2_500,
+                    payload_cbor: vec![1, 2, 3],
+                    signature,
+                })
+                .unwrap();
+        }
+
+        let timestamp = 3_000;
+        let post_signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (posts, _, media) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &post_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            posts
+                .iter()
+                .map(|post| post.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["public-post"]
+        );
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].0, "public-post");
+        assert!(media.iter().all(|(post_id, _)| post_id != "contacts-post"));
+
+        let post_ids = vec!["public-post".into(), "contacts-post".into()];
+        let social_signature =
+            signed_get_social(&requester_key, "requester", "author", &post_ids, timestamp);
+        let (events, _, _) = service
+            .process_get_wall_social_events(
+                "requester",
+                "author",
+                &post_ids,
+                0,
+                20,
+                timestamp,
+                &social_signature,
+            )
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].post_id, "public-post");
+        assert!(events.iter().all(|event| event.post_id != "contacts-post"));
     }
 
     #[test]
