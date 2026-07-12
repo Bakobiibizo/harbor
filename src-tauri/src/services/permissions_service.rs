@@ -4,11 +4,10 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::{
-    Capability, Database, GrantData, Permission, PermissionsRepository,
-    RecordPermissionEventParams,
-};
 use crate::db::repositories::PrivateIntroductionsRepository;
+use crate::db::{
+    Capability, Database, GrantData, Permission, PermissionsRepository, RecordPermissionEventParams,
+};
 use crate::error::{AppError, Result};
 use crate::services::{
     verify, IdentityService, Signable, SignablePermissionGrant, SignablePermissionRequest,
