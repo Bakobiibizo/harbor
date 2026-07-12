@@ -180,7 +180,47 @@ impl<'a> RelayNamesRepository<'a> {
         key_id: &str,
         now: i64,
     ) -> Result<()> {
-        self.db.with_connection_mut(|c| { let tx=c.transaction()?; let current: Option<i64>=tx.query_row("SELECT MAX(sequence) FROM relay_name_claims WHERE relay=? AND local_name=?", params![relay,local], |r| r.get(0)).optional()?.flatten(); if current.is_some_and(|v| sequence as i64 <= v) { return Err(rusqlite::Error::InvalidQuery); } tx.execute("UPDATE relay_name_claims SET status='retired',retired_at=? WHERE relay=? AND local_name=? AND status='active'",params![now,relay,local])?; tx.execute("INSERT INTO relay_name_claims VALUES(?,?,?,?,?,?,?,?,?,'active',?,NULL)",params![qualified,local,relay,peer,sequence as i64,cbor,not_before,not_after,key_id,now])?; tx.commit() })
+        self.db.with_connection_mut(|connection| {
+            let transaction = connection.transaction()?;
+            let current: Option<(i64, Vec<u8>, String)> = transaction
+                .query_row(
+                    "SELECT sequence, claim_cbor, status FROM relay_name_claims
+                     WHERE relay=? AND local_name=? ORDER BY sequence DESC LIMIT 1",
+                    params![relay, local],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            if let Some((current_sequence, current_cbor, status)) = current {
+                if sequence as i64 == current_sequence && current_cbor == cbor && status == "active"
+                {
+                    return Ok(());
+                }
+                if sequence as i64 <= current_sequence {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+            }
+            transaction.execute(
+                "UPDATE relay_name_claims SET status='retired',retired_at=?
+                 WHERE relay=? AND local_name=? AND status='active'",
+                params![now, relay, local],
+            )?;
+            transaction.execute(
+                "INSERT INTO relay_name_claims VALUES(?,?,?,?,?,?,?,?,?,'active',?,NULL)",
+                params![
+                    qualified,
+                    local,
+                    relay,
+                    peer,
+                    sequence as i64,
+                    cbor,
+                    not_before,
+                    not_after,
+                    key_id,
+                    now
+                ],
+            )?;
+            transaction.commit()
+        })
     }
 }
 
@@ -238,6 +278,19 @@ mod tests {
                 300,
                 "2026-01",
                 100,
+            )
+            .unwrap();
+            repo.cache_verified(
+                "@alice@relay.test",
+                "alice",
+                "relay.test",
+                "peer-alice",
+                1,
+                &[1, 2, 3],
+                100,
+                300,
+                "2026-01",
+                101,
             )
             .unwrap();
             assert!(repo
