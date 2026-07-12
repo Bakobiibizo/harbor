@@ -10,7 +10,7 @@ pub mod services;
 
 use commands::NetworkState;
 use db::Database;
-use logging::{get_log_directory, LogConfig};
+use logging::LogConfig;
 use profile_root::ProfileRoot;
 use services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
