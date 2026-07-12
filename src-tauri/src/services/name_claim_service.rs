@@ -164,3 +164,90 @@ pub fn verify_and_cache(
         not_after: claim.not_after,
     })
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+    use crate::{
+        db::Database,
+        models::{NameClaim, NameClaimRequest},
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    fn claim(user: &SigningKey, relay: &SigningKey) -> NameClaim {
+        let raw = user.verifying_key().to_bytes();
+        let lp = identity::ed25519::PublicKey::try_from_bytes(&raw).unwrap();
+        let request = NameClaimRequest {
+            domain: domain::NAME_CLAIM_REQUEST.into(),
+            version: PROTOCOL_VERSION,
+            local_name: "alice".into(),
+            relay: "relay.test".into(),
+            peer_id: PeerId::from_public_key(&identity::PublicKey::from(lp)).to_string(),
+            ed25519_public_key: raw.to_vec(),
+            x25519_public_key: x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(
+                [8; 32],
+            ))
+            .to_bytes()
+            .to_vec(),
+            sequence: 1,
+            issued_at: 100,
+            nonce: vec![1; 16],
+        };
+        let mut c = NameClaim {
+            request,
+            user_signature: vec![],
+            status: "active".into(),
+            not_before: 100,
+            not_after: 300,
+            relay_key_id: "k1".into(),
+            relay_signature: vec![],
+        };
+        c.user_signature = user
+            .sign(&user_signing_bytes(&c).unwrap())
+            .to_bytes()
+            .to_vec();
+        c.relay_signature = relay
+            .sign(&relay_signing_bytes(&c).unwrap())
+            .to_bytes()
+            .to_vec();
+        c
+    }
+    #[test]
+    fn every_forged_claim_field_is_rejected() {
+        let user = SigningKey::from_bytes(&[3; 32]);
+        let relay = SigningKey::from_bytes(&[4; 32]);
+        let original = claim(&user, &relay);
+        for mutation in 0..8 {
+            let db = Database::in_memory().unwrap();
+            let repo = RelayNamesRepository::new(&db);
+            repo.pin_key(
+                "relay.test",
+                "k1",
+                &relay.verifying_key().to_bytes(),
+                0,
+                Some(400),
+            )
+            .unwrap();
+            let mut c = original.clone();
+            match mutation {
+                0 => c.request.peer_id = "12D3KooWForged".into(),
+                1 => c.request.ed25519_public_key[0] ^= 1,
+                2 => c.user_signature[0] ^= 1,
+                3 => c.relay_signature[0] ^= 1,
+                4 => c.request.relay = "other.test".into(),
+                5 => c.not_after = 99,
+                6 => c.request.sequence = 0,
+                _ => c.relay_key_id = "unknown".into(),
+            }
+            assert!(
+                verify_and_cache(&repo, &c, 200).is_err(),
+                "mutation {mutation}"
+            );
+            let count: i64 = db
+                .with_connection(|x| {
+                    x.query_row("SELECT COUNT(*) FROM relay_name_claims", [], |r| r.get(0))
+                })
+                .unwrap();
+            assert_eq!(count, 0);
+        }
+    }
+}

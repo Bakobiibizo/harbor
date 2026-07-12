@@ -135,6 +135,15 @@ pub fn receive(
     now: i64,
 ) -> Result<bool, IntroductionError> {
     let r = &signed.request;
+    if r.domain != domain::INTRODUCTION
+        || r.version != PROTOCOL_VERSION
+        || uuid::Uuid::parse_str(&r.request_id).is_err()
+        || r.requester_ephemeral_x25519_key.len() != 32
+        || r.message_ciphertext.is_empty()
+    {
+        return Err(IntroductionError::Invalid);
+    }
+    let _: QualifiedRelayName = r.target.parse().map_err(|_| IntroductionError::Invalid)?;
     let _: QualifiedRelayName = signed
         .requester_name
         .parse()
@@ -518,5 +527,60 @@ mod tests {
             .unwrap(),
             Some(false)
         );
+    }
+
+    fn signed_intro(key: &SigningKey) -> SignedIntroduction {
+        let raw = key.verifying_key().to_bytes();
+        let peer = peer_for_key(raw).unwrap().to_string();
+        let request = IntroductionRequest {
+            domain: domain::INTRODUCTION.into(),
+            version: PROTOCOL_VERSION,
+            request_id: uuid::Uuid::new_v4().to_string(),
+            target: "@alice@relay.test".into(),
+            requester_peer_id: peer,
+            requester_signing_key: raw.to_vec(),
+            requester_ephemeral_x25519_key: vec![5; 32],
+            purpose: "contact".into(),
+            message_ciphertext: vec![6; 48],
+            issued_at: 1_000,
+            expires_at: 1_200,
+            challenge_id: "challenge".into(),
+            work_nonce: 1,
+        };
+        let requester_name = "@bob@relay.test".to_string();
+        let signature = key
+            .sign(&canonical_cbor(&(&request, &requester_name)).unwrap())
+            .to_bytes()
+            .to_vec();
+        SignedIntroduction {
+            request,
+            requester_name,
+            requester_signature: signature,
+        }
+    }
+    #[test]
+    fn mutated_signed_introductions_never_create_decision_rows() {
+        let key = SigningKey::from_bytes(&[14; 32]);
+        let original = signed_intro(&key);
+        for mutate in 0..4 {
+            let db = crate::db::Database::in_memory().unwrap();
+            let repo = PrivateIntroductionsRepository::new(&db);
+            let mut value = original.clone();
+            match mutate {
+                0 => value.request.message_ciphertext[0] ^= 1,
+                1 => value.request.target = "@mallory@relay.test".into(),
+                2 => value.request.requester_peer_id = "12D3KooWForged".into(),
+                _ => value.requester_signature[0] ^= 1,
+            }
+            assert!(receive(&repo, &value, 1_100).is_err());
+            let count: i64 = db
+                .with_connection(|c| {
+                    c.query_row("SELECT COUNT(*) FROM introduction_decisions", [], |r| {
+                        r.get(0)
+                    })
+                })
+                .unwrap();
+            assert_eq!(count, 0);
+        }
     }
 }

@@ -277,4 +277,26 @@ mod acceptance_tests {
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn registration_nonce_replay_leaves_assignment_unchanged() {
+        let path = path();
+        RelayDatabase::open(path.to_str().unwrap()).unwrap();
+        let relay = SigningKey::from_bytes(&[9; 32]);
+        let user = SigningKey::from_bytes(&[4; 32]);
+        let request = signed(&user, "alice", 7);
+        let expected = request.request.peer_id.clone();
+        let mut conn = Connection::open(&path).unwrap();
+        assert!(register(&mut conn, "relay.test", "k1", &relay, request.clone(), 100).is_ok());
+        assert!(matches!(
+            register(&mut conn, "relay.test", "k1", &relay, request, 100),
+            Err(RegistrationError::Replay)
+        ));
+        let rows:i64=conn.query_row("SELECT COUNT(*) FROM relay_name_claims WHERE relay='relay.test' AND local_name='alice'",[],|r|r.get(0)).unwrap();
+        let peer:String=conn.query_row("SELECT peer_id FROM relay_name_claims WHERE relay='relay.test' AND local_name='alice' AND status='active'",[],|r|r.get(0)).unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(peer, expected);
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
 }
