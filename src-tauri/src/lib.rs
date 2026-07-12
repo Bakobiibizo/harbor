@@ -105,6 +105,16 @@ fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
 pub fn run() {
     let profile = get_profile_name();
     let uses_isolated_profile = profile.is_some() || get_custom_data_dir().is_some();
+    let mut context = tauri::generate_context!();
+
+    // Isolated profiles need their own WebKit/WebView2 cookies, local storage, and cache as well
+    // as their own Harbor database. Delay automatic window creation so setup can provide the
+    // absolute profile-rooted webview directory once Tauri has resolved the platform data path.
+    if uses_isolated_profile {
+        for window in &mut context.config_mut().app.windows {
+            window.create = false;
+        }
+    }
 
     let mut builder = tauri::Builder::default();
 
@@ -132,10 +142,6 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
-            if let Some(window) = app.get_webview_window("main") {
-                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-                window.set_icon(icon)?;
-            }
             // Get app data directory first so we can set up logging properly
             let app_data_dir = app
                 .path()
@@ -144,6 +150,23 @@ pub fn run() {
             let profile_root =
                 ProfileRoot::resolve(&app_data_dir, get_custom_data_dir(), profile.as_deref());
             std::fs::create_dir_all(profile_root.path()).expect("Failed to create profile root");
+
+            if uses_isolated_profile {
+                let window_config = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|window| window.label == "main")
+                    .ok_or_else(|| tauri::Error::AssetNotFound("main window config".into()))?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                    .data_directory(profile_root.webview())
+                    .build()?;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                window.set_icon(icon)?;
+            }
 
             // Set up log directory
             let log_dir = profile_root.logs();
@@ -473,6 +496,6 @@ pub fn run() {
             // Link preview commands
             commands::fetch_link_preview,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

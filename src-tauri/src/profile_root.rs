@@ -19,6 +19,9 @@ impl ProfileRoot {
     pub fn logs(&self) -> PathBuf {
         self.0.join("logs")
     }
+    pub fn webview(&self) -> PathBuf {
+        self.0.join("webview")
+    }
 }
 
 #[cfg(test)]
@@ -47,6 +50,7 @@ mod tests {
         assert!(am.has_media(&hash));
         assert!(!bm.has_media(&hash));
         assert_ne!(a.logs(), b.logs());
+        assert_ne!(a.webview(), b.webview());
     }
     #[test]
     fn same_root_preserves_multi_account_registry() {
