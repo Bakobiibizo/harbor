@@ -1,11 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { identityService } from '../../services';
 import type { IdentityInfo, RelayNameClaim } from '../../types';
-import { qualifiedRelayName } from '../../types';
 import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
-import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
+import {
+  configuredRelayNamespace,
+  relayAddressPreview,
+  validateRelayLocalName,
+} from '../../utils/relayNameInput';
 import { publishingPolicy } from '../../services/publishingPolicy';
+import { HarborIcon } from '../icons';
 
 export function LegacyIdentityMigration({
   identity,
@@ -82,21 +86,28 @@ export function LegacyIdentityMigration({
   return (
     <main
       className="min-h-screen grid place-items-center p-6"
-      style={{ background: 'hsl(var(--harbor-bg-base))' }}
+      style={{
+        background: 'linear-gradient(145deg, hsl(216 70% 10%), hsl(216 58% 17%))',
+        color: 'white',
+      }}
     >
       <section
         className="w-full max-w-lg rounded-2xl p-8 space-y-5"
         style={{
-          background: 'hsl(var(--harbor-bg-elevated))',
-          border: '1px solid hsl(var(--harbor-border-subtle))',
+          background: 'hsl(216 52% 16%)',
+          border: '1px solid hsl(210 40% 92% / .22)',
+          boxShadow: '0 24px 60px hsl(216 80% 4% / .45)',
         }}
       >
-        <div>
-          <h1 className="text-2xl font-bold">Choose your verified Harbor name</h1>
-          <p className="mt-2 text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Your old name, “{identity.displayName}”, is only an unverified migration hint. Claim a
-            relay-unique address so people can tell identities apart.
-          </p>
+        <div className="flex items-center gap-4">
+          <HarborIcon size={64} alt="Harbor" className="shrink-0" />
+          <div>
+            <h1 className="text-2xl font-bold">Choose your verified Harbor name</h1>
+            <p className="mt-2 text-sm" style={{ color: 'hsl(210 40% 92%)' }}>
+              Your old name, “{identity.displayName}”, is only an unverified migration hint. Claim a
+              relay-unique address so people can tell identities apart.
+            </p>
+          </div>
         </div>
         <Input
           label="Name"
@@ -104,13 +115,15 @@ export function LegacyIdentityMigration({
           onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
         />
         <Input label="Relay namespace" value={namespace} disabled />
-        <p className="text-sm">
-          Your address will be{' '}
-          <strong>
-            {qualifiedRelayName({ name: name || 'name', namespace: namespace || 'relay' })}
-          </strong>
-          .
-        </p>
+        {relayAddressPreview(name || 'name', namespace) ? (
+          <p className="text-sm">
+            Your address will be <strong>{relayAddressPreview(name || 'name', namespace)}</strong>.
+          </p>
+        ) : (
+          <p role="status" className="text-sm" style={{ color: 'hsl(var(--harbor-warning))' }}>
+            No relay namespace is configured. Harbor will not invent or display an address.
+          </p>
+        )}
         {error && (
           <div
             role="alert"
