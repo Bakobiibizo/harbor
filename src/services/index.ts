@@ -9,6 +9,7 @@ export { feedService } from './feed';
 export { mediaService } from './media';
 export { commentsService } from './comments';
 export { likesService } from './likes';
+export { mentionsService } from './mentions';
 export { callingService } from './calling';
 export * from './callingIce';
 export * from './callingRuntime';

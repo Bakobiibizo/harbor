@@ -3,7 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
-import type { FeedItem, PostVisibility } from '../types';
+import type { FeedItem, PostVisibility, ResolvedMention } from '../types';
+import { mentionsService } from '../services';
+import { MentionResolution } from '../components/identity';
 import {
   feedService,
   type WallPreviewPerspective,
@@ -411,6 +413,7 @@ export function WallPage() {
   } = useWallStore();
   const { defaultVisibility, socialView, setSocialView } = useSettingsStore();
   const [newPost, setNewPost] = useState('');
+  const [resolvedMentions, setResolvedMentions] = useState<ResolvedMention[]>([]);
   const [isComposing, setIsComposing] = useState(false);
   const [selectedContentType, setSelectedContentType] = useState<WallContentType>('post');
   const [selectedVisibility, setSelectedVisibility] = useState<PostVisibility>(defaultVisibility);
@@ -530,12 +533,35 @@ export function WallPage() {
     }
 
     try {
-      await createPost(
-        newPost.trim(),
-        selectedContentType,
-        pendingMedia.length > 0 ? pendingMedia : undefined,
-        selectedVisibility,
-      );
+      if (resolvedMentions.some((mention) => mention.status === 'blocked')) {
+        toast.error('Remove blocked mentions before publishing');
+        return;
+      }
+      if (resolvedMentions.length > 0) {
+        if (pendingMedia.length > 0) {
+          toast.error('Mentioned posts cannot include attachments yet');
+          return;
+        }
+        await mentionsService.publish({
+          contentType: selectedContentType === 'post' ? 'text' : selectedContentType,
+          contentText: newPost.trim(),
+          visibility: selectedVisibility,
+          mentions: resolvedMentions.map((mention) => ({
+            qualifiedName: mention.qualifiedName,
+            intent: 'notify',
+            authorizedPeerId: mention.status === 'known' ? mention.peerId : undefined,
+            claimDigest: mention.claimDigest,
+          })),
+        });
+        await loadPosts();
+      } else {
+        await createPost(
+          newPost.trim(),
+          selectedContentType,
+          pendingMedia.length > 0 ? pendingMedia : undefined,
+          selectedVisibility,
+        );
+      }
       setNewPost('');
       setPendingMedia([]);
       setIsComposing(false);
@@ -974,6 +1000,7 @@ export function WallPage() {
                   fontSize: selectedContentType === 'thought' ? '1.125rem' : '1rem',
                 }}
               />
+              <MentionResolution text={newPost} onResolved={setResolvedMentions} />
 
               {/* Character counter for thoughts */}
               {selectedContentType === 'thought' && (

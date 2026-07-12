@@ -13,6 +13,7 @@ import {
 import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
 import { useAppVersion } from '../hooks';
+import { BugReportForm, MentionInbox } from '../components/identity';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -512,6 +513,7 @@ export function SettingsPage() {
     { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'Connection help for calls' },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
     { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
+    { id: 'support', label: 'Support', icon: ShieldIcon, description: 'Mentions and bug reports' },
   ];
 
   return (
@@ -1753,6 +1755,19 @@ export function SettingsPage() {
                   View on GitHub
                 </a>
               </div>
+            </div>
+          )}
+
+          {activeSection === 'support' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-semibold mb-1">Support</h3>
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Review private mentions and report problems to Harbor.
+                </p>
+              </div>
+              <MentionInbox />
+              <BugReportForm />
             </div>
           )}
         </div>
