@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { presentRelayName } from './relayName';
+import { presentRelayName, safePeerLabel } from './relayName';
 
 const claim = {
   request: {
@@ -34,5 +34,14 @@ describe('relay name presentation', () => {
   it('distinguishes expired and untrusted claims', () => {
     expect(presentRelayName(claim, '', true, 201).trust).toBe('expired');
     expect(presentRelayName(claim, '', false, 100).trust).toBe('untrusted');
+  });
+});
+
+describe('verified peer labels', () => {
+  it('uses a verified qualified claim when present', () =>
+    expect(safePeerLabel('12D3peer', '@alice@relay.test')).toBe('@alice@relay.test'));
+  it('rejects malformed labels and falls back to an explicit unverified peer', () => {
+    expect(safePeerLabel('12D3peer', 'Alice')).toContain('(unverified)');
+    expect(safePeerLabel('12D3peer')).toContain('(unverified)');
   });
 });

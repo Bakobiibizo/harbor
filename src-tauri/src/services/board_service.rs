@@ -105,6 +105,19 @@ pub struct OutgoingWallPostDelete {
 }
 
 impl BoardService {
+    pub fn verified_qualified_name(&self, peer_id: &str) -> Result<Option<String>> {
+        let Some(bytes) = crate::db::repositories::RelayNamesRepository::new(&self.db)
+            .active_for_peer(peer_id, chrono::Utc::now().timestamp())?
+        else {
+            return Ok(None);
+        };
+        let claim: crate::models::NameClaim = ciborium::de::from_reader(bytes.as_slice())
+            .map_err(|e| AppError::Serialization(e.to_string()))?;
+        Ok(Some(format!(
+            "@{}@{}",
+            claim.request.local_name, claim.request.relay
+        )))
+    }
     pub fn new(db: Arc<Database>, identity_service: Arc<IdentityService>) -> Self {
         Self {
             db,

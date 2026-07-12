@@ -98,7 +98,7 @@ export function ContactWallPage() {
     };
   }, [wallItems]);
 
-  const displayName = safePeerLabel(peerId || 'unknown');
+  const displayName = safePeerLabel(peerId || 'unknown', wallItems[0]?.authorVerifiedQualifiedName);
   const authorPeerId = peerId || '';
 
   const handleRefresh = useCallback(async () => {

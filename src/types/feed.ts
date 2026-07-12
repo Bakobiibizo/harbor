@@ -3,6 +3,7 @@ export interface FeedItem {
   postId: string;
   authorPeerId: string;
   authorDisplayName: string | null;
+  authorVerifiedQualifiedName?: string | null;
   contentType: string;
   contentText: string | null;
   visibility: string;

@@ -413,14 +413,14 @@ function ContactPicker({
   const availableContacts = contacts.filter(
     (c) =>
       !existingPeerIds.includes(c.peerId) &&
-      safePeerLabel(c.peerId).toLowerCase().includes(filter.toLowerCase()),
+      safePeerLabel(c.peerId, c.verifiedQualifiedName).toLowerCase().includes(filter.toLowerCase()),
   );
 
   // Also show contacts that have existing conversations (for starting a new chat with them)
   const existingContacts = contacts.filter(
     (c) =>
       existingPeerIds.includes(c.peerId) &&
-      safePeerLabel(c.peerId).toLowerCase().includes(filter.toLowerCase()),
+      safePeerLabel(c.peerId, c.verifiedQualifiedName).toLowerCase().includes(filter.toLowerCase()),
   );
 
   return (
@@ -504,14 +504,14 @@ function ContactPicker({
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                         style={{ background: getContactColor(contact.peerId) }}
                       >
-                        {getInitials(safePeerLabel(contact.peerId))}
+                        {getInitials(safePeerLabel(contact.peerId, contact.verifiedQualifiedName))}
                       </div>
                       <div className="min-w-0 flex-1">
                         <p
                           className="font-semibold text-sm truncate"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {safePeerLabel(contact.peerId)}
+                          {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
                         </p>
                         <p
                           className="text-xs truncate"
@@ -557,14 +557,16 @@ function ContactPicker({
                           className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                           style={{ background: getContactColor(contact.peerId) }}
                         >
-                          {getInitials(safePeerLabel(contact.peerId))}
+                          {getInitials(
+                            safePeerLabel(contact.peerId, contact.verifiedQualifiedName),
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p
                             className="font-semibold text-sm truncate"
                             style={{ color: 'hsl(var(--harbor-text-primary))' }}
                           >
-                            {safePeerLabel(contact.peerId)}
+                            {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
                           </p>
                           <p
                             className="text-xs truncate"
@@ -738,7 +740,7 @@ export function ChatPage() {
         return {
           id: `real-${contact.peerId}`,
           peerId: contact.peerId,
-          name: safePeerLabel(contact.peerId),
+          name: safePeerLabel(contact.peerId, contact.verifiedQualifiedName),
           online: true, // Assume online for now - would need presence tracking
           avatarGradient: getContactColor(contact.peerId),
           lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',

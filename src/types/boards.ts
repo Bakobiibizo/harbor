@@ -23,6 +23,7 @@ export interface BoardPost {
   relayPeerId: string;
   authorPeerId: string;
   authorDisplayName: string | null;
+  authorVerifiedQualifiedName?: string | null;
   contentType: string;
   contentText: string | null;
   lamportClock: number;

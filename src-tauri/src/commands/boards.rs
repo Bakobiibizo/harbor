@@ -39,6 +39,7 @@ pub struct BoardPostInfoFe {
     pub relay_peer_id: String,
     pub author_peer_id: String,
     pub author_display_name: Option<String>,
+    pub author_verified_qualified_name: Option<String>,
     pub content_type: String,
     pub content_text: Option<String>,
     pub lamport_clock: i64,
@@ -137,6 +138,10 @@ pub async fn get_board_posts(
     Ok(posts
         .into_iter()
         .map(|p| BoardPostInfoFe {
+            author_verified_qualified_name: board_service
+                .verified_qualified_name(&p.author_peer_id)
+                .ok()
+                .flatten(),
             post_id: p.post_id,
             board_id: p.board_id,
             relay_peer_id: p.relay_peer_id,

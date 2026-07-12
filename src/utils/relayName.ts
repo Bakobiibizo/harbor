@@ -25,6 +25,9 @@ export function safeIdentityLabel(identity: IdentityInfo): string {
     ? qualifiedRelayName(identity.relayNameClaim)
     : `Peer ${identity.peerId.slice(0, 8)}… (unverified)`;
 }
-export function safePeerLabel(peerId: string): string {
-  return `Peer ${peerId.slice(0, 8)}… (unverified)`;
+export function safePeerLabel(peerId: string, verifiedQualifiedName?: string | null): string {
+  return verifiedQualifiedName &&
+    /^@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?@[a-z0-9.-]+$/.test(verifiedQualifiedName)
+    ? verifiedQualifiedName
+    : `Peer ${peerId.slice(0, 8)}… (unverified)`;
 }

@@ -598,7 +598,7 @@ export function FeedPage() {
         likedByUser: item.likedByUser ?? false,
         author: {
           peerId: item.authorPeerId,
-          name: safePeerLabel(item.authorPeerId),
+          name: safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName),
           avatarGradient: getContactColor(item.authorPeerId),
         },
         isReal: true,
@@ -622,7 +622,7 @@ export function FeedPage() {
           likedByUser: item.likedByUser ?? false,
           author: {
             peerId: item.authorPeerId,
-            name: safePeerLabel(item.authorPeerId),
+            name: safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName),
             avatarGradient: getContactColor(item.authorPeerId),
           },
           isReal: true,

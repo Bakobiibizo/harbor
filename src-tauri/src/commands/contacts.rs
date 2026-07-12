@@ -18,6 +18,7 @@ pub struct ContactInfo {
     pub id: i64,
     pub peer_id: String,
     pub display_name: String,
+    pub verified_qualified_name: Option<String>,
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
     pub is_blocked: bool,
@@ -35,6 +36,10 @@ pub async fn get_contacts(
     Ok(contacts
         .into_iter()
         .map(|c| ContactInfo {
+            verified_qualified_name: contacts_service
+                .verified_qualified_name(&c.peer_id)
+                .ok()
+                .flatten(),
             id: c.id,
             peer_id: c.peer_id,
             display_name: c.display_name,
@@ -57,6 +62,10 @@ pub async fn get_active_contacts(
     Ok(contacts
         .into_iter()
         .map(|c| ContactInfo {
+            verified_qualified_name: contacts_service
+                .verified_qualified_name(&c.peer_id)
+                .ok()
+                .flatten(),
             id: c.id,
             peer_id: c.peer_id,
             display_name: c.display_name,
@@ -78,6 +87,10 @@ pub async fn get_contact(
 ) -> Result<Option<ContactInfo>, AppError> {
     let contact = contacts_service.get_contact(&peer_id)?;
     Ok(contact.map(|c| ContactInfo {
+        verified_qualified_name: contacts_service
+            .verified_qualified_name(&c.peer_id)
+            .ok()
+            .flatten(),
         id: c.id,
         peer_id: c.peer_id,
         display_name: c.display_name,

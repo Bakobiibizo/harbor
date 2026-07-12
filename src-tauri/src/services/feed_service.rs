@@ -20,6 +20,7 @@ pub struct FeedService {
 pub struct FeedItem {
     pub post: Post,
     pub author_display_name: Option<String>,
+    pub author_verified_qualified_name: Option<String>,
 }
 
 impl FeedService {
@@ -121,6 +122,11 @@ impl FeedService {
                     .clone();
 
                 FeedItem {
+                    author_verified_qualified_name: self
+                        .contacts_service
+                        .verified_qualified_name(&post.author_peer_id)
+                        .ok()
+                        .flatten(),
                     post,
                     author_display_name,
                 }
@@ -176,6 +182,11 @@ impl FeedService {
         let feed_items: Vec<FeedItem> = posts
             .into_iter()
             .map(|post| FeedItem {
+                author_verified_qualified_name: self
+                    .contacts_service
+                    .verified_qualified_name(author_peer_id)
+                    .ok()
+                    .flatten(),
                 post,
                 author_display_name: author_display_name.clone(),
             })

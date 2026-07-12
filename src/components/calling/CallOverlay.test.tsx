@@ -4,13 +4,14 @@ import { CallOverlay } from './CallOverlay';
 import { useCallingStore, useContactsStore } from '../../stores';
 import type { GroupCallRuntimeSnapshot } from '../../services/callingRuntime';
 
-function contact(peerId: string, displayName: string) {
+function contact(peerId: string, displayName: string, verifiedQualifiedName?: string) {
   return {
     id: 1,
     peerId,
     publicKey: 'pub',
     x25519Public: 'xpub',
     displayName,
+    verifiedQualifiedName,
     avatarHash: null,
     bio: null,
     isBlocked: false,
@@ -74,7 +75,9 @@ function groupSnapshot(
 describe('CallOverlay group call UI', () => {
   beforeEach(() => {
     useCallingStore.getState().reset();
-    useContactsStore.setState({ contacts: [contact('peer-a', 'Alice'), contact('peer-b', 'Bob')] });
+    useContactsStore.setState({
+      contacts: [contact('peer-a', 'Alice', '@alice@relay.test'), contact('peer-b', 'Bob')],
+    });
   });
 
   it('renders participant tiles, layout state, and degraded media without hiding leave controls', () => {
@@ -89,8 +92,8 @@ describe('CallOverlay group call UI', () => {
     expect(screen.getByRole('dialog', { name: 'Group call' })).toBeInTheDocument();
     expect(screen.getByText('Group video call')).toBeInTheDocument();
     expect(screen.getByText('3/4 participants · degraded')).toBeInTheDocument();
-    expect(screen.getByText('peer-a (unverified)')).toBeInTheDocument();
-    expect(screen.getByText('peer-b (unverified)')).toBeInTheDocument();
+    expect(screen.getByText('@alice@relay.test')).toBeInTheDocument();
+    expect(screen.getByText('Peer peer-b… (unverified)')).toBeInTheDocument();
     expect(screen.queryByText('Alice')).not.toBeInTheDocument();
     expect(screen.queryByText('Bob')).not.toBeInTheDocument();
     expect(

@@ -58,7 +58,7 @@ function PostCard({
           </div>
           <div>
             <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-              {shortPeerId(post.authorPeerId)} (unverified)
+              {post.authorVerifiedQualifiedName || `${shortPeerId(post.authorPeerId)} (unverified)`}
             </p>
             <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               {formatTimeAgo(post.createdAt)}

@@ -410,7 +410,7 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     return (
-      safePeerLabel(contact.peerId).toLowerCase().includes(query) ||
+      safePeerLabel(contact.peerId, contact.verifiedQualifiedName).toLowerCase().includes(query) ||
       contact.peerId.toLowerCase().includes(query)
     );
   });
@@ -1152,7 +1152,12 @@ export function NetworkPage() {
                           key={peer.peerId}
                           peerId={peer.peerId}
                           displayName={
-                            knownContact ? safePeerLabel(knownContact.peerId) : undefined
+                            knownContact
+                              ? safePeerLabel(
+                                  knownContact.peerId,
+                                  knownContact.verifiedQualifiedName,
+                                )
+                              : undefined
                           }
                           actionLabel="Connect"
                           actionStyle="primary"
@@ -1205,7 +1210,7 @@ export function NetworkPage() {
                         (contact) => contact.peerId === peer.peerId,
                       );
                       const displayName = knownContact
-                        ? safePeerLabel(knownContact.peerId)
+                        ? safePeerLabel(knownContact.peerId, knownContact.verifiedQualifiedName)
                         : undefined;
                       return (
                         <PeerRow
@@ -1266,7 +1271,7 @@ export function NetworkPage() {
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                         style={{ background: getPeerColor(contact.peerId) }}
                       >
-                        {safePeerLabel(contact.peerId)
+                        {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)
                           .split(' ')
                           .map((word) => word[0])
                           .join('')
@@ -1278,7 +1283,7 @@ export function NetworkPage() {
                           className="font-medium text-sm"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {safePeerLabel(contact.peerId)}
+                          {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
                         </p>
                         <p
                           className="text-xs font-mono truncate"
@@ -1299,7 +1304,7 @@ export function NetworkPage() {
                       <button
                         className="px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 text-xs font-medium"
                         style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                        title={`Open ${safePeerLabel(contact.peerId)}'s wall`}
+                        title={`Open ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}'s wall`}
                         onClick={() =>
                           navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)
                         }
@@ -1314,7 +1319,9 @@ export function NetworkPage() {
                           try {
                             await contactsService.removeContact(contact.peerId);
                             await refreshContacts();
-                            toast.success(`Removed ${safePeerLabel(contact.peerId)} from contacts`);
+                            toast.success(
+                              `Removed ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName)} from contacts`,
+                            );
                           } catch (err) {
                             toast.error(`Failed to remove contact: ${err}`);
                           }

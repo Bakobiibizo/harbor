@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { PhoneIcon, XIcon } from '../icons';
 import { useCallingStore, useContactsStore } from '../../stores';
+import { safePeerLabel } from '../../utils/relayName';
 import type {
   AudioCallRuntimeState,
   GroupCallParticipantSnapshot,
@@ -26,11 +27,6 @@ function formatState(state: AudioCallRuntimeState, isVideo: boolean): string {
     default:
       return `${isVideo ? 'Video' : 'Voice'} call`;
   }
-}
-
-function compactPeer(peerId: string): string {
-  if (peerId.length <= 16) return peerId;
-  return `${peerId.slice(0, 8)}…${peerId.slice(-6)}`;
 }
 
 function useVideoElement(stream: MediaStream | null) {
@@ -109,7 +105,8 @@ export function CallOverlay() {
   const peerName = useMemo(() => {
     const peerId = snapshot.peerId;
     if (!peerId) return 'Unknown peer';
-    return `${compactPeer(peerId)} (unverified)`;
+    const contact = contacts.find((item) => item.peerId === peerId);
+    return safePeerLabel(peerId, contact?.verifiedQualifiedName);
   }, [contacts, snapshot.peerId]);
 
   if (groupSnapshot.state !== 'idle') {
@@ -117,7 +114,10 @@ export function CallOverlay() {
     const isIncomingGroup =
       groupSnapshot.state === 'ringing' &&
       groupSnapshot.participants.every((participant) => participant.state === 'invited');
-    const contactName = (peerId: string) => `${compactPeer(peerId)} (unverified)`;
+    const contactName = (peerId: string) => {
+      const contact = contacts.find((item) => item.peerId === peerId);
+      return safePeerLabel(peerId, contact?.verifiedQualifiedName);
+    };
     return (
       <div className="fixed inset-x-4 bottom-4 z-[150] sm:left-auto sm:w-[36rem]">
         <div

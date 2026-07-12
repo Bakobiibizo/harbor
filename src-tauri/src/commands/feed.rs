@@ -16,6 +16,7 @@ pub struct FeedItemInfo {
     pub post_id: String,
     pub author_peer_id: String,
     pub author_display_name: Option<String>,
+    pub author_verified_qualified_name: Option<String>,
     pub content_type: String,
     pub content_text: Option<String>,
     pub visibility: String,
@@ -31,6 +32,7 @@ impl From<FeedItem> for FeedItemInfo {
             post_id: item.post.post_id,
             author_peer_id: item.post.author_peer_id,
             author_display_name: item.author_display_name,
+            author_verified_qualified_name: item.author_verified_qualified_name,
             content_type: item.post.content_type,
             content_text: item.post.content_text,
             visibility: item.post.visibility.as_str().to_string(),
@@ -116,6 +118,14 @@ pub async fn get_wall_preview(
             post_id: post.post_id,
             author_peer_id: post.author_peer_id,
             author_display_name: Some(identity.display_name.clone()),
+            author_verified_qualified_name: crate::db::repositories::RelayNamesRepository::new(&db)
+                .active_for_peer(&identity.peer_id, chrono::Utc::now().timestamp())
+                .ok()
+                .flatten()
+                .and_then(|bytes| {
+                    ciborium::de::from_reader::<crate::models::NameClaim, _>(bytes.as_slice()).ok()
+                })
+                .map(|claim| format!("@{}@{}", claim.request.local_name, claim.request.relay)),
             content_type: post.content_type,
             content_text: post.content_text,
             visibility: post.visibility.as_str().to_string(),
