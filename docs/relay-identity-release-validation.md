@@ -16,7 +16,7 @@ Retain the log with the release evidence. A command that selects zero tests is n
 
 ## Recorded release result
 
-On 2026-07-12, commit `8fab4bdda4a640494631fa48327e4636c846f088` passed the canonical gate. The run included 407 frontend tests, 260 client tests plus the CLI test, 44 relay tests, strict TypeScript and ESLint checks, production frontend compilation, and Rust formatting, checking, and Clippy for all targets. The production JavaScript dependency audit and both Rust `cargo deny` audits passed. A tracked-file credential-pattern scan found no secrets. The packaged-app UX and restart smoke also passed; its evidence is recorded in [packaged-app-smoke-2026-07-12.md](packaged-app-smoke-2026-07-12.md).
+On 2026-07-12, commit `c02987123b0069bba004328b97db438280772536` passed the canonical gate. The run included 407 frontend tests, 260 client tests plus the CLI test, 44 relay tests, strict TypeScript and ESLint checks, production frontend compilation, and Rust formatting, checking, and Clippy for all targets. The production JavaScript dependency audit and both Rust `cargo deny` audits passed. A tracked-file credential-pattern scan found no secrets. The packaged-app UX and restart smoke also passed; its evidence is recorded in [packaged-app-smoke-2026-07-12.md](packaged-app-smoke-2026-07-12.md).
 
 ## Isolated topology
 
