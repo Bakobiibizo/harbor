@@ -16,6 +16,7 @@ env:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release-validation:
@@ -131,7 +132,7 @@ jobs:
           - platform: 'windows-latest'
             # MSI only accepts numeric prerelease identifiers. NSIS supports the
             # product's SemVer beta version and still produces updater artifacts.
-            args: '--bundles nsis'
+            args: '--bundles nsis --config src-tauri/tauri.windows.conf.json'
             target: 'x86_64-pc-windows-msvc'
 
     runs-on: ${{ matrix.platform }}
@@ -196,6 +197,19 @@ jobs:
           "TAURI_SIGNING_PRIVATE_KEY=$key" >> $env:GITHUB_ENV
           "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password')" >> $env:GITHUB_ENV
 
+      - name: Authenticate to Azure for Artifact Signing
+        if: runner.os == 'Windows'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
+
+      - name: Install Artifact Signing CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cargo install artifact-signing-cli --locked
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -203,6 +217,23 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
+
+      - name: Verify Windows Authenticode signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = @(
+            'src-tauri/target/release/harbor.exe'
+            (Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' | Select-Object -ExpandProperty FullName)
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing signed release artifact: $file" }
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature on $file: $($signature.Status) $($signature.StatusMessage)"
+            }
+            Write-Host "Verified Artifact Signing signature: $file"
+          }
 
   publish-release:
     needs: [create-release, build]
