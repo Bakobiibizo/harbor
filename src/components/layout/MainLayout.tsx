@@ -142,15 +142,8 @@ export function MainLayout({ children }: MainLayoutProps) {
             className="flex items-center gap-3 w-full text-left group transition-opacity duration-200 hover:opacity-80"
             title="Customize Harbor"
           >
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-200 group-hover:scale-105"
-              style={{
-                background:
-                  'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
-              }}
-            >
-              <HarborIcon className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 flex items-center justify-center transition-transform duration-200 group-hover:scale-105">
+              <HarborIcon className="w-10 h-10" />
             </div>
             <div className="flex-1 min-w-0">
               <h1
@@ -199,9 +192,10 @@ export function MainLayout({ children }: MainLayoutProps) {
                   <div
                     className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold text-white overflow-hidden"
                     style={{
-                      background: avatarUrl
-                        ? 'transparent'
-                        : 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                      background:
+                        avatarUrl || identity.avatarHash
+                          ? 'transparent'
+                          : 'hsl(var(--harbor-surface-3))',
                     }}
                   >
                     {avatarUrl ? (
