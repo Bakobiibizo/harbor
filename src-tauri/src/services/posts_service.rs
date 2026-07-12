@@ -328,6 +328,9 @@ pub(crate) fn post_media_data_from_signed(
 }
 
 impl PostsService {
+    pub fn assert_can_publish(&self) -> Result<()> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)
+    }
     /// Create a new posts service
     pub fn new(
         db: Arc<Database>,
@@ -361,6 +364,7 @@ impl PostsService {
         visibility: PostVisibility,
         media: &[CreatePostMediaParams<'_>],
     ) -> Result<OutgoingPost> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let identity = self
             .identity_service
             .get_identity()?
@@ -473,6 +477,7 @@ impl PostsService {
         post_id: &str,
         content_text: Option<&str>,
     ) -> Result<OutgoingPostUpdate> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let identity = self
             .identity_service
             .get_identity()?
@@ -564,6 +569,7 @@ impl PostsService {
 
     /// Delete a post (soft delete)
     pub fn delete_post(&self, post_id: &str) -> Result<OutgoingPostDelete> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let identity = self
             .identity_service
             .get_identity()?

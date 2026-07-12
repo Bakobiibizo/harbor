@@ -54,6 +54,7 @@ impl WallSocialService {
     }
 
     pub fn add_comment(&self, post_id: &str, content: &str) -> Result<PostComment> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let content = content.trim();
         if content.is_empty() {
             return Err(AppError::Validation(
@@ -111,6 +112,7 @@ impl WallSocialService {
     }
 
     pub fn delete_comment(&self, comment_id: &str) -> Result<bool> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let identity = self.current_identity()?;
         let comment = CommentsRepository::get_by_comment_id(&self.db, comment_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
@@ -153,6 +155,7 @@ impl WallSocialService {
     }
 
     pub fn add_reaction(&self, post_id: &str, reaction_type: &str) -> Result<()> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         self.ensure_current_user_can_read_post(post_id)?;
         let identity = self.current_identity()?;
         let event_id = Uuid::new_v4().to_string();
@@ -198,6 +201,7 @@ impl WallSocialService {
     }
 
     pub fn remove_reaction(&self, post_id: &str, reaction_type: &str) -> Result<()> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let identity = self.current_identity()?;
         let event_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();

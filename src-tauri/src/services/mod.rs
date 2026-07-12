@@ -5,6 +5,7 @@ pub mod contacts_service;
 pub mod content_sync_service;
 pub mod crypto_service;
 pub mod feed_service;
+pub mod identity_publishing_policy;
 pub mod identity_service;
 pub mod media_service;
 pub mod mentions_service;
@@ -27,6 +28,7 @@ pub use content_sync_service::{
 };
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
+pub use identity_publishing_policy::IdentityPublishingPolicy;
 pub use identity_service::IdentityService;
 pub use media_service::MediaStorageService;
 pub use mentions_service::{

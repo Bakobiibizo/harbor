@@ -111,6 +111,16 @@ pub struct MentionsService {
     posts: Arc<PostsService>,
 }
 impl MentionsService {
+    pub fn queued_outbound(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<crate::db::repositories::QueuedMentionEnvelope>> {
+        Ok(MentionsRepository::new(&self.db).queued_outbound(now, limit)?)
+    }
+    pub fn mark_outbound_delivered(&self, id: &str) -> Result<bool> {
+        Ok(MentionsRepository::new(&self.db).mark_delivered(id)?)
+    }
     pub fn ingest_queued_envelope(
         &self,
         envelope: &IncomingMentionEnvelope,
@@ -250,6 +260,7 @@ impl MentionsService {
         })
     }
     pub fn publish(&self, r: PublishMentionedPostRequest) -> Result<PublishMentionedPostResult> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity)?;
         if r.mentions.is_empty() {
             return Err(AppError::Validation(
                 "Mentioned post requires a recipient".into(),

@@ -118,6 +118,7 @@ impl BoardService {
         board_id: &str,
         content_text: &str,
     ) -> Result<OutgoingBoardPost> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let info = self
             .identity_service
             .get_identity_info()?
@@ -235,6 +236,7 @@ impl BoardService {
 
     /// Create a signed board post delete request
     pub fn create_delete_post_request(&self, post_id: &str) -> Result<OutgoingBoardPostDelete> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let info = self
             .identity_service
             .get_identity_info()?
@@ -270,6 +272,7 @@ impl BoardService {
         created_at: i64,
         post_signature: &[u8],
     ) -> Result<OutgoingWallPostSubmit> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let info = self
             .identity_service
             .get_identity_info()?

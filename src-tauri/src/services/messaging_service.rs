@@ -97,6 +97,7 @@ impl MessagingService {
         content_type: &str,
         reply_to: Option<&str>,
     ) -> Result<OutgoingMessage> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         // Get our identity
         let identity = self
             .identity_service
