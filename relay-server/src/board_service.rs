@@ -817,9 +817,9 @@ impl BoardService {
         if grant.issuer_peer_id != author_peer_id || grant.subject_peer_id != requester_peer_id {
             return Err("WallRead grant does not match requested author/requester".to_string());
         }
-        if grant.capability != "wall_read" {
+        if grant.capability != "wall_read" && grant.capability != "wall:read" {
             return Err(format!(
-                "Invalid grant capability '{}': expected wall_read",
+                "Invalid grant capability '{}': expected wall:read",
                 grant.capability
             ));
         }
@@ -889,7 +889,7 @@ impl BoardService {
         verify_registered_peer_signature(&self.db, issuer_peer_id, &signable, signature)?;
         let revoked = self
             .db
-            .revoke_wall_read_grant(grant_id, issuer_peer_id, revoked_at)
+            .revoke_wall_read_grant(grant_id, issuer_peer_id, lamport_clock, revoked_at)
             .map_err(|db_error| format!("Failed to revoke WallRead grant: {}", db_error))?;
         if !revoked {
             return Err("WallRead grant not found for issuer or already revoked".to_string());
@@ -1420,6 +1420,128 @@ mod tests {
         );
 
         assert!(matches!(result, Err(message) if message.contains("Invalid WallRead grant proof")));
+    }
+
+    #[test]
+    fn contact_card_wall_grant_is_enforced_then_revoked_across_profiles() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let mut grant = wall_read_grant(&author_key, "author", "requester");
+        grant.capability = "wall:read".to_string();
+        grant.signature = sign(
+            &author_key,
+            &SignablePermissionGrant {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: grant.issuer_peer_id.clone(),
+                subject_peer_id: grant.subject_peer_id.clone(),
+                capability: grant.capability.clone(),
+                scope: None,
+                lamport_clock: grant.lamport_clock,
+                issued_at: grant.issued_at,
+                expires_at: None,
+            },
+        );
+        service.process_wall_read_grant(&grant).unwrap();
+        let timestamp = 3_000;
+        let request_signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (allowed, _, _) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &request_signature,
+                None,
+            )
+            .unwrap();
+        assert!(allowed.iter().any(|post| post.post_id == "contacts-post"));
+
+        let revision = grant.lamport_clock + 1;
+        let revoked_at = 2_500;
+        let revoke_signature = sign(
+            &author_key,
+            &SignablePermissionRevoke {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: "author".into(),
+                lamport_clock: revision,
+                revoked_at,
+            },
+        );
+        service
+            .process_wall_read_revoke(
+                &grant.grant_id,
+                "author",
+                revision,
+                revoked_at,
+                &revoke_signature,
+            )
+            .unwrap();
+        let (denied, _, _) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &request_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            denied
+                .iter()
+                .map(|post| post.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["public-post"]
+        );
+
+        // A delayed copy of the older grant cannot resurrect access.
+        service.process_wall_read_grant(&grant).unwrap();
+        let (still_denied, _, _) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &request_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(still_denied.len(), 1);
+    }
+
+    #[test]
+    fn expired_contact_card_wall_grant_never_serves_private_rows() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let mut grant = wall_read_grant(&author_key, "author", "requester");
+        grant.capability = "wall:read".into();
+        grant.expires_at = Some(2_000);
+        grant.signature = sign(
+            &author_key,
+            &SignablePermissionGrant {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: grant.issuer_peer_id.clone(),
+                subject_peer_id: grant.subject_peer_id.clone(),
+                capability: grant.capability.clone(),
+                scope: None,
+                lamport_clock: grant.lamport_clock,
+                issued_at: grant.issued_at,
+                expires_at: grant.expires_at,
+            },
+        );
+        // Propagation after expiry is rejected rather than persisted as authority.
+        assert!(service
+            .process_wall_read_grant(&grant)
+            .unwrap_err()
+            .contains("expired"));
+        let timestamp = 3_000;
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (posts, _, _) = service
+            .process_get_wall_posts("requester", "author", 0, 20, timestamp, &signature, None)
+            .unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, "public-post");
     }
 
     #[test]
