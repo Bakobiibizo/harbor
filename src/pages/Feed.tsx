@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FeedIcon, EllipsisIcon } from '../components/icons';
 import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
-import { useFeedStore, useContactsStore, useWallStore } from '../stores';
+import { useFeedStore, useContactsStore, useWallStore, useSettingsStore } from '../stores';
 import { postsService } from '../services/posts';
 import { createLogger } from '../utils/logger';
 import type { FeedItem } from '../types';
@@ -527,6 +527,7 @@ export function FeedPage() {
   const [activeTab, setActiveTab] = useState<FeedTab>('all');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [sharingPost, setSharingPost] = useState<UnifiedPost | null>(null);
+  const { socialView, setSocialView } = useSettingsStore();
 
   // Load real feed and contacts on mount, plus trigger relay sync
   useEffect(() => {
@@ -639,7 +640,13 @@ export function FeedPage() {
   }, [getSavedFeedItems, toUnifiedPost, savedPostIds, feedItems]);
 
   // Select posts based on active tab
-  const posts: UnifiedPost[] = activeTab === 'saved' ? savedPosts : allPosts;
+  const selectedPosts: UnifiedPost[] = activeTab === 'saved' ? savedPosts : allPosts;
+  const posts = selectedPosts.filter((post) => {
+    if (socialView === 'posts') return true;
+    const mediaType =
+      socialView === 'images' ? 'image' : socialView === 'videos' ? 'video' : 'audio';
+    return post.media?.some((media) => media.type === mediaType);
+  });
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -800,7 +807,31 @@ export function FeedPage() {
             </div>
           </div>
 
-          {/* Tabs */}
+          <div
+            className="grid grid-cols-4 border-b mb-3"
+            style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+          >
+            {(['posts', 'images', 'videos', 'audio'] as const).map((view) => (
+              <button
+                key={view}
+                onClick={() => setSocialView(view)}
+                className="px-3 py-3 text-sm font-semibold capitalize"
+                style={{
+                  color:
+                    socialView === view
+                      ? 'hsl(var(--harbor-primary))'
+                      : 'hsl(var(--harbor-text-secondary))',
+                  borderBottom:
+                    socialView === view
+                      ? '3px solid hsl(var(--harbor-primary))'
+                      : '3px solid transparent',
+                }}
+              >
+                {view}
+              </button>
+            ))}
+          </div>
+          {/* Saved-state tabs */}
           <div
             className="flex gap-1 p-1 rounded-lg"
             style={{ background: 'hsl(var(--harbor-surface-1))' }}

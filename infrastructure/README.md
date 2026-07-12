@@ -1,15 +1,29 @@
-# Harbor Infrastructure - Relay Server Templates
+# Deploy a Harbor Relay on AWS
+
+## Fast path for AWS Console users
+
+1. Decide whether you want a **Connection Relay** (network connectivity only) or a **Community Relay** (connectivity, named community, boards, and storage).
+2. Open the matching **Launch Stack** link below for your preferred region.
+3. Sign in to AWS and keep the generated template URL and stack name.
+4. For a community relay, enter the public community name people should see in Harbor.
+5. Review the AWS cost estimate and permissions acknowledgement, then choose **Create stack**.
+6. Wait until CloudFormation reports `CREATE_COMPLETE` (usually several minutes).
+7. Open the stack's **Outputs** tab and follow `SSMConsoleLink`, or copy the command in `GetRelayAddress`.
+8. Copy the complete `/ip4/.../p2p/...` address into **Harbor → Network → Add relay**.
+
+If creation fails, open the stack's **Events** tab. The first red event normally contains the useful error. Deleting the stack removes the deployment resources and stops ongoing compute charges.
 
 This directory contains AWS CloudFormation templates for deploying relay servers that support Harbor's P2P networking and optional community/wall-sync relay storage.
 
 ## Two Templates
 
-| Template | File | Use Case |
-|----------|------|----------|
-| **Lightweight Relay** | `relay-cloudformation.yaml` | NAT traversal only — minimal resource usage |
-| **Community Relay** | `community-relay-cloudformation.yaml` | NAT traversal + community boards with SQLite storage |
+| Template              | File                                  | Use Case                                             |
+| --------------------- | ------------------------------------- | ---------------------------------------------------- |
+| **Lightweight Relay** | `relay-cloudformation.yaml`           | NAT traversal only — minimal resource usage          |
+| **Community Relay**   | `community-relay-cloudformation.yaml` | NAT traversal + community boards with SQLite storage |
 
 Both templates:
+
 - Generate a **unique identity** per deployment (no two relays share a peer ID)
 - Write the relay address to **SSM Parameter Store** automatically
 - Run as a systemd service with automatic restarts
@@ -45,10 +59,10 @@ a4b5f161fa78cb1d5453831a3c0bb28c3281b0db581352989a83eb088bf6e079
 
 The systemd service name is based on your CloudFormation stack name:
 
-| Template | Stack Name | Service Name |
-|----------|------------|--------------|
-| Lightweight | `my-relay` | `my-relay-relay` |
-| Community | `my-community` | `my-community-community-relay` |
+| Template    | Stack Name     | Service Name                   |
+| ----------- | -------------- | ------------------------------ |
+| Lightweight | `my-relay`     | `my-relay-relay`               |
+| Community   | `my-community` | `my-community-community-relay` |
 
 ## Prerequisites
 
@@ -63,21 +77,21 @@ The systemd service name is based on your CloudFormation stack name:
 
 ### Lightweight Relay
 
-| Region | Deploy |
-|--------|--------|
-| US East (N. Virginia) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml) |
-| US West (Oregon) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml) |
-| EU (Ireland) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml) |
-| Asia Pacific (Tokyo) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml) |
+| Region                | Deploy                                                                                                                                                                                                                                                                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| US East (N. Virginia) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml)      |
+| US West (Oregon)      | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml)      |
+| EU (Ireland)          | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml)      |
+| Asia Pacific (Tokyo)  | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/new?stackName=harbor-relay&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/relay-cloudformation.yaml) |
 
 ### Community Relay
 
-| Region | Deploy |
-|--------|--------|
-| US East (N. Virginia) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
-| US West (Oregon) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
-| EU (Ireland) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
-| Asia Pacific (Tokyo) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
+| Region                | Deploy                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| US East (N. Virginia) | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml)      |
+| US West (Oregon)      | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml)      |
+| EU (Ireland)          | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml)      |
+| Asia Pacific (Tokyo)  | [![Launch Stack](https://cdn.rawgit.com/buildkite/cloudformation-launch-stack-button-svg/master/launch-stack.svg)](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/new?stackName=harbor-community&templateURL=https://raw.githubusercontent.com/bakobiibizo/harbor/main/infrastructure/community-relay-cloudformation.yaml) |
 
 ## Manual Deployment via AWS CLI
 
@@ -138,20 +152,22 @@ Once you have the relay address from SSM, paste it into:
 **Harbor > Network > Advanced > Add Relay Address**
 
 The address format is:
+
 ```
 /ip4/<PUBLIC_IP>/tcp/4001/p2p/<PEER_ID>
 ```
 
 ## Cost Breakdown
 
-| Resource | Free Tier | After Free Tier |
-|----------|-----------|-----------------|
-| EC2 t2.micro | 750 hours/month (1 year) | ~$8.50/month |
-| EBS Storage (8GB gp3) | 30GB free | ~$0.64/month |
-| Data Transfer | 100GB out free | $0.09/GB |
-| Elastic IP | Free when attached | $3.60/month if unused |
+| Resource              | Free Tier                | After Free Tier       |
+| --------------------- | ------------------------ | --------------------- |
+| EC2 t2.micro          | 750 hours/month (1 year) | ~$8.50/month          |
+| EBS Storage (8GB gp3) | 30GB free                | ~$0.64/month          |
+| Data Transfer         | 100GB out free           | $0.09/GB              |
+| Elastic IP            | Free when attached       | $3.60/month if unused |
 
 **Total estimated cost:**
+
 - First 12 months: **$0** (free tier)
 - After free tier: **~$10-14/month**
 
@@ -198,6 +214,7 @@ systemctl status SERVICE_NAME
 ## Troubleshooting
 
 **Relay not starting:**
+
 ```bash
 # Check service status
 systemctl status SERVICE_NAME
@@ -210,6 +227,7 @@ cat /var/log/user-data.log
 ```
 
 **Can't connect from Harbor:**
+
 1. Verify security group allows inbound on port 4001 (TCP and UDP)
 2. Check that the relay address in SSM is correct and complete
 3. Ensure the relay service is running: `systemctl status SERVICE_NAME`
@@ -233,6 +251,7 @@ Use `docs/voice-call-e2e-validation.md`, `docs/video-group-call-validation.md`, 
 ## Cleanup
 
 To delete all resources:
+
 ```bash
 aws cloudformation delete-stack --stack-name harbor-relay
 ```
@@ -271,6 +290,7 @@ This will remove the EC2 instance, VPC, security groups, and all associated reso
 ```
 
 When two Harbor users are both behind NAT:
+
 1. Both connect to the relay server
 2. Messages are forwarded through the relay
 3. DCUtR (hole punching) attempts to establish a direct connection

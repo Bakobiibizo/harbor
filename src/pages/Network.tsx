@@ -1497,8 +1497,8 @@ function DeployRelayContent() {
             Deploy Your Own Server
           </p>
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Choose between a lightweight relay or a full community server. Both are free tier
-            eligible!
+            Choose a connection-only relay or a community relay with boards. AWS may charge for
+            compute, storage, addresses, and traffic; review the estimate before creating the stack.
           </p>
         </div>
       </div>
@@ -1517,7 +1517,7 @@ function DeployRelayContent() {
               className="text-sm font-semibold"
               style={{ color: 'hsl(var(--harbor-text-primary))' }}
             >
-              Option A: Relay Server (Free)
+              Option A: Connection Relay
             </p>
             <span
               className="px-2 py-0.5 rounded-full text-xs font-medium"
@@ -1543,7 +1543,7 @@ function DeployRelayContent() {
             )
           }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
-          style={{ background: 'linear-gradient(135deg, #FF9900, #FF6600)', color: 'white' }}
+          style={{ background: 'hsl(var(--harbor-primary))', color: 'white' }}
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -1598,8 +1598,7 @@ function DeployRelayContent() {
           }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
           style={{
-            background:
-              'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+            background: 'hsl(var(--harbor-primary))',
             color: 'white',
           }}
         >

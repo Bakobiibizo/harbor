@@ -155,6 +155,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                window.set_icon(icon)?;
+            }
             // Get app data directory first so we can set up logging properly
             let app_data_dir = app
                 .path()

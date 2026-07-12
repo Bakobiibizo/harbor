@@ -44,7 +44,7 @@ const CONTENT_TYPES: {
   },
   {
     type: 'thought',
-    label: 'Thought',
+    label: 'Tweet',
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path
@@ -119,15 +119,12 @@ const VISIBILITY_OPTIONS: { visibility: PostVisibility; label: string; descripti
   },
 ];
 
-/** Filter options including "All" */
-const FILTER_OPTIONS: { type: WallContentType | 'all'; label: string }[] = [
-  { type: 'all', label: 'All' },
-  { type: 'post', label: 'Posts' },
-  { type: 'thought', label: 'Thoughts' },
-  { type: 'image', label: 'Images' },
-  { type: 'video', label: 'Videos' },
+const FILTER_OPTIONS: { type: 'posts' | 'images' | 'videos' | 'audio'; label: string }[] = [
+  { type: 'posts', label: 'Posts' },
+  { type: 'images', label: 'Images' },
+  { type: 'videos', label: 'Videos' },
   { type: 'audio', label: 'Audio' },
-];
+] as const;
 
 const PREVIEW_OPTIONS: {
   perspective: WallPreviewPerspective;
@@ -412,7 +409,7 @@ export function WallPage() {
     editingPostId,
     setEditingPost,
   } = useWallStore();
-  const defaultVisibility = useSettingsStore((settings) => settings.defaultVisibility);
+  const { defaultVisibility, socialView, setSocialView } = useSettingsStore();
   const [newPost, setNewPost] = useState('');
   const [isComposing, setIsComposing] = useState(false);
   const [selectedContentType, setSelectedContentType] = useState<WallContentType>('post');
@@ -423,7 +420,7 @@ export function WallPage() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [shareAction, setShareAction] = useState<ShareAction | null>(null);
-  const [filterType, setFilterType] = useState<WallContentType | 'all'>('all');
+  const [showPreview, setShowPreview] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<
     { type: 'image' | 'video' | 'audio'; url: string; name: string; file: File }[]
   >([]);
@@ -442,9 +439,10 @@ export function WallPage() {
 
   // Filter posts by selected content type
   const filteredPosts = useMemo(() => {
-    if (filterType === 'all') return posts;
-    return posts.filter((post) => post.contentType === filterType);
-  }, [posts, filterType]);
+    if (socialView === 'posts') return posts;
+    const type = socialView === 'images' ? 'image' : socialView === 'videos' ? 'video' : 'audio';
+    return posts.filter((post) => post.contentType === type);
+  }, [posts, socialView]);
 
   // Load posts from SQLite on mount
   useEffect(() => {
@@ -790,6 +788,23 @@ export function WallPage() {
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
         <div className="max-w-3xl mx-auto">
+          <div
+            className="mb-4 h-36 rounded-xl overflow-hidden relative flex items-center px-6"
+            style={{ background: 'hsl(var(--harbor-bg-elevated))' }}
+          >
+            <img src="/harbor.svg" alt="" className="absolute right-5 w-32 h-32 opacity-80" />
+            <div className="relative z-10">
+              <p
+                className="text-xs uppercase tracking-[0.2em] font-semibold"
+                style={{ color: 'hsl(var(--harbor-primary))' }}
+              >
+                Your space
+              </p>
+              <p className="text-xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                Share what matters to you.
+              </p>
+            </div>
+          </div>
           <h1 className="text-2xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
             Wall
           </h1>
@@ -888,11 +903,8 @@ export function WallPage() {
               })}
             </div>
 
-            {/* Visibility selector */}
-            <div
-              className="px-5 py-3 border-b flex flex-col gap-3 sm:flex-row sm:items-center"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
+            {/* Visibility is a compact publish control in the composer footer. */}
+            <div className="hidden" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
               <span
                 className="text-xs font-medium flex-shrink-0"
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
@@ -1084,6 +1096,22 @@ export function WallPage() {
                     />
                   </svg>
                 </button>
+                <button
+                  type="button"
+                  aria-pressed={selectedVisibility === 'public'}
+                  onClick={() =>
+                    setSelectedVisibility(selectedVisibility === 'public' ? 'contacts' : 'public')
+                  }
+                  className="ml-2 px-3 py-2 rounded-lg text-xs font-semibold"
+                  title="Public posts appear in public wall previews and exported RSS. Contacts posts are shared only with contacts who have wall access."
+                  style={{
+                    background: 'hsl(var(--harbor-surface-2))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                  }}
+                >
+                  {selectedVisibility === 'public' ? 'Public' : 'Contacts'}
+                </button>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1128,9 +1156,21 @@ export function WallPage() {
             </div>
           </div>
 
+          <button
+            type="button"
+            onClick={() => setShowPreview((value) => !value)}
+            className="px-4 py-2 rounded-lg text-sm font-semibold"
+            style={{
+              background: 'hsl(var(--harbor-surface-2))',
+              color: 'hsl(var(--harbor-text-primary))',
+              border: '1px solid hsl(var(--harbor-border-subtle))',
+            }}
+          >
+            {showPreview ? 'Close wall preview' : 'Preview and share wall'}
+          </button>
           {/* Preview, RSS, and sharing surfaces */}
           <section
-            className="rounded-lg overflow-hidden"
+            className={`${showPreview ? '' : 'hidden'} rounded-lg overflow-hidden`}
             aria-labelledby="wall-preview-share-heading"
             style={{
               background: 'hsl(var(--harbor-bg-elevated))',
@@ -1466,29 +1506,26 @@ export function WallPage() {
             </div>
           </section>
 
-          {/* Filter bar */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <span
-              className="text-xs font-medium flex-shrink-0"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
-              Filter:
-            </span>
+          {/* Distinct wall views */}
+          <div
+            className="grid grid-cols-4 border-b"
+            style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+          >
             {FILTER_OPTIONS.map((opt) => {
-              const isActive = filterType === opt.type;
+              const isActive = socialView === `${opt.type}`;
               return (
                 <button
                   key={opt.type}
-                  onClick={() => setFilterType(opt.type)}
-                  className="px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 flex-shrink-0"
+                  onClick={() => setSocialView(opt.type)}
+                  className="px-3 py-3 text-sm font-semibold transition-all duration-200"
                   style={{
                     background: isActive ? 'hsl(var(--harbor-primary) / 0.15)' : 'transparent',
                     color: isActive
                       ? 'hsl(var(--harbor-primary))'
                       : 'hsl(var(--harbor-text-secondary))',
-                    border: isActive
-                      ? '1px solid hsl(var(--harbor-primary) / 0.3)'
-                      : '1px solid hsl(var(--harbor-border-subtle))',
+                    borderBottom: isActive
+                      ? '3px solid hsl(var(--harbor-primary))'
+                      : '3px solid transparent',
                   }}
                 >
                   {opt.label}
@@ -1521,15 +1558,15 @@ export function WallPage() {
                 className="text-lg font-semibold mb-2"
                 style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
-                {filterType === 'all'
+                {socialView === 'posts'
                   ? 'No posts yet'
-                  : `No ${FILTER_OPTIONS.find((f) => f.type === filterType)?.label.toLowerCase() || 'posts'} yet`}
+                  : `No ${FILTER_OPTIONS.find((f) => f.type === socialView)?.label.toLowerCase() || 'posts'} yet`}
               </h3>
               <p
                 className="text-sm max-w-xs mx-auto"
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               >
-                {filterType === 'all'
+                {socialView === 'posts'
                   ? 'Share your first post with your contacts. Your posts are stored locally and shared peer-to-peer.'
                   : 'Try creating one using the composer above, or switch to a different filter.'}
               </p>

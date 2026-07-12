@@ -275,8 +275,27 @@ export function AboutSection() {
           About Harbor
         </h4>
         <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          A decentralized, peer-to-peer social platform built with privacy in mind.
+          A decentralized, peer-to-peer social platform powered by Hydra-Dynamix. For a custom
+          deployment or a hosted community relay, contact admin@hydra-dynamix.com.
         </p>
+        <div className="flex flex-wrap gap-4 mb-3">
+          <a
+            href="https://www.social-harbor.com/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-semibold"
+            style={{ color: 'hsl(var(--harbor-primary))' }}
+          >
+            Read the Harbor guide
+          </a>
+          <a
+            href="mailto:admin@hydra-dynamix.com"
+            className="text-sm font-semibold"
+            style={{ color: 'hsl(var(--harbor-primary))' }}
+          >
+            Contact Hydra-Dynamix
+          </a>
+        </div>
         <a
           href="https://github.com/bakobiibizo/harbor"
           target="_blank"

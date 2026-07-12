@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { useBoardsStore, useIdentityStore } from '../stores';
+import { useBoardsStore, useIdentityStore, useSettingsStore } from '../stores';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
 
 function formatTimeAgo(unixSeconds: number): string {
@@ -252,7 +252,7 @@ function CommunityItem({
           className="text-sm font-medium truncate"
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
         >
-          {community.communityName || shortPeerId(community.relayPeerId)}
+          {community.communityName || 'Harbor Community'}
         </p>
         <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           {shortPeerId(community.relayPeerId)}
@@ -336,6 +336,7 @@ function JoinCommunityForm({ onJoin }: { onJoin: (address: string) => Promise<vo
 export function BoardsPage() {
   const { state } = useIdentityStore();
   const identity = state.status === 'unlocked' ? state.identity : null;
+  const { communityView, setCommunityView } = useSettingsStore();
 
   const {
     communities,
@@ -381,6 +382,12 @@ export function BoardsPage() {
       toast.error('Failed to leave community');
     }
   };
+  const visibleBoardPosts = boardPosts.filter((post) => {
+    if (communityView === 'posts') return true;
+    const type =
+      communityView === 'images' ? 'image' : communityView === 'videos' ? 'video' : 'audio';
+    return post.contentType === type;
+  });
 
   // Empty state - no communities joined
   if (communities.length === 0 && !isLoading) {
@@ -451,7 +458,7 @@ export function BoardsPage() {
             </h1>
             <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
               {activeCommunity
-                ? activeCommunity.communityName || shortPeerId(activeCommunity.relayPeerId)
+                ? activeCommunity.communityName || 'Harbor Community'
                 : 'Select a community'}
             </p>
           </div>
@@ -516,6 +523,30 @@ export function BoardsPage() {
             <div className="max-w-2xl mx-auto p-6 space-y-4">
               {/* Board tabs */}
               <BoardTabs boards={boards} activeBoard={activeBoard} onSelect={selectBoard} />
+              <div
+                className="grid grid-cols-4 border-b"
+                style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+              >
+                {(['posts', 'images', 'videos', 'audio'] as const).map((view) => (
+                  <button
+                    key={view}
+                    onClick={() => setCommunityView(view)}
+                    className="px-3 py-3 text-sm font-semibold capitalize"
+                    style={{
+                      color:
+                        communityView === view
+                          ? 'hsl(var(--harbor-primary))'
+                          : 'hsl(var(--harbor-text-secondary))',
+                      borderBottom:
+                        communityView === view
+                          ? '3px solid hsl(var(--harbor-primary))'
+                          : '3px solid transparent',
+                    }}
+                  >
+                    {view}
+                  </button>
+                ))}
+              </div>
 
               {/* Error display */}
               {error && (
@@ -535,7 +566,7 @@ export function BoardsPage() {
               {activeBoard && <PostComposer onSubmit={handleSubmitPost} />}
 
               {/* Posts */}
-              {boardPosts.length === 0 && !isLoading ? (
+              {visibleBoardPosts.length === 0 && !isLoading ? (
                 <div className="text-center py-12">
                   <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     {activeBoard ? 'No posts yet. Be the first to post!' : 'No boards available.'}
@@ -543,7 +574,7 @@ export function BoardsPage() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {boardPosts.map((post) => (
+                  {visibleBoardPosts.map((post) => (
                     <PostCard
                       key={post.postId}
                       post={post}
