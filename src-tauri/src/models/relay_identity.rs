@@ -140,8 +140,16 @@ pub struct RelayKeyRotation {
     pub next_key_id: String,
     pub next_public_key: Vec<u8>,
     pub not_before: i64,
+    pub not_after: i64,
     pub issued_at: i64,
     pub sequence: u64,
+    pub compromise_from: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedRelayKeyRotation {
+    pub rotation: RelayKeyRotation,
+    pub previous_key_signature: Vec<u8>,
 }
 
 #[cfg(test)]

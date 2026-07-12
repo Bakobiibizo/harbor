@@ -121,6 +121,8 @@ sudo systemctl start harbor-relay
 
 `--identity-namespace` is required for relay-scoped names such as `@alice@relay.example.com`. Use a lowercase DNS hostname you control, point its DNS record at the stable relay address, and provision HTTPS before exposing HTTP-based discovery endpoints. The relay is authoritative only for its own namespace; it is not a global Harbor user directory.
 
+The identity key is also the relay namespace authority. Do not replace it as an ordinary binary update. Planned rotations and compromise recovery must follow [`../docs/relay-key-rotation-operations.md`](../docs/relay-key-rotation-operations.md).
+
 ### Firewall
 
 Make sure port 4001 (or your chosen port) is open for both TCP and UDP:

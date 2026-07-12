@@ -22,6 +22,7 @@ const MIGRATION_016: &str = include_str!("migrations/016_relay_name_claims.sql")
 const MIGRATION_017: &str = include_str!("migrations/017_private_introductions.sql");
 const MIGRATION_018: &str = include_str!("migrations/018_private_mentions.sql");
 const MIGRATION_019: &str = include_str!("migrations/019_identity_migration_state.sql");
+const MIGRATION_020: &str = include_str!("migrations/020_relay_key_rotation.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -364,6 +365,10 @@ impl Database {
             conn.execute_batch(MIGRATION_019)?;
             conn.execute("UPDATE schema_version SET version = 19 WHERE id = 1", [])?;
             info!("Migration 019 complete");
+        }
+        if version < 20 {
+            conn.execute_batch(MIGRATION_020)?;
+            info!("Migration 020 complete");
         }
 
         Ok(())
@@ -855,7 +860,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 19);
+            assert_eq!(version, 20);
 
             for table in [
                 "relay_trust_keys",

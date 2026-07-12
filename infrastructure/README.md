@@ -29,6 +29,8 @@ Before deployment:
 
 The namespace is an identity authority. Changing it later changes users' qualified names, so choose a durable hostname rather than an EC2 hostname or raw IP address.
 
+Before replacing a relay identity key, follow the signed rotation and emergency recovery procedure in [`../docs/relay-key-rotation-operations.md`](../docs/relay-key-rotation-operations.md). Replacing `id.key` without that procedure changes the relay peer ID and is intentionally rejected by clients with an existing namespace pin.
+
 ## Two Templates
 
 | Template              | File                                  | Use Case                                             |

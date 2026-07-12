@@ -14,6 +14,7 @@ pub mod name_claim_service;
 pub mod permissions_service;
 pub mod posts_service;
 pub mod private_introduction_service;
+pub mod relay_key_rotation_service;
 pub mod signing;
 pub mod wall_social_service;
 

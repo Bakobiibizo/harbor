@@ -5,8 +5,11 @@ use crate::{
         Database,
     },
     error::{AppError, Result},
-    models::NameClaim,
-    services::{name_claim_service::verify_and_cache, IdentityService},
+    models::{NameClaim, SignedRelayKeyRotation},
+    services::{
+        name_claim_service::verify_and_cache, relay_key_rotation_service::apply_signed_rotation,
+        IdentityService,
+    },
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -103,6 +106,19 @@ pub fn verify_name_claim(claim: NameClaim, db: State<'_, Arc<Database>>) -> Resu
         chrono::Utc::now().timestamp(),
     )
     .is_ok())
+}
+
+#[tauri::command]
+pub fn apply_relay_key_rotation(
+    signed_rotation: SignedRelayKeyRotation,
+    db: State<'_, Arc<Database>>,
+) -> Result<bool> {
+    apply_signed_rotation(
+        &RelayNamesRepository::new(&db),
+        &signed_rotation,
+        chrono::Utc::now().timestamp(),
+    )
+    .map_err(|error| AppError::Crypto(error.to_string()))
 }
 
 #[derive(Serialize)]
