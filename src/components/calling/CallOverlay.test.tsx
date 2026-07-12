@@ -89,8 +89,10 @@ describe('CallOverlay group call UI', () => {
     expect(screen.getByRole('dialog', { name: 'Group call' })).toBeInTheDocument();
     expect(screen.getByText('Group video call')).toBeInTheDocument();
     expect(screen.getByText('3/4 participants · degraded')).toBeInTheDocument();
-    expect(screen.getByText('Alice')).toBeInTheDocument();
-    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('peer-a (unverified)')).toBeInTheDocument();
+    expect(screen.getByText('peer-b (unverified)')).toBeInTheDocument();
+    expect(screen.queryByText('Alice')).not.toBeInTheDocument();
+    expect(screen.queryByText('Bob')).not.toBeInTheDocument();
     expect(
       screen.getByText(
         'Some participants have degraded media; remaining mesh connections continue.',

@@ -559,6 +559,14 @@ mod tests {
     #[test]
     fn contact_card_revocation_overrides_legacy_permission() {
         let (db, identity_service, service) = create_test_service();
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test User".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
         let issuer = identity_service.get_identity().unwrap().unwrap().peer_id;
         let subject = "12D3KooWContact";
         service
@@ -604,6 +612,14 @@ mod tests {
     #[test]
     fn expired_contact_card_capability_denies_access() {
         let (db, identity_service, service) = create_test_service();
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test User".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
         let issuer = identity_service.get_identity().unwrap().unwrap().peer_id;
         let subject = "12D3KooWExpired";
         let now = chrono::Utc::now().timestamp();

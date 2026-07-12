@@ -58,19 +58,6 @@ pub struct MentionReceipt {
     pub preview: String,
     pub created_at: i64,
 }
-#[derive(Serialize)]
-struct MentionSignature<'a> {
-    domain: &'static str,
-    post_id: &'a str,
-    qualified_name: &'a str,
-    intent: &'a str,
-    sender_peer_id: &'a str,
-    authorized_peer_id: Option<&'a str>,
-    claim_digest: Option<&'a str>,
-    created_at: i64,
-}
-impl Signable for MentionSignature<'_> {}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivateMentionPayload {
     pub domain: String,
