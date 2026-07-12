@@ -16,9 +16,9 @@ Allow issuers to narrow or revoke future access while stating honestly that disc
 
 ## Acceptance criteria
 
-- [ ] Add signed monotonic grant revisions, revocations, expiries, and idempotent sync.
-- [ ] Enforce revocation at direct and relay content paths before serving new data.
-- [ ] Surface stale/offline status without claiming already downloaded data was erased.
+- [x] Add signed monotonic grant revisions, revocations, expiries, and idempotent sync.
+- [x] Enforce revocation at direct and relay content paths before serving new data.
+- [x] Surface stale/offline status without claiming already downloaded data was erased.
 
 ## Validation
 

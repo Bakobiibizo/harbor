@@ -16,9 +16,9 @@ Pin relay authority keys and accept replacements only through a verifiable rotat
 
 ## Acceptance criteria
 
-- [ ] Define first-use/predistributed trust, active key IDs, signed successor records, and compromise windows.
-- [ ] Persist pins locally and require explicit user action for an unverifiable replacement.
-- [ ] Publish operator rotation and emergency recovery procedures without committing private keys.
+- [x] Define first-use/predistributed trust, active key IDs, signed successor records, and compromise windows.
+- [x] Persist pins locally and require explicit user action for an unverifiable replacement.
+- [x] Publish operator rotation and emergency recovery procedures without committing private keys.
 
 ## Validation
 

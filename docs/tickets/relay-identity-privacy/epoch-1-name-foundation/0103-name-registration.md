@@ -16,9 +16,9 @@ Register a unique name by countersigning a user-signed request whose key derives
 
 ## Acceptance criteria
 
-- [ ] Add authenticated relay registration API and client command/service.
-- [ ] Verify normalization, peer-ID derivation, signature, nonce, timestamps, availability, and sequence.
-- [ ] Reserve atomically and never silently reassign retired names.
+- [x] Add authenticated relay registration API and client command/service.
+- [x] Verify normalization, peer-ID derivation, signature, nonce, timestamps, availability, and sequence.
+- [x] Reserve atomically and never silently reassign retired names.
 
 ## Validation
 

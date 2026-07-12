@@ -16,9 +16,9 @@ Prove the complete design with two relays and three identities before Harbor 1.0
 
 ## Acceptance criteria
 
-- [ ] Validate registration collisions, relay loss, private introduction, approval, capability use/revocation, mention review, and restart recovery.
-- [ ] Attempt enumeration, replay, forged claims, relay-key substitution, wrong-recipient decryption, capability theft, and unauthorized content retrieval.
-- [ ] Update onboarding/operator docs and record reproducible evidence for every security invariant in the source specification.
+- [x] Validate registration collisions, relay loss, private introduction, approval, capability use/revocation, mention review, and restart recovery.
+- [x] Attempt enumeration, replay, forged claims, relay-key substitution, wrong-recipient decryption, capability theft, and unauthorized content retrieval.
+- [x] Update onboarding/operator docs and record reproducible evidence for every security invariant in the source specification.
 
 ## Validation
 

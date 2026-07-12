@@ -16,9 +16,9 @@ On approval, issue a user-signed contact card and least-privilege grants encrypt
 
 ## Acceptance criteria
 
-- [ ] Bind the verified claim, peer ID, public keys, routing, capabilities, revision, expiry, and revocation ID.
-- [ ] Encrypt with X25519-derived authenticated encryption and reject wrong-recipient or modified cards.
-- [ ] Map wall, messaging, call, media, and mention permissions onto existing capability enforcement.
+- [x] Bind the verified claim, peer ID, public keys, routing, capabilities, revision, expiry, and revocation ID.
+- [x] Encrypt with X25519-derived authenticated encryption and reject wrong-recipient or modified cards.
+- [x] Map wall, messaging, call, media, and mention permissions onto existing capability enforcement.
 
 ## Validation
 

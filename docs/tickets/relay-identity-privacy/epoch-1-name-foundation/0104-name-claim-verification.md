@@ -16,9 +16,9 @@ Verify both user and pinned-relay signatures before any name is presented as ver
 
 ## Acceptance criteria
 
-- [ ] Verify canonical form, peer-ID derivation, both signatures, relay audience, validity window, sequence, and key ID.
-- [ ] Cache only verified claims and mark expired, superseded, or untrusted claims distinctly.
-- [ ] Expose a typed verification result; callers cannot treat plain strings as verified identities.
+- [x] Verify canonical form, peer-ID derivation, both signatures, relay audience, validity window, sequence, and key ID.
+- [x] Cache only verified claims and mark expired, superseded, or untrusted claims distinctly.
+- [x] Expose a typed verification result; callers cannot treat plain strings as verified identities.
 
 ## Validation
 

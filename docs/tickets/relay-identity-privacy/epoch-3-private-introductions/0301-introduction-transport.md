@@ -16,9 +16,9 @@ Let an authenticated peer request delivery to a qualified name without receiving
 
 ## Acceptance criteria
 
-- [ ] Add signed, encrypted, expiring introduction envelopes and bounded relay queue storage.
-- [ ] Relay validates auth, work, limits, envelope metadata, and replay state but cannot decrypt the message.
-- [ ] Unknown, private, offline, blocked, and forwarded cases return indistinguishable generic responses.
+- [x] Add signed, encrypted, expiring introduction envelopes and bounded relay queue storage.
+- [x] Relay validates auth, work, limits, envelope metadata, and replay state but cannot decrypt the message.
+- [x] Unknown, private, offline, blocked, and forwarded cases return indistinguishable generic responses.
 
 ## Validation
 

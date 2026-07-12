@@ -16,9 +16,9 @@ Use the single verified relay name throughout onboarding, profiles, contacts, po
 
 ## Acceptance criteria
 
-- [ ] Onboarding registers a relay-unique name and explains `@name@relay` plainly.
-- [ ] Security-sensitive and unfamiliar-user views show the full qualified name; local shortening is unambiguous.
-- [ ] Arbitrary self-authored labels can never appear with verified-name styling.
+- [x] Onboarding registers a relay-unique name and explains `@name@relay` plainly.
+- [x] Security-sensitive and unfamiliar-user views show the full qualified name; local shortening is unambiguous.
+- [x] Arbitrary self-authored labels can never appear with verified-name styling.
 
 ## Validation
 

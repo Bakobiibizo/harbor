@@ -16,9 +16,9 @@ Decrypt incoming requests locally and let the target approve, ignore, reject, or
 
 ## Acceptance criteria
 
-- [ ] Verify requester key, peer ID, signature, freshness, and envelope binding before display.
-- [ ] Store decisions and blocks locally; do not upload the approved-contact list.
-- [ ] Present the full verified qualified requester name in every decision surface.
+- [x] Verify requester key, peer ID, signature, freshness, and envelope binding before display.
+- [x] Store decisions and blocks locally; do not upload the approved-contact list.
+- [x] Present the full verified qualified requester name in every decision surface.
 
 ## Validation
 

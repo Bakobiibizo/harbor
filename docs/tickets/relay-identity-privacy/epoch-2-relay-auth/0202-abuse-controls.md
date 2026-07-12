@@ -16,9 +16,9 @@ Rate-limit relay actions and require adaptive, action-bound Hashcash work for un
 
 ## Acceptance criteria
 
-- [ ] Implement the specified hash preimage, difficulty target, challenge signing, expiry, and single-use storage.
-- [ ] Apply per-peer, source-network, target, action, and global limits with contact-capability bypass.
-- [ ] Return generic responses and bounded timing behavior that do not confirm target existence.
+- [x] Implement the specified hash preimage, difficulty target, challenge signing, expiry, and single-use storage.
+- [x] Apply per-peer, source-network, target, action, and global limits with contact-capability bypass.
+- [x] Return generic responses and bounded timing behavior that do not confirm target existence.
 
 ## Validation
 

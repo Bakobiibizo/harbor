@@ -14,6 +14,10 @@ The script runs the complete frontend, client, and relay CI gates before named i
 
 Retain the log with the release evidence. A command that selects zero tests is not evidence; confirm every invocation reports at least one test executed.
 
+## Recorded release result
+
+On 2026-07-12, commit `d9159b81685f6bbad17eedbc49142a47d68e5650` passed the canonical gate. The run included 394 frontend tests, 258 client tests, 44 relay tests, strict TypeScript and ESLint checks, production frontend compilation, and Rust formatting, checking, and Clippy for all targets. The production JavaScript dependency audit and both Rust `cargo deny` audits passed. A tracked-file credential-pattern scan found no secrets. The only remaining step before broad distribution is the packaged-app UX smoke described below.
+
 ## Isolated topology
 
 Use disposable data only. Never copy a production identity or relay key into this exercise.

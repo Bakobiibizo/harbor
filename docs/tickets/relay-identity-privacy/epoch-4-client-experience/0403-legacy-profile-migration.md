@@ -16,9 +16,9 @@ Require existing identities to claim a relay name without losing their peer ID, 
 
 ## Acceptance criteria
 
-- [ ] Preserve old names only as explicitly unverified local migration hints.
-- [ ] Block identity-dependent publishing until registration completes or the user knowingly remains on beta compatibility mode.
-- [ ] Provide collision recovery and rollback-safe database migration.
+- [x] Preserve old names only as explicitly unverified local migration hints.
+- [x] Block identity-dependent publishing until registration completes or the user knowingly remains on beta compatibility mode.
+- [x] Provide collision recovery and rollback-safe database migration.
 
 ## Validation
 

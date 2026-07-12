@@ -16,9 +16,9 @@ Represent tags as signed structured mentions and privately deliver unresolved me
 
 ## Acceptance criteria
 
-- [ ] Composer resolves known contacts locally and sends private relay envelopes for qualified unknown names.
-- [ ] Posts sign typed mention records, claim digests, and authorized peer IDs instead of trusting parsed text.
-- [ ] Recipients may accept a notification or repost request without granting broader contact access.
+- [x] Composer resolves known contacts locally and sends private relay envelopes for qualified unknown names.
+- [x] Posts sign typed mention records, claim digests, and authorized peer IDs instead of trusting parsed text.
+- [x] Recipients may accept a notification or repost request without granting broader contact access.
 
 ## Validation
 

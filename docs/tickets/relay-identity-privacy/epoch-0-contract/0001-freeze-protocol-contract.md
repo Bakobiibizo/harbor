@@ -16,9 +16,9 @@ Turn the source specification into versioned canonical-CBOR schemas and protocol
 
 ## Acceptance criteria
 
-- [ ] Define signed schemas for name requests/claims, challenges, introductions, contact cards, grants, revocations, mentions, and relay-key rotations.
-- [ ] Specify signature domains, field limits, time units, sequence rules, and deterministic test vectors.
-- [ ] Add the Harbor 1.0 release-gate contract and explicitly record deferred features.
+- [x] Define signed schemas for name requests/claims, challenges, introductions, contact cards, grants, revocations, mentions, and relay-key rotations.
+- [x] Specify signature domains, field limits, time units, sequence rules, and deterministic test vectors.
+- [x] Add the Harbor 1.0 release-gate contract and explicitly record deferred features.
 
 ## Validation
 

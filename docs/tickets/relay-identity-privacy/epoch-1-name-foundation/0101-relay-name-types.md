@@ -16,9 +16,9 @@ Implement one shared parser and formatter for `@name@relay` across Rust, relay, 
 
 ## Acceptance criteria
 
-- [ ] Enforce the ASCII syntax, length, hyphen, lowercase, and IDNA relay rules from the spec.
-- [ ] Return typed local name, relay hostname, and canonical qualified form.
-- [ ] Reject Unicode confusables, ports, schemes, paths, ambiguous `@` forms, and noncanonical serialized values.
+- [x] Enforce the ASCII syntax, length, hyphen, lowercase, and IDNA relay rules from the spec.
+- [x] Return typed local name, relay hostname, and canonical qualified form.
+- [x] Reject Unicode confusables, ports, schemes, paths, ambiguous `@` forms, and noncanonical serialized values.
 
 ## Validation
 

@@ -16,9 +16,9 @@ Authenticate relay clients with existing Ed25519 identities instead of passwords
 
 ## Acceptance criteria
 
-- [ ] Issue random signed, single-use, action-bound challenges with short expiry.
-- [ ] Verify the response signature and peer-ID derivation before issuing a short-lived scoped token.
-- [ ] Prevent token replay, audience confusion, privilege expansion, and use after expiry.
+- [x] Issue random signed, single-use, action-bound challenges with short expiry.
+- [x] Verify the response signature and peer-ID derivation before issuing a short-lived scoped token.
+- [x] Prevent token replay, audience confusion, privilege expansion, and use after expiry.
 
 ## Validation
 

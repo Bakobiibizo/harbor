@@ -16,9 +16,9 @@ Add client and relay persistence for versioned claims, sequence state, relay tru
 
 ## Acceptance criteria
 
-- [ ] Add forward-only SQLite migrations and repositories on both client and relay.
-- [ ] Enforce one active claim per relay/local-name and monotonic sequences atomically.
-- [ ] Store no private user keys or approved-contact lists in relay tables.
+- [x] Add forward-only SQLite migrations and repositories on both client and relay.
+- [x] Enforce one active claim per relay/local-name and monotonic sequences atomically.
+- [x] Store no private user keys or approved-contact lists in relay tables.
 
 ## Validation
 
