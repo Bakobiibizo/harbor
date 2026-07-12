@@ -13,17 +13,17 @@ export function getInitials(name: string): string {
     .slice(0, 2);
 }
 
-/** Generate a consistent gradient color from a peer ID hash. */
+/** Generate a consistent, brand-compatible solid fallback color from a peer ID hash. */
 export function getContactColor(peerId: string): string {
   const colors = [
-    'linear-gradient(135deg, hsl(220 91% 54%), hsl(262 83% 58%))',
-    'linear-gradient(135deg, hsl(262 83% 58%), hsl(330 81% 60%))',
-    'linear-gradient(135deg, hsl(152 69% 40%), hsl(180 70% 45%))',
-    'linear-gradient(135deg, hsl(36 90% 55%), hsl(15 80% 55%))',
-    'linear-gradient(135deg, hsl(200 80% 50%), hsl(220 91% 54%))',
-    'linear-gradient(135deg, hsl(340 75% 55%), hsl(10 80% 60%))',
-    'linear-gradient(135deg, hsl(280 70% 50%), hsl(320 75% 55%))',
-    'linear-gradient(135deg, hsl(170 65% 45%), hsl(200 70% 50%))',
+    '#2f4263',
+    '#3d5fb9',
+    '#1769d7',
+    '#0f38a1',
+    '#42657a',
+    '#496178',
+    '#315c68',
+    '#5a6475',
   ];
   let hash = 0;
   for (let characterIndex = 0; characterIndex < peerId.length; characterIndex++) {

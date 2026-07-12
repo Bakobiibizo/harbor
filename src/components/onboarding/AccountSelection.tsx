@@ -63,15 +63,8 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
         <div className="max-w-md">
           {/* Logo */}
           <div className="flex items-center gap-4 mb-8">
-            <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center"
-              style={{
-                background:
-                  'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                boxShadow: '0 8px 32px hsl(var(--harbor-primary) / 0.4)',
-              }}
-            >
-              <HarborIcon className="w-8 h-8 text-white" />
+            <div className="w-14 h-14 flex items-center justify-center">
+              <HarborIcon className="w-14 h-14" />
             </div>
             <div>
               <h1
@@ -111,14 +104,8 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
           >
             {/* Mobile logo */}
             <div className="lg:hidden flex items-center gap-3 mb-6">
-              <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{
-                  background:
-                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                }}
-              >
-                <HarborIcon className="w-6 h-6 text-white" />
+              <div className="w-10 h-10 flex items-center justify-center">
+                <HarborIcon className="w-10 h-10" />
               </div>
               <span
                 className="text-lg font-bold"
@@ -166,8 +153,9 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                     <div
                       className="w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0"
                       style={{
-                        background:
-                          'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                        background: account.avatarHash
+                          ? 'transparent'
+                          : 'hsl(var(--harbor-surface-3))',
                       }}
                     >
                       {account.avatarHash ? (

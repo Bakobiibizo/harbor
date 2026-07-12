@@ -92,9 +92,7 @@ export function ProfileSection() {
             <div
               className="w-24 h-24 rounded-full flex items-center justify-center text-2xl font-semibold text-white flex-shrink-0 overflow-hidden"
               style={{
-                background: avatarUrl
-                  ? 'transparent'
-                  : 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+                background: avatarUrl ? 'transparent' : 'hsl(var(--harbor-surface-3))',
               }}
             >
               {avatarUrl ? (

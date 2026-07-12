@@ -33,25 +33,9 @@ function LoadingScreen() {
       <div className="text-center">
         {/* Animated logo container */}
         <div className="relative mb-8">
-          {/* Outer glow ring */}
-          <div
-            className="absolute inset-0 rounded-full animate-pulse"
-            style={{
-              background:
-                'radial-gradient(circle, hsl(var(--harbor-primary) / 0.3) 0%, transparent 70%)',
-              transform: 'scale(2)',
-            }}
-          />
           {/* Logo */}
-          <div
-            className="relative w-20 h-20 rounded-2xl flex items-center justify-center mx-auto"
-            style={{
-              background:
-                'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-              boxShadow: '0 8px 32px hsl(var(--harbor-primary) / 0.4)',
-            }}
-          >
-            <HarborIcon className="w-12 h-12 text-white" />
+          <div className="relative w-20 h-20 flex items-center justify-center mx-auto">
+            <HarborIcon className="w-20 h-20" />
           </div>
         </div>
 

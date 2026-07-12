@@ -1,4 +1,4 @@
-import { type SVGProps } from 'react';
+import { type ImgHTMLAttributes, type SVGProps } from 'react';
 
 type IconProps = SVGProps<SVGSVGElement> & {
   size?: number;
@@ -241,33 +241,17 @@ export function EllipsisIcon({ size = 20, ...props }: IconProps) {
 }
 
 export function HarborLogoIcon({ size = 24, ...props }: IconProps) {
-  return <HarborIcon size={size} {...props} />;
+  return <HarborIcon size={size} className={props.className} />;
 }
 
-// Canonical Harbor sunrise mark. Product identity remains stable across themes.
-export function HarborIcon({ size = 20, ...props }: IconProps) {
+type HarborIconProps = Omit<ImgHTMLAttributes<HTMLImageElement>, 'width' | 'height' | 'src'> & {
+  size?: number;
+};
+
+// Canonical Harbor vector mark. It stands on its own and is never theme-tinted.
+export function HarborIcon({ size = 20, alt = '', ...props }: HarborIconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <path
-        d="M12 1.7 21 6.8v10.4L12 22.3 3 17.2V6.8L12 1.7Z"
-        fill="#74b3e9"
-        stroke="#344b70"
-        strokeWidth="1.5"
-      />
-      <circle cx="12" cy="11.2" r="5" fill="#f9cf00" stroke="#ff9800" strokeWidth="1" />
-      <path
-        d="m3.8 17 4.1-2.5 4.1 2.4 4.1-2.4 4.1 2.5L12 21.5 3.8 17Z"
-        fill="#1769d7"
-        stroke="#f5f7fa"
-        strokeWidth=".8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="m7.9 14.5 4.1 2.4 4.1-2.4M7.9 19.2l4.1-2.3 4.1 2.3"
-        stroke="#f5f7fa"
-        strokeWidth=".8"
-      />
-    </svg>
+    <img src="/harbor.svg" width={size} height={size} alt={alt} aria-hidden={!alt} {...props} />
   );
 }
 

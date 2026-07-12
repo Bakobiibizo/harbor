@@ -75,15 +75,8 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
           {/* Logo and branding */}
           <div className="relative text-center mb-8">
             <div className="flex items-center justify-center gap-3 mb-6">
-              <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center"
-                style={{
-                  background:
-                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                  boxShadow: '0 8px 24px hsl(var(--harbor-primary) / 0.4)',
-                }}
-              >
-                <HarborIcon className="w-7 h-7 text-white" />
+              <div className="w-12 h-12 flex items-center justify-center">
+                <HarborIcon className="w-12 h-12" />
               </div>
               <span
                 className="text-xl font-bold"
