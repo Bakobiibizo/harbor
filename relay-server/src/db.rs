@@ -165,6 +165,10 @@ pub struct WallSocialEventRow {
 }
 
 impl RelayDatabase {
+    pub fn with_connection<T>(&self, operation: impl FnOnce(&mut Connection) -> T) -> T {
+        let mut connection = self.conn.lock().expect("relay database lock poisoned");
+        operation(&mut connection)
+    }
     /// Open or create the database at the given path
     pub fn open(path: &str) -> SqliteResult<Self> {
         let conn = Connection::open(path)?;

@@ -1140,6 +1140,13 @@ impl NetworkService {
         };
 
         match response {
+            WireBoardSyncResponse::RelayAuthChallenge { .. }
+            | WireBoardSyncResponse::RelaySession { .. }
+            | WireBoardSyncResponse::RelayNameRegistered { .. }
+            | WireBoardSyncResponse::IntroductionAccepted { .. }
+            | WireBoardSyncResponse::Introductions { .. } => {
+                debug!("Received relay identity protocol response from {}", peer);
+            }
             ContentSyncResponse::Manifest {
                 responder_peer_id,
                 posts,
