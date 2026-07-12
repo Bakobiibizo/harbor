@@ -73,4 +73,20 @@ impl<'a> PrivateIntroductionsRepository<'a> {
     ) -> Result<bool> {
         self.db.with_connection(|c|c.query_row("SELECT 1 FROM contact_capability_state WHERE issuer_peer_id=? AND subject_peer_id=? AND capability=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?) LIMIT 1",params![issuer,subject,capability,at],|r|r.get::<_,i32>(0)).optional().map(|v|v.is_some()))
     }
+
+    pub fn capability_decision(
+        &self,
+        issuer: &str,
+        subject: &str,
+        capability: &str,
+        at: i64,
+    ) -> Result<Option<bool>> {
+        self.db.with_connection(|c| {
+            let state: Option<(Option<i64>, Option<i64>)> = c.query_row(
+                "SELECT expires_at,revoked_at FROM contact_capability_state WHERE issuer_peer_id=? AND subject_peer_id=? AND capability=? ORDER BY revision DESC LIMIT 1",
+                params![issuer,subject,capability], |r| Ok((r.get(0)?,r.get(1)?)))
+                .optional()?;
+            Ok(state.map(|(expires,revoked)| revoked.is_none() && expires.is_none_or(|value| value > at)))
+        })
+    }
 }
