@@ -109,28 +109,6 @@ impl AbuseGuard {
         self.issued.insert(c.id.clone(), c.clone());
         Ok(c)
     }
-    #[allow(clippy::too_many_arguments)]
-    pub fn issue(
-        &mut self,
-        relay: &str,
-        requester: &str,
-        target: &str,
-        action: &str,
-        at: i64,
-        key_id: &str,
-        key: &libp2p::identity::Keypair,
-    ) -> Result<WorkChallenge, String> {
-        self.issue_with_delivery_key(
-            relay,
-            requester,
-            target,
-            action,
-            at,
-            key_id,
-            key,
-            vec![0; 32],
-        )
-    }
     #[cfg(test)]
     pub fn remember(&mut self, challenge: WorkChallenge) {
         self.issued.insert(challenge.id.clone(), challenge);

@@ -151,7 +151,7 @@ fn two_relays_three_identities_collision_restart_and_cross_namespace_intro() {
     );
     let mut abuse = AbuseGuard::new(limits());
     let work = abuse
-        .issue(
+        .issue_with_delivery_key(
             "alpha.test",
             &bob_peer,
             "@alice@alpha.test",
@@ -159,6 +159,7 @@ fn two_relays_three_identities_collision_restart_and_cross_namespace_intro() {
             100,
             "k1",
             &auth.signing_key(),
+            vec![7; 32],
         )
         .unwrap();
     let nonce = (0..).find(|n| work.verify(*n, 100)).unwrap();
@@ -213,7 +214,7 @@ fn two_relays_three_identities_collision_restart_and_cross_namespace_intro() {
         assert_eq!(recovered[0].message_ciphertext, vec![8; 64]);
         assert_eq!(
             service
-                .acknowledge(&fresh_read, &[id.clone()], 102)
+                .acknowledge(&fresh_read, std::slice::from_ref(&id), 102)
                 .unwrap(),
             1
         );

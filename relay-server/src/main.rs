@@ -103,6 +103,65 @@ mod boundary_tests {
             assert_eq!(d, response_delay(id));
         }
     }
+    #[test]
+    fn delivery_key_is_real_for_a_claim_and_stable_decoy_otherwise() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let target_secret = x25519_dalek::StaticSecret::from([19; 32]);
+        let target_public = x25519_dalek::PublicKey::from(&target_secret)
+            .to_bytes()
+            .to_vec();
+        let claim = name_registration::NameClaim {
+            request: name_registration::NameClaimRequest {
+                domain: "harbor/name-claim-request/1".into(),
+                version: 1,
+                local_name: "alice".into(),
+                relay: "alpha.test".into(),
+                peer_id: "peer-alice".into(),
+                ed25519_public_key: vec![1; 32],
+                x25519_public_key: target_public.clone(),
+                sequence: 1,
+                issued_at: 100,
+                nonce: vec![2; 16],
+            },
+            user_signature: vec![3; 64],
+            status: "active".into(),
+            not_before: 100,
+            not_after: 1_000,
+            relay_key_id: "key-1".into(),
+            relay_signature: vec![4; 64],
+        };
+        let mut claim_cbor = Vec::new();
+        ciborium::ser::into_writer(&claim, &mut claim_cbor).unwrap();
+        database.with_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO relay_name_claims VALUES(?,?,?,?,?,?,?,?, 'active',?,NULL)",
+                    rusqlite::params![
+                        "alice",
+                        "alpha.test",
+                        "peer-alice",
+                        1,
+                        claim_cbor,
+                        100,
+                        1_000,
+                        "key-1",
+                        100
+                    ],
+                )
+                .unwrap();
+        });
+
+        assert_eq!(
+            opaque_delivery_key(&database, "@alice@alpha.test", &relay_key),
+            target_public
+        );
+        let first = opaque_delivery_key(&database, "@nobody@alpha.test", &relay_key);
+        let second = opaque_delivery_key(&database, "@nobody@alpha.test", &relay_key);
+        assert_eq!(first.len(), 32);
+        assert_eq!(first, second);
+        assert_ne!(first, target_public);
+    }
 }
 
 /// Per-peer rate limiter for board sync requests.
