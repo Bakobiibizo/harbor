@@ -208,3 +208,73 @@ pub fn register(
     tx.commit().map_err(|_| RegistrationError::Database)?;
     Ok(claim)
 }
+
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+    use crate::db::RelayDatabase;
+    use ed25519_dalek::Signer;
+    use std::sync::{Arc, Barrier};
+
+    fn signed(key: &SigningKey, name: &str, nonce: u8) -> SignedNameClaimRequest {
+        let lp =
+            identity::ed25519::PublicKey::try_from_bytes(&key.verifying_key().to_bytes()).unwrap();
+        let request = NameClaimRequest {
+            domain: REQUEST_DOMAIN.into(),
+            version: 1,
+            local_name: name.into(),
+            relay: "relay.test".into(),
+            peer_id: PeerId::from_public_key(&identity::PublicKey::from(lp)).to_string(),
+            ed25519_public_key: key.verifying_key().to_bytes().to_vec(),
+            x25519_public_key: X25519Public::from(&StaticSecret::from([nonce.max(1); 32]))
+                .to_bytes()
+                .to_vec(),
+            sequence: 1,
+            issued_at: 100,
+            nonce: vec![nonce; 32],
+        };
+        let user_signature = key.sign(&cbor(&request).unwrap()).to_bytes().to_vec();
+        SignedNameClaimRequest {
+            request,
+            user_signature,
+        }
+    }
+    fn path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("harbor-name-{}.sqlite", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn concurrent_collision_has_exactly_one_winner_and_persists_after_reopen() {
+        let path = path();
+        RelayDatabase::open(path.to_str().unwrap()).unwrap();
+        let relay_key = SigningKey::from_bytes(&[9; 32]);
+        let a = SigningKey::from_bytes(&[1; 32]);
+        let b = SigningKey::from_bytes(&[2; 32]);
+        let barrier = Arc::new(Barrier::new(2));
+        let mut joins = Vec::new();
+        for request in [signed(&a, "alice", 1), signed(&b, "alice", 2)] {
+            let p = path.clone();
+            let gate = barrier.clone();
+            let relay = relay_key.clone();
+            joins.push(std::thread::spawn(move || {
+                let mut conn = Connection::open(p).unwrap();
+                conn.busy_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                gate.wait();
+                register(&mut conn, "relay.test", "k1", &relay, request, 100)
+            }));
+        }
+        let results: Vec<_> = joins.into_iter().map(|j| j.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        drop(results);
+        let conn = Connection::open(&path).unwrap();
+        let active:i64=conn.query_row("SELECT COUNT(*) FROM relay_name_claims WHERE relay='relay.test' AND local_name='alice' AND status='active'",[],|r|r.get(0)).unwrap();
+        assert_eq!(active, 1);
+        drop(conn);
+        let reopened = Connection::open(&path).unwrap();
+        let peer:String=reopened.query_row("SELECT peer_id FROM relay_name_claims WHERE relay='relay.test' AND local_name='alice' AND status='active'",[],|r|r.get(0)).unwrap();
+        assert!(!peer.is_empty());
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+}
