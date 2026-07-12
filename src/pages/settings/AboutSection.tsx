@@ -3,8 +3,10 @@ import toast from 'react-hot-toast';
 import { checkForUpdate, downloadAndInstallUpdate } from '../../services/updater';
 import type { UpdateInfo } from '../../services/updater';
 import { SectionHeader, SettingsCard } from './shared';
+import { useAppVersion } from '../../hooks';
 
 export function AboutSection() {
+  const installedVersion = useAppVersion();
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateError, setUpdateError] = useState('');
@@ -61,7 +63,7 @@ export function AboutSection() {
           className="text-2xl font-mono font-semibold"
           style={{ color: 'hsl(var(--harbor-primary))' }}
         >
-          v0.1.0
+          {installedVersion}
         </p>
         <p className="text-sm mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
           Installed on this device

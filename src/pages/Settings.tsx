@@ -12,6 +12,7 @@ import {
 } from '../components/icons';
 import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
+import { useAppVersion } from '../hooks';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -162,6 +163,7 @@ function PasswordInput({
 }
 
 export function SettingsPage() {
+  const installedVersion = useAppVersion();
   const { state, updateDisplayName, updateBio } = useIdentityStore();
   const {
     showReadReceipts,
@@ -1455,7 +1457,7 @@ export function SettingsPage() {
                   className="text-2xl font-mono font-semibold"
                   style={{ color: 'hsl(var(--harbor-primary))' }}
                 >
-                  v0.1.0
+                  {installedVersion}
                 </p>
                 <p className="text-sm mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                   Installed on this device

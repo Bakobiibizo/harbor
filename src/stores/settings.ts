@@ -9,20 +9,19 @@ import type { IceServerConfig, IceServerInput, RedactedIceServerConfig } from '.
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSize = 'small' | 'medium' | 'large';
 export type AccentColor =
-  | 'blue'
-  | 'purple'
-  | 'green'
-  | 'orange'
-  | 'pink'
-  | 'red'
-  | 'teal'
-  | 'amber';
+  'harbor' | 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'teal' | 'amber';
 
 // Accent color definitions using HSL values
 export const ACCENT_COLORS: Record<
   AccentColor,
   { primary: string; accent: string; label: string; swatch: string }
 > = {
+  harbor: {
+    primary: '214 81% 47%',
+    accent: '50 100% 47%',
+    label: 'Harbor',
+    swatch: '#F0C900',
+  },
   blue: {
     primary: '220 91% 54%',
     accent: '262 83% 58%',
@@ -171,7 +170,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultVisibility: 'contacts',
       avatarUrl: null,
       theme: 'system',
-      accentColor: 'blue',
+      accentColor: 'harbor',
       fontSize: 'medium',
 
       // Actions
