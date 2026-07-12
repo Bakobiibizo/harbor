@@ -45,6 +45,25 @@ CREATE TABLE IF NOT EXISTS banned_peers (
     banned_by TEXT
 );
 
+CREATE TABLE IF NOT EXISTS relay_signing_keys (
+    key_id TEXT PRIMARY KEY, public_key BLOB NOT NULL, not_before INTEGER NOT NULL,
+    not_after INTEGER, retired_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS relay_name_claims (
+    local_name TEXT NOT NULL, relay TEXT NOT NULL, peer_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK(sequence > 0), claim_cbor BLOB NOT NULL,
+    not_before INTEGER NOT NULL, not_after INTEGER NOT NULL,
+    relay_key_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','retired')),
+    created_at INTEGER NOT NULL, retired_at INTEGER,
+    PRIMARY KEY(relay, local_name, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS relay_name_claims_one_active
+ ON relay_name_claims(relay,local_name) WHERE status='active';
+CREATE TABLE IF NOT EXISTS relay_name_nonces (
+    peer_id TEXT NOT NULL, nonce BLOB NOT NULL, used_at INTEGER NOT NULL,
+    PRIMARY KEY(peer_id,nonce)
+);
+
 CREATE TABLE IF NOT EXISTS author_lamport_clocks (
     author_peer_id TEXT PRIMARY KEY,
     last_seen_clock INTEGER NOT NULL DEFAULT 0,

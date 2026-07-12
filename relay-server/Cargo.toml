@@ -54,6 +54,7 @@ base64 = "0.22"
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
+thiserror = "1"
 
 [profile.release]
 lto = true

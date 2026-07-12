@@ -32,15 +32,28 @@ use crate::error::{AppError, Result};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
+use crate::models::relay_identity::{
+    CapabilityGrantRecord, CapabilityRevocationRecord, ContactCard, IntroductionRequest,
+    MentionRecord, NameClaimRequest, RelayChallenge, RelayKeyRotation,
+};
+
 /// Trait for types that can be canonically signed
 pub trait Signable: Serialize {
     /// Get the bytes to be signed (canonical CBOR encoding)
     fn signable_bytes(&self) -> Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        ciborium::into_writer(self, &mut bytes)
-            .map_err(|e| AppError::Serialization(format!("CBOR encoding failed: {}", e)))?;
-        Ok(bytes)
+        canonical_cbor(self)
     }
+}
+
+/// Serialize a protocol object using Harbor's deterministic CBOR representation.
+///
+/// Protocol structs use a fixed field order and reject maps with user-controlled
+/// ordering. Both client and relay golden vectors must use this helper.
+pub fn canonical_cbor<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    ciborium::into_writer(value, &mut bytes)
+        .map_err(|e| AppError::Serialization(format!("CBOR encoding failed: {}", e)))?;
+    Ok(bytes)
 }
 
 /// Sign data with an Ed25519 key
@@ -538,6 +551,15 @@ pub struct SignableGroupMembership {
     pub nonce: String,
     pub timestamp: i64,
 }
+
+impl Signable for NameClaimRequest {}
+impl Signable for RelayChallenge {}
+impl Signable for IntroductionRequest {}
+impl Signable for ContactCard {}
+impl Signable for CapabilityGrantRecord {}
+impl Signable for CapabilityRevocationRecord {}
+impl Signable for MentionRecord {}
+impl Signable for RelayKeyRotation {}
 
 impl Signable for SignableGroupMembership {}
 

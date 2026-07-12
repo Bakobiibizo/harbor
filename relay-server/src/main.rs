@@ -3,8 +3,12 @@
 //! A libp2p relay server that enables NAT traversal for Harbor chat app users.
 //! Run with `--community` to enable community boards with SQLite storage.
 
+mod abuse;
+mod auth;
 mod board_service;
 mod db;
+mod key_rotation;
+mod name_registration;
 
 use board_service::{BoardService, WallReadGrantProof};
 use clap::Parser;

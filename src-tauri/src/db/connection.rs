@@ -18,6 +18,8 @@ const MIGRATION_012: &str = include_str!("migrations/012_post_media_signature.sq
 const MIGRATION_013: &str = include_str!("migrations/013_call_history_state.sql");
 const MIGRATION_014: &str = include_str!("migrations/014_wall_social_events.sql");
 const MIGRATION_015: &str = include_str!("migrations/015_group_call_rooms.sql");
+const MIGRATION_016: &str = include_str!("migrations/016_relay_name_claims.sql");
+const MIGRATION_017: &str = include_str!("migrations/017_private_introductions.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -342,6 +344,14 @@ impl Database {
             info!("Running migration 015...");
             conn.execute_batch(MIGRATION_015)?;
             info!("Migration 015 complete");
+        }
+        if version < 16 {
+            conn.execute_batch(MIGRATION_016)?;
+            info!("Migration 016 complete");
+        }
+        if version < 17 {
+            conn.execute_batch(MIGRATION_017)?;
+            info!("Migration 017 complete");
         }
 
         Ok(())

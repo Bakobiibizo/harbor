@@ -8,8 +8,10 @@ pub mod feed_service;
 pub mod identity_service;
 pub mod media_service;
 pub mod messaging_service;
+pub mod name_claim_service;
 pub mod permissions_service;
 pub mod posts_service;
+pub mod private_introduction_service;
 pub mod signing;
 pub mod wall_social_service;
 
