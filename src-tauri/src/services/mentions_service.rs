@@ -96,6 +96,7 @@ pub struct MentionsService {
     identity: Arc<IdentityService>,
     contacts: Arc<ContactsService>,
     posts: Arc<PostsService>,
+    delivery_keys: std::sync::Mutex<std::collections::HashMap<String, (Vec<u8>, i64)>>,
 }
 impl MentionsService {
     pub fn queued_outbound(
@@ -140,7 +141,7 @@ impl MentionsService {
             || p.version != PROTOCOL_VERSION
             || p.mention_id != envelope.request_id
             || p.sender_peer_id != envelope.requester_peer_id
-            || p.recipient_peer_id != local
+            || (!p.recipient_peer_id.is_empty() && p.recipient_peer_id != local)
             || p.issued_at != envelope.issued_at
             || p.expires_at != envelope.expires_at
             || p.expires_at <= now
@@ -149,6 +150,18 @@ impl MentionsService {
             return Err(AppError::Validation(
                 "Mention envelope binding failed".into(),
             ));
+        }
+        if p.recipient_peer_id.is_empty() {
+            let claim = crate::db::repositories::RelayNamesRepository::new(&self.db)
+                .active_for_peer(&local, now)?
+                .ok_or_else(|| AppError::Validation("Local verified name unavailable".into()))?;
+            let c: NameClaim = ciborium::de::from_reader(claim.as_slice())
+                .map_err(|e| AppError::Serialization(e.to_string()))?;
+            if format!("@{}@{}", c.request.local_name, c.request.relay) != p.recipient_name {
+                return Err(AppError::Validation(
+                    "Mention recipient name mismatch".into(),
+                ));
+            }
         }
         let sender_name = format!(
             "@{}@{}",
@@ -215,7 +228,27 @@ impl MentionsService {
             identity,
             contacts,
             posts,
+            delivery_keys: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+    pub fn cache_delivery_key(&self, name: &str, key: Vec<u8>, expires: i64) -> Result<()> {
+        if key.len() != 32 || expires <= chrono::Utc::now().timestamp() {
+            return Err(AppError::Validation("Invalid delivery key".into()));
+        }
+        self.delivery_keys
+            .lock()
+            .map_err(|_| AppError::Internal("Delivery-key cache unavailable".into()))?
+            .insert(name.into(), (key, expires));
+        Ok(())
+    }
+    fn cached_delivery_key(&self, name: &str) -> Option<Vec<u8>> {
+        let now = chrono::Utc::now().timestamp();
+        self.delivery_keys
+            .lock()
+            .ok()?
+            .get(name)
+            .filter(|(_, e)| *e >= now)
+            .map(|(k, _)| k.clone())
     }
     pub fn resolve(&self, name: &str) -> Result<ResolvedMention> {
         let _: QualifiedRelayName = name.parse().map_err(|_| {
@@ -279,7 +312,8 @@ impl MentionsService {
                     "Private mentions cannot assert an authorized peer".into(),
                 ));
             }
-            if resolved.status == "unknown" {
+            if resolved.status == "unknown" && self.cached_delivery_key(&m.qualified_name).is_none()
+            {
                 return Err(AppError::Validation(
                     "The relay name could not be resolved securely; reconnect and retry".into(),
                 ));
@@ -301,11 +335,16 @@ impl MentionsService {
             sender_claim.request.local_name, sender_claim.request.relay
         );
         for m in &r.mentions {
-            let (recipient_peer, _, recipient_key) = MentionsRepository::new(&self.db)
-                .resolve_claim(&m.qualified_name)?
-                .ok_or_else(|| {
-                    AppError::Validation("Verified recipient claim disappeared".into())
-                })?;
+            let resolved_key =
+                MentionsRepository::new(&self.db).resolve_claim(&m.qualified_name)?;
+            let (recipient_peer, recipient_key) = match resolved_key {
+                Some((peer, _, key)) => (peer, key),
+                None => (
+                    String::new(),
+                    self.cached_delivery_key(&m.qualified_name)
+                        .ok_or_else(|| AppError::Validation("Delivery key expired".into()))?,
+                ),
+            };
             let raw: [u8; 32] = recipient_key
                 .try_into()
                 .map_err(|_| AppError::Validation("Invalid recipient encryption key".into()))?;

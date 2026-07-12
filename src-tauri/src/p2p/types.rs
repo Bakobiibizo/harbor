@@ -343,6 +343,11 @@ pub enum NetworkCommand {
         response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
     },
     GetActiveRelay,
+    ResolveDeliveryKey {
+        relay_peer_id: PeerId,
+        target: String,
+        response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
+    },
     /// Shutdown the network
     Shutdown,
 }
@@ -364,6 +369,11 @@ pub enum NetworkResponse {
     },
     Introductions(Vec<super::protocols::board_sync::QueuedEnvelope>),
     ActiveRelay(PeerId),
+    DeliveryKey {
+        target: String,
+        key: Vec<u8>,
+        expires_at: i64,
+    },
     Error(String),
 }
 

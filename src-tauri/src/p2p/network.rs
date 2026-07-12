@@ -86,6 +86,35 @@ pub struct NetworkHandle {
 }
 
 impl NetworkHandle {
+    pub async fn resolve_delivery_key(
+        &self,
+        relay_peer_id: PeerId,
+        target: String,
+    ) -> Result<(Vec<u8>, i64)> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::ResolveDeliveryKey {
+                    relay_peer_id,
+                    target: target.clone(),
+                    response_tx: tx,
+                },
+                None,
+            ))
+            .await
+            .map_err(|_| AppError::NetworkServiceUnavailable("Network unavailable".into()))?;
+        match rx.await {
+            Ok(NetworkResponse::DeliveryKey {
+                target: t,
+                key,
+                expires_at,
+            }) if t == target => Ok((key, expires_at)),
+            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
+            _ => Err(AppError::Internal(
+                "Unexpected delivery-key response".into(),
+            )),
+        }
+    }
     pub async fn active_relay(&self) -> Result<PeerId> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
@@ -855,6 +884,7 @@ pub struct NetworkService {
     pending_name_registration: HashMap<PeerId, PendingNameRegistration>,
     pending_introduction_submit: HashMap<PeerId, PendingIntroductionSubmit>,
     pending_introduction_fetch: HashMap<PeerId, PendingIntroductionFetch>,
+    pending_delivery_resolution: HashMap<PeerId, (String, oneshot::Sender<NetworkResponse>)>,
 }
 
 struct PendingNameRegistration {
@@ -926,6 +956,7 @@ impl NetworkService {
             pending_name_registration: HashMap::new(),
             pending_introduction_submit: HashMap::new(),
             pending_introduction_fetch: HashMap::new(),
+            pending_delivery_resolution: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -2543,6 +2574,7 @@ impl NetworkService {
                     pending.relay_public_key = challenge.relay_public_key.clone();
                 } else if !self.pending_introduction_submit.contains_key(&peer)
                     && !self.pending_introduction_fetch.contains_key(&peer)
+                    && !self.pending_delivery_resolution.contains_key(&peer)
                 {
                     return;
                 }
@@ -2595,6 +2627,16 @@ impl NetworkService {
                     );
                     return;
                 }
+                if let Some((target, _)) = self.pending_delivery_resolution.get(&peer) {
+                    self.swarm.behaviour_mut().board_sync.send_request(
+                        &peer,
+                        WireBoardSyncRequest::RequestIntroductionWork {
+                            session_token: token,
+                            target: target.clone(),
+                        },
+                    );
+                    return;
+                }
                 let Some(pending) = self.pending_name_registration.get_mut(&peer) else {
                     return;
                 };
@@ -2643,6 +2685,14 @@ impl NetworkService {
                 }
             }
             WireBoardSyncResponse::IntroductionWork { challenge } => {
+                if let Some((target, tx)) = self.pending_delivery_resolution.remove(&peer) {
+                    let _ = tx.send(NetworkResponse::DeliveryKey {
+                        target,
+                        key: challenge.delivery_key,
+                        expires_at: challenge.expires_at,
+                    });
+                    return;
+                }
                 let Some(_p) = self.pending_introduction_submit.get(&peer) else {
                     return;
                 };
@@ -3665,6 +3715,32 @@ impl NetworkService {
 
     async fn handle_command(&mut self, command: NetworkCommand) -> NetworkResponse {
         match command {
+            NetworkCommand::ResolveDeliveryKey {
+                relay_peer_id,
+                target,
+                response_tx,
+            } => {
+                if self
+                    .pending_delivery_resolution
+                    .contains_key(&relay_peer_id)
+                {
+                    let _ = response_tx.send(NetworkResponse::Error(
+                        "DELIVERY_KEY_RESOLUTION_IN_PROGRESS".into(),
+                    ));
+                    return NetworkResponse::Ok;
+                }
+                let peer_id = self.identity_service.get_peer_id().unwrap_or_default();
+                self.pending_delivery_resolution
+                    .insert(relay_peer_id, (target, response_tx));
+                self.swarm.behaviour_mut().board_sync.send_request(
+                    &relay_peer_id,
+                    WireBoardSyncRequest::RelayAuthChallenge {
+                        peer_id,
+                        audience: "introduce".into(),
+                    },
+                );
+                NetworkResponse::Ok
+            }
             NetworkCommand::GetActiveRelay => self
                 .community_relays
                 .keys()

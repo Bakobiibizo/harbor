@@ -1,3 +1,4 @@
+use crate::commands::network::NetworkState;
 use crate::{
     error::AppError,
     services::{
@@ -9,10 +10,20 @@ use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
-pub fn resolve_private_mention(
+pub async fn resolve_private_mention(
     service: State<'_, Arc<MentionsService>>,
+    network: State<'_, NetworkState>,
     qualified_name: String,
 ) -> Result<ResolvedMention, AppError> {
+    let resolved = service.resolve(&qualified_name)?;
+    if resolved.status == "unknown" {
+        let handle = network.get_handle().await?;
+        let relay = handle.active_relay().await?;
+        let (key, expires) = handle
+            .resolve_delivery_key(relay, qualified_name.clone())
+            .await?;
+        service.cache_delivery_key(&qualified_name, key, expires)?;
+    }
     service.resolve(&qualified_name)
 }
 #[tauri::command]

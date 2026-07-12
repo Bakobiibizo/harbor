@@ -277,6 +277,7 @@ mod tests {
             difficulty,
             key_id: "k1".into(),
             relay_signature: vec![1],
+            delivery_key: vec![7; 32],
         };
         let nonce = (0..).find(|n| work.verify(*n, 100)).unwrap();
         IntroductionEnvelope {

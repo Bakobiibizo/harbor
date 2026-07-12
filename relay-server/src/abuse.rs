@@ -14,6 +14,7 @@ pub struct WorkChallenge {
     pub difficulty: u8,
     pub key_id: String,
     pub relay_signature: Vec<u8>,
+    pub delivery_key: Vec<u8>,
 }
 
 impl WorkChallenge {
@@ -78,8 +79,8 @@ impl AbuseGuard {
         }
     }
     // Challenge issuance binds all security-relevant dimensions explicitly.
-    #[allow(clippy::too_many_arguments)]
-    pub fn issue(
+    #[allow(clippy::too_many_arguments, dead_code)]
+    pub fn issue_with_delivery_key(
         &mut self,
         relay: &str,
         requester: &str,
@@ -88,6 +89,7 @@ impl AbuseGuard {
         at: i64,
         key_id: &str,
         key: &libp2p::identity::Keypair,
+        delivery_key: Vec<u8>,
     ) -> Result<WorkChallenge, String> {
         let mut c = WorkChallenge {
             id: uuid::Uuid::new_v4().to_string(),
@@ -99,12 +101,35 @@ impl AbuseGuard {
             difficulty: self.difficulty(requester, false),
             key_id: key_id.into(),
             relay_signature: vec![],
+            delivery_key,
         };
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&c, &mut bytes).map_err(|e| e.to_string())?;
         c.relay_signature = key.sign(&bytes).map_err(|e| e.to_string())?;
         self.issued.insert(c.id.clone(), c.clone());
         Ok(c)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue(
+        &mut self,
+        relay: &str,
+        requester: &str,
+        target: &str,
+        action: &str,
+        at: i64,
+        key_id: &str,
+        key: &libp2p::identity::Keypair,
+    ) -> Result<WorkChallenge, String> {
+        self.issue_with_delivery_key(
+            relay,
+            requester,
+            target,
+            action,
+            at,
+            key_id,
+            key,
+            vec![0; 32],
+        )
     }
     #[cfg(test)]
     pub fn remember(&mut self, challenge: WorkChallenge) {
@@ -138,6 +163,7 @@ impl AbuseGuard {
             || issued.difficulty != challenge.difficulty
             || issued.key_id != challenge.key_id
             || issued.relay_signature != challenge.relay_signature
+            || issued.delivery_key != challenge.delivery_key
         {
             return Err("request accepted for processing".into());
         }
@@ -215,6 +241,7 @@ mod tests {
             difficulty: d,
             key_id: "k1".into(),
             relay_signature: vec![1],
+            delivery_key: vec![7; 32],
         }
     }
     fn solve(c: &WorkChallenge) -> u64 {
@@ -300,7 +327,7 @@ mod tests {
             window_secs: 60,
         });
         let c = g
-            .issue(
+            .issue_with_delivery_key(
                 "relay.test",
                 "peer",
                 "@alice@relay.test",
@@ -308,6 +335,7 @@ mod tests {
                 100,
                 "k1",
                 &key,
+                vec![7; 32],
             )
             .unwrap();
         let nonce = solve(&c);

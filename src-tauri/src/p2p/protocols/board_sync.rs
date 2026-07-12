@@ -58,6 +58,7 @@ pub struct WorkChallenge {
     pub difficulty: u8,
     pub key_id: String,
     pub relay_signature: Vec<u8>,
+    pub delivery_key: Vec<u8>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntroductionEnvelope {

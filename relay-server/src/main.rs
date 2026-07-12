@@ -64,6 +64,13 @@ fn response_delay(request_id: &str) -> Duration {
     request_id.hash(&mut h);
     Duration::from_millis(20 + h.finish() % 21)
 }
+fn opaque_delivery_key(
+    database: &RelayDatabase,
+    target: &str,
+    key: &libp2p::identity::Keypair,
+) -> Vec<u8> {
+    database.with_connection(|conn|conn.query_row("SELECT claim_cbor FROM relay_name_claims WHERE ('@' || local_name || '@' || relay)=? AND status='active' ORDER BY sequence DESC LIMIT 1",[target],|r|r.get::<_,Vec<u8>>(0)).ok().and_then(|b|ciborium::de::from_reader::<name_registration::NameClaim,_>(b.as_slice()).ok()).map(|c|c.request.x25519_public_key)).unwrap_or_else(||{let signature=key.sign(format!("harbor/decoy-delivery-key/1:{target}").as_bytes()).unwrap_or_default();let mut seed=[0u8;32];if signature.len()>=32{seed.copy_from_slice(&signature[..32])}x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(seed)).to_bytes().to_vec()})
+}
 
 struct IdentityTransport {
     auth: auth::AuthService,
@@ -999,14 +1006,17 @@ fn handle_board_request(
                     error: "INTRODUCTION_WORK_REJECTED".into(),
                 };
             }
-            match state.abuse.issue(
+            let signing_key = state.auth.signing_key();
+            let delivery_key = opaque_delivery_key(&state.database, &target, &signing_key);
+            match state.abuse.issue_with_delivery_key(
                 &state.relay_name,
                 &requester.to_string(),
                 &target,
                 "introduce",
                 now,
                 &state.relay_key_id,
-                &state.auth.signing_key(),
+                &signing_key,
+                delivery_key,
             ) {
                 Ok(challenge) => BoardSyncResponse::IntroductionWork { challenge },
                 Err(_) => BoardSyncResponse::Error {
