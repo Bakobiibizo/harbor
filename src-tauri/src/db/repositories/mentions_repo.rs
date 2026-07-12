@@ -104,6 +104,34 @@ impl<'a> MentionsRepository<'a> {
     pub fn block_sender(&self, peer_id: &str, at: i64) -> Result<()> {
         self.db.with_connection(|c| c.execute("INSERT INTO private_mention_blocks VALUES(?,?) ON CONFLICT(sender_peer_id) DO UPDATE SET blocked_at=excluded.blocked_at",params![peer_id,at]).map(|_| ()))
     }
+    pub fn is_sender_blocked(&self, peer_id: &str) -> Result<bool> {
+        self.db.with_connection(|c| {
+            c.query_row(
+                "SELECT 1 FROM private_mention_blocks WHERE sender_peer_id=?",
+                [peer_id],
+                |r| r.get::<_, i32>(0),
+            )
+            .optional()
+            .map(|v| v.is_some())
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_received(
+        &self,
+        id: &str,
+        post: &str,
+        name: &str,
+        intent: &str,
+        sender: &str,
+        digest: &str,
+        preview: &str,
+        cipher: &[u8],
+        ephemeral: &[u8],
+        signature: &[u8],
+        at: i64,
+    ) -> Result<bool> {
+        self.db.with_connection_mut(|c|{let tx=c.transaction()?;if tx.query_row("SELECT 1 FROM private_mention_blocks WHERE sender_peer_id=?",[sender],|r|r.get::<_,i32>(0)).optional()?.is_some(){return Ok(false)}let inserted=tx.execute("INSERT OR IGNORE INTO private_mentions(mention_id,post_id,qualified_name,intent,sender_peer_id,authorized_peer_id,claim_digest,preview,envelope_ciphertext,ephemeral_public_key,signature,created_at) VALUES(?,?,?,?,?,NULL,?,?,?,?,?,?)",params![id,post,name,intent,sender,digest,preview,cipher,ephemeral,signature,at])?;tx.commit()?;Ok(inserted==1)})
+    }
     pub fn pending(&self, exclude_sender: &str) -> Result<Vec<StoredMention>> {
         self.db.with_connection(|c|{let mut s=c.prepare("SELECT mention_id,post_id,qualified_name,intent,sender_peer_id,preview,status,created_at FROM private_mentions WHERE status='pending' AND sender_peer_id != ? ORDER BY created_at DESC")?;let rows=s.query_map([exclude_sender],|r|Ok(StoredMention{mention_id:r.get(0)?,post_id:r.get(1)?,qualified_name:r.get(2)?,intent:r.get(3)?,sender_peer_id:r.get(4)?,preview:r.get(5)?,status:r.get(6)?,created_at:r.get(7)?}))?.collect();rows})
     }
