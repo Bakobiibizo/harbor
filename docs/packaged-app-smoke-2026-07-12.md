@@ -4,10 +4,10 @@ The Linux x86_64 packaged Harbor binary passed the onboarding recovery and resta
 
 ## Build
 
-- Commit: `c02987123b0069bba004328b97db438280772536`
+- Commit: `c02987154eb2098f48889189486ef5177d617844`
 - Binary SHA-256: `d82fb5a1996e0b9cdff252b420311bccb5664266d19614ed01b823c9f1001b45`
 - Platform: Linux x86_64 under WSL2
-- Completed: `2026-07-12T18:26:10Z`
+- Completed: `2026-07-12T18:49:32Z`
 - Harness: `scripts/validate-packaged-ux-smoke.sh`
 
 ## Relay and identity result
