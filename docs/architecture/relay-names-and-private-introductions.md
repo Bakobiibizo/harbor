@@ -1,6 +1,6 @@
 # Relay Names and Private Introductions
 
-Status: Draft protocol specification
+Status: Harbor 1.0 release contract (version 1 frozen)
 
 Target: Required identity-safety slice before Harbor 1.0
 
@@ -101,6 +101,28 @@ Version 1 local names:
 The restricted alphabet is intentional. Unicode names require a later confusable-character and script-mixing policy. Clients may not visually substitute a separate display name for the verified name.
 
 Relay hostnames are lowercase IDNA ASCII hostnames without a scheme, port, path, query, or fragment. Clients must display the relay hostname when the identity is unfamiliar, when resolving mentions, and in any security-sensitive confirmation.
+
+### 5.1 Version 1 wire contract
+
+All signed version 1 records use deterministic CBOR maps with the field names and field order defined by the Rust protocol structs. Integers use their shortest lossless CBOR representation, byte fields are CBOR byte strings, and text is UTF-8. Timestamps are signed Unix seconds. Unknown domains, versions, fields that exceed the limits below, and noncanonical qualified names must be rejected before a security decision is stored.
+
+| Record | Signature domain |
+| --- | --- |
+| Name request | `harbor/name-claim-request/1` |
+| Relay name claim | `harbor/name-claim/1` |
+| Relay challenge | `harbor/relay-challenge/1` |
+| Introduction | `harbor/introduction/1` |
+| Contact card | `harbor/contact-card/1` |
+| Capability grant | `harbor/capability-grant/1` |
+| Capability revocation | `harbor/capability-revocation/1` |
+| Private mention | `harbor/mention/1` |
+| Relay-key rotation | `harbor/relay-key-rotation/1` |
+
+The local name is 3 to 32 ASCII bytes, the relay hostname is at most 253 ASCII bytes, opaque ciphertext is at most 64 KiB, and a contact card carries at most 32 capabilities. Ed25519 and X25519 public keys are exactly 32 bytes, Ed25519 signatures are exactly 64 bytes, and nonces used for durable replay protection are at least 16 bytes.
+
+Sequences and capability revisions are unsigned 64-bit integers. Zero is invalid where a sequence establishes authority. A receiver applies only a strictly newer verified sequence or revision; equal values are idempotent only when the signed bytes are identical, and an older grant can never override a newer revocation. Name-claim requests tolerate at most 300 seconds of clock skew, relay challenges live for no more than five minutes, introduction envelopes live for no more than 24 hours, and the signed expiry is always checked by the receiving authority.
+
+The normative name-request golden vector is asserted in `models::relay_identity::tests::name_claim_request_has_deterministic_bytes`. Mutation tests must also prove that changing the domain changes the signed bytes and that tampering, wrong-recipient decryption, reordered revisions, and substituted keys fail closed.
 
 ## 6. Name registration
 
