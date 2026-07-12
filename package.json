@@ -42,5 +42,5 @@
     "test:watch": "vitest"
   },
   "type": "module",
-  "version": "1.4.1-beta.2"
+  "version": "1.4.1-beta.3"
 }
