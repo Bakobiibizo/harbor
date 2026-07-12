@@ -8,6 +8,7 @@
 #   ./deploy-stack.sh --name my-relay          # custom stack name
 #   ./deploy-stack.sh --region us-west-2       # different region
 #   ./deploy-stack.sh --community "My Group"   # custom community name
+#   ./deploy-stack.sh --namespace relay.example.com
 
 set -euo pipefail
 
@@ -18,6 +19,7 @@ TEMPLATE_TYPE="community"
 COMMUNITY_NAME="Harbor Community"
 INSTANCE_TYPE="t2.micro"
 RELAY_PORT="4001"
+IDENTITY_NAMESPACE=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -28,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --community)  COMMUNITY_NAME="$2"; shift 2 ;;
     --instance)   INSTANCE_TYPE="$2"; shift 2 ;;
     --port)       RELAY_PORT="$2"; shift 2 ;;
+    --namespace)  IDENTITY_NAMESPACE="$2"; shift 2 ;;
     --help|-h)
       echo "Usage: $0 [options]"
       echo "  --name NAME        Stack name (default: harbor-relay)"
@@ -36,11 +39,17 @@ while [[ $# -gt 0 ]]; do
       echo "  --community NAME   Community name (default: Harbor Community)"
       echo "  --instance TYPE    EC2 instance type (default: t2.micro)"
       echo "  --port PORT        Relay port (default: 4001)"
+      echo "  --namespace HOST   Required relay identity namespace (for example relay.example.com)"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+if [[ ! "$IDENTITY_NAMESPACE" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "ERROR: --namespace must be a lowercase DNS hostname you control (for example relay.example.com)"
+  exit 1
+fi
 
 # Select template
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -61,6 +70,7 @@ echo "Region:    $REGION"
 echo "Template:  $TEMPLATE_TYPE"
 echo "Instance:  $INSTANCE_TYPE"
 echo "Port:      $RELAY_PORT"
+echo "Namespace: $IDENTITY_NAMESPACE"
 if [ "$TEMPLATE_TYPE" = "community" ]; then
   echo "Community: $COMMUNITY_NAME"
 fi
@@ -69,6 +79,7 @@ echo ""
 # Build parameters
 PARAMS="ParameterKey=InstanceType,ParameterValue=$INSTANCE_TYPE"
 PARAMS="$PARAMS ParameterKey=RelayPort,ParameterValue=$RELAY_PORT"
+PARAMS="$PARAMS ParameterKey=IdentityNamespace,ParameterValue=$IDENTITY_NAMESPACE"
 if [ "$TEMPLATE_TYPE" = "community" ]; then
   PARAMS="$PARAMS ParameterKey=CommunityName,ParameterValue=$COMMUNITY_NAME"
 fi

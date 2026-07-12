@@ -25,7 +25,7 @@ The binary will be at `target/release/harbor-relay`.
 
 ### Basic usage (local testing)
 ```bash
-./harbor-relay --port 4001
+./harbor-relay --port 4001 --identity-namespace relay.example.com
 ```
 
 ### Community/wall-sync testing
@@ -39,7 +39,7 @@ The binary will be at `target/release/harbor-relay`.
 
 ### Production usage (with public IP)
 ```bash
-./harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP
+./harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP --identity-namespace relay.example.com
 ```
 
 ### Full options
@@ -100,7 +100,7 @@ User=ubuntu
 Restart=always
 RestartSec=10
 Environment=RUST_LOG=info
-ExecStart=/home/ubuntu/harbor/relay-server/target/release/harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP
+ExecStart=/home/ubuntu/harbor/relay-server/target/release/harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP --identity-namespace relay.example.com
 
 [Install]
 WantedBy=multi-user.target
@@ -112,6 +112,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable harbor-relay
 sudo systemctl start harbor-relay
 ```
+
+`--identity-namespace` is required for relay-scoped names such as `@alice@relay.example.com`. Use a lowercase DNS hostname you control, point its DNS record at the stable relay address, and provision HTTPS before exposing HTTP-based discovery endpoints. The relay is authoritative only for its own namespace; it is not a global Harbor user directory.
 
 ### Firewall
 

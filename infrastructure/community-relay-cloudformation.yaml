@@ -13,6 +13,7 @@ Metadata:
           default: "Relay Configuration"
         Parameters:
           - RelayPort
+          - IdentityNamespace
           - MaxReservations
           - MaxCircuits
       - Label:
@@ -21,6 +22,14 @@ Metadata:
           - CommunityName
 
 Parameters:
+  IdentityNamespace:
+    Type: String
+    MinLength: 3
+    MaxLength: 253
+    AllowedPattern: '^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+    ConstraintDescription: "Use a lowercase DNS hostname without a scheme, port, path, or trailing dot."
+    Description: "Relay-scoped identity namespace, for example relay.example.com. You must control this DNS name."
+
   InstanceType:
     Type: String
     Default: t2.micro
@@ -378,7 +387,7 @@ Resources:
           Restart=always
           RestartSec=10
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --max-reservations ${MaxReservations} --max-circuits-per-peer ${MaxCircuits} --community --community-name "${CommunityName}" --data-dir /var/lib/harbor-relay/data
+          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --max-reservations ${MaxReservations} --max-circuits-per-peer ${MaxCircuits} --identity-namespace ${IdentityNamespace} --community --community-name "${CommunityName}" --data-dir /var/lib/harbor-relay/data
           StandardOutput=journal
           StandardError=journal
 

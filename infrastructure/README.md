@@ -7,13 +7,27 @@
 3. Sign in to AWS and keep the generated template URL and stack name.
 4. For a community relay, enter the public community name people should see in Harbor.
 5. Review the AWS cost estimate and permissions acknowledgement, then choose **Create stack**.
-6. Wait until CloudFormation reports `CREATE_COMPLETE` (usually several minutes).
+6. Enter the **Identity namespace** hostname you control, such as `relay.example.com`.
+7. Wait until CloudFormation reports `CREATE_COMPLETE` (usually several minutes).
 7. Open the stack's **Outputs** tab and follow `SSMConsoleLink`, or copy the command in `GetRelayAddress`.
 8. Copy the complete `/ip4/.../p2p/...` address into **Harbor → Network → Add relay**.
 
 If creation fails, open the stack's **Events** tab. The first red event normally contains the useful error. Deleting the stack removes the deployment resources and stops ongoing compute charges.
 
 This directory contains AWS CloudFormation templates for deploying relay servers that support Harbor's P2P networking and optional community/wall-sync relay storage.
+
+## Choose the identity namespace first
+
+Every relay needs a lowercase DNS hostname used in names such as `@alice@relay.example.com`. Names are unique only inside that relay namespace; Harbor does not publish or depend on a global username directory.
+
+Before deployment:
+
+1. Choose a hostname under a domain you control, for example `relay.example.com`.
+2. Deploy the stack and note its public IP from the outputs.
+3. Create an `A` record for the hostname pointing to that IP. Use a stable Elastic IP for production.
+4. Provision HTTPS for the hostname before enabling web-based name discovery or public relay APIs. DNS ownership and a valid certificate are the operator's responsibility; the CloudFormation stack does not modify DNS or issue certificates.
+
+The namespace is an identity authority. Changing it later changes users' qualified names, so choose a durable hostname rather than an EC2 hostname or raw IP address.
 
 ## Two Templates
 
@@ -100,7 +114,8 @@ The systemd service name is based on your CloudFormation stack name:
 aws cloudformation create-stack \
   --stack-name harbor-relay \
   --template-body file://relay-cloudformation.yaml \
-  --capabilities CAPABILITY_NAMED_IAM
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameters ParameterKey=IdentityNamespace,ParameterValue="relay.example.com"
 
 # Deploy a community relay
 aws cloudformation create-stack \
@@ -108,7 +123,8 @@ aws cloudformation create-stack \
   --template-body file://community-relay-cloudformation.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameters \
-    ParameterKey=CommunityName,ParameterValue="My Community"
+    ParameterKey=CommunityName,ParameterValue="My Community" \
+    ParameterKey=IdentityNamespace,ParameterValue="relay.example.com"
 
 # Check deployment status
 aws cloudformation describe-stacks --stack-name harbor-relay
