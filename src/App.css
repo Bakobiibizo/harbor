@@ -15,6 +15,15 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Full-screen flows fill the client area beneath Harbor's Windows title bar. */
+.harbor-app-content .min-h-screen {
+  min-height: 100%;
+}
+
+.harbor-app-content .h-screen {
+  height: 100%;
+}
+
 /* ============================================
    Typography Helpers
    ============================================ */

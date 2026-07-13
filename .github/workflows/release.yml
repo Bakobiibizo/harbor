@@ -17,6 +17,7 @@ env:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release-validation:
@@ -197,7 +198,8 @@ jobs:
           "TAURI_SIGNING_PRIVATE_KEY=$key" >> $env:GITHUB_ENV
           "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password')" >> $env:GITHUB_ENV
 
-      - name: Build Tauri app
+      - name: Build non-Windows Tauri app
+        if: runner.os != 'Windows'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -205,10 +207,98 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
+      - name: Azure login for Artifact Signing
+        if: runner.os == 'Windows'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
+
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
+        run: pnpm tauri build --no-bundle
+
+      - name: Sign Windows executable
+        if: runner.os == 'Windows'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: social-harbor
+          certificate-profile-name: social-harbor
+          files: ${{ github.workspace }}\src-tauri\target\release\harbor.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Harbor
+          description-url: https://harbor.social
+
+      - name: Bundle signed Windows executable
+        if: runner.os == 'Windows'
+        run: pnpm tauri bundle --bundles nsis
+
+      - name: Sign Windows installer
+        if: runner.os == 'Windows'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: social-harbor
+          certificate-profile-name: social-harbor
+          files: ${{ github.workspace }}\src-tauri\target\release\bundle\nsis\Harbor_${{ needs.create-release.outputs.version }}_x64-setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Harbor
+          description-url: https://harbor.social
+
+      - name: Verify and sign Windows updater artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = "src-tauri/target/release/bundle/nsis/Harbor_${{ needs.create-release.outputs.version }}_x64-setup.exe"
+          $signature = Get-AuthenticodeSignature $installer
+          if ($signature.Status -ne 'Valid') {
+            throw "Windows installer Authenticode status is $($signature.Status): $($signature.StatusMessage)"
+          }
+          pnpm tauri signer sign $installer
+
+      - name: Upload signed Windows updater artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $bundle = "src-tauri/target/release/bundle/nsis"
+          gh release upload "v${{ needs.create-release.outputs.version }}" `
+            "$bundle/Harbor_${{ needs.create-release.outputs.version }}_x64-setup.exe" `
+            "$bundle/Harbor_${{ needs.create-release.outputs.version }}_x64-setup.exe.sig" `
+            --clobber
+
   publish-release:
     needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Finalize updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          mkdir -p release-assets
+          gh release download "v${VERSION}" \
+            --pattern latest.json \
+            --pattern "Harbor_${VERSION}_x64-setup.exe.sig" \
+            --dir release-assets
+          node scripts/finalize-updater-manifest.mjs \
+            release-assets/latest.json \
+            "${VERSION}" \
+            "release-assets/Harbor_${VERSION}_x64-setup.exe.sig" \
+            release-assets/final-latest.json
+          mv release-assets/final-latest.json release-assets/latest.json
+          gh release upload "v${VERSION}" release-assets/latest.json --clobber
+          gh release upload updater-channel release-assets/latest.json --clobber
+
       - name: Publish release
         uses: actions/github-script@v7
         with:
