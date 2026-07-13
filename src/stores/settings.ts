@@ -86,6 +86,8 @@ interface SettingsState {
   autoStartNetwork: boolean;
   localDiscovery: boolean;
   bootstrapNodes: string[];
+  contactFeedPollingEnabled: boolean;
+  contactFeedPollIntervalMinutes: number;
 
   // Calling / WebRTC NAT traversal settings
   iceServers: IceServerConfig[];
@@ -113,6 +115,8 @@ interface SettingsState {
   setSoundEnabled: (value: boolean) => void;
   setAutoStartNetwork: (value: boolean) => void;
   setLocalDiscovery: (value: boolean) => void;
+  setContactFeedPollingEnabled: (value: boolean) => void;
+  setContactFeedPollIntervalMinutes: (value: number) => void;
   addBootstrapNode: (address: string) => void;
   removeBootstrapNode: (address: string) => void;
   addIceServer: (input: IceServerInput) => IceServerConfig;
@@ -172,6 +176,8 @@ export const useSettingsStore = create<SettingsState>()(
       autoStartNetwork: true,
       localDiscovery: true,
       bootstrapNodes: [],
+      contactFeedPollingEnabled: true,
+      contactFeedPollIntervalMinutes: 5,
       iceServers: [],
       showReadReceipts: true,
       showOnlineStatus: true,
@@ -188,6 +194,9 @@ export const useSettingsStore = create<SettingsState>()(
       setSoundEnabled: (value) => set({ soundEnabled: value }),
       setAutoStartNetwork: (value) => set({ autoStartNetwork: value }),
       setLocalDiscovery: (value) => set({ localDiscovery: value }),
+      setContactFeedPollingEnabled: (value) => set({ contactFeedPollingEnabled: value }),
+      setContactFeedPollIntervalMinutes: (value) =>
+        set({ contactFeedPollIntervalMinutes: Math.min(30, Math.max(1, Math.round(value))) }),
       addBootstrapNode: (address) =>
         set((state) => ({
           bootstrapNodes: state.bootstrapNodes.includes(address)
@@ -254,6 +263,11 @@ export const useSettingsStore = create<SettingsState>()(
           socialView: normalizeView(state.socialView),
           communityView: normalizeView(state.communityView),
           providerEmbedConsent: state.providerEmbedConsent === 'session' ? 'session' : 'per-use',
+          contactFeedPollingEnabled: state.contactFeedPollingEnabled !== false,
+          contactFeedPollIntervalMinutes:
+            typeof state.contactFeedPollIntervalMinutes === 'number'
+              ? Math.min(30, Math.max(1, Math.round(state.contactFeedPollIntervalMinutes)))
+              : 5,
         } as SettingsState;
       },
       partialize: (state) => ({
@@ -261,6 +275,8 @@ export const useSettingsStore = create<SettingsState>()(
         autoStartNetwork: state.autoStartNetwork,
         localDiscovery: state.localDiscovery,
         bootstrapNodes: state.bootstrapNodes,
+        contactFeedPollingEnabled: state.contactFeedPollingEnabled,
+        contactFeedPollIntervalMinutes: state.contactFeedPollIntervalMinutes,
         iceServers: state.iceServers.map(stripSessionCredentialsForPersistence),
         showReadReceipts: state.showReadReceipts,
         showOnlineStatus: state.showOnlineStatus,

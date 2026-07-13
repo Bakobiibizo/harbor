@@ -16,9 +16,6 @@ import { matchesModalityFilter } from '../utils/postModality';
 const log = createLogger('Feed');
 import { getInitials, getContactColor, formatDate } from '../utils/formatting';
 
-/** Relay sync polling interval in milliseconds (30 seconds) */
-const RELAY_SYNC_INTERVAL_MS = 30_000;
-
 // Dropdown menu component
 function PostMenu({
   isOpen,
@@ -504,7 +501,6 @@ export function FeedPage() {
     toggleComments,
     addComment,
     deleteComment,
-    syncFromRelay,
     isSyncingRelay,
     lastSyncAt,
     syncError,
@@ -533,21 +529,12 @@ export function FeedPage() {
   const [sharingPost, setSharingPost] = useState<UnifiedPost | null>(null);
   const { socialView, setSocialView } = useSettingsStore();
 
-  // Load real feed and contacts on mount, plus trigger relay sync
+  // Relay polling is owned by the app-level contact feed worker so it can be
+  // cancelled on lock/offline transitions and does not depend on this page.
   useEffect(() => {
     loadFeed().catch((err) => log.error('Failed to load feed', err));
     loadContacts().catch((err) => log.error('Failed to load contacts', err));
-    // Best-effort relay sync on mount
-    syncFromRelay().catch((err) => log.warn('Relay sync on mount failed', err));
-  }, [loadFeed, loadContacts, syncFromRelay]);
-
-  // Poll relay for new posts every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      syncFromRelay().catch((err) => log.warn('Periodic relay sync failed', err));
-    }, RELAY_SYNC_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [syncFromRelay]);
+  }, [loadFeed, loadContacts]);
 
   // Track media for feed posts (fetched asynchronously)
   const [postMediaMap, setPostMediaMap] = useState<Record<string, PostMediaItem[]>>({});
@@ -655,15 +642,14 @@ export function FeedPage() {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      // Run both P2P sync and relay sync in parallel
-      await Promise.allSettled([refreshFeed(), syncFromRelay()]);
+      await refreshFeed();
       toast.success('Feed refreshed!');
     } catch {
       toast.error('Failed to refresh feed');
     } finally {
       setIsRefreshing(false);
     }
-  }, [refreshFeed, syncFromRelay]);
+  }, [refreshFeed]);
 
   const handleLike = async (post: UnifiedPost) => {
     try {

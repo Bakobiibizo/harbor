@@ -7,9 +7,13 @@ export function NetworkSection() {
   const {
     autoStartNetwork,
     localDiscovery,
+    contactFeedPollingEnabled,
+    contactFeedPollIntervalMinutes,
     bootstrapNodes,
     setAutoStartNetwork,
     setLocalDiscovery,
+    setContactFeedPollingEnabled,
+    setContactFeedPollIntervalMinutes,
     addBootstrapNode,
     removeBootstrapNode,
   } = useSettingsStore();
@@ -66,6 +70,45 @@ export function NetworkSection() {
               );
             }}
           />
+        </div>
+      </SettingsCard>
+
+      <SettingsCard>
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+              Keep contact feeds current
+            </h4>
+            <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+              Check accepted contacts for new posts in the background while Harbor is online.
+            </p>
+            {contactFeedPollingEnabled && (
+              <label
+                className="mt-3 flex items-center gap-2 text-sm"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                Check about every
+                <select
+                  value={contactFeedPollIntervalMinutes}
+                  onChange={(event) =>
+                    setContactFeedPollIntervalMinutes(Number(event.target.value))
+                  }
+                  className="rounded-lg px-2 py-1"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                  }}
+                >
+                  <option value={1}>1 minute</option>
+                  <option value={5}>5 minutes</option>
+                  <option value={15}>15 minutes</option>
+                  <option value={30}>30 minutes</option>
+                </select>
+              </label>
+            )}
+          </div>
+          <Toggle enabled={contactFeedPollingEnabled} onChange={setContactFeedPollingEnabled} />
         </div>
       </SettingsCard>
 

@@ -12,9 +12,12 @@ import {
   useCallingStore,
   useIdentityStore,
   useMediaTransfersStore,
+  useSettingsStore,
 } from '../stores';
 import { mediaService } from '../services/media';
+import { feedService } from '../services/feed';
 import { ReactiveRefreshCoordinator } from '../services/reactiveRefresh';
+import { ContactFeedPoller } from '../services/contactFeedPoller';
 import { notifyHarborEvent } from '../services/harborNotifications';
 import { safePeerLabel } from '../utils/relayName';
 
@@ -52,6 +55,37 @@ export function useTauriEvents() {
       media: () => mediaService.preloadMissingMedia(),
     });
     coordinator.start();
+
+    const contactFeedPoller = new ContactFeedPoller({
+      fetchContact: (peerId) => feedService.fetchContactWall(peerId),
+      publishRefresh: (peerId) => coordinator.enqueue({ domains: ['posts'], peerId }),
+    });
+    const reconcileContactFeedPoller = () => {
+      const identity = useIdentityStore.getState().state;
+      const network = useNetworkStore.getState();
+      const contacts = useContactsStore.getState();
+      const settings = useSettingsStore.getState();
+      contactFeedPoller.update({
+        profileId: identity.status === 'unlocked' ? identity.identity.peerId : null,
+        online:
+          network.isRunning &&
+          network.status === 'connected' &&
+          (typeof navigator === 'undefined' || navigator.onLine),
+        enabled: settings.contactFeedPollingEnabled,
+        intervalMs: settings.contactFeedPollIntervalMinutes * 60_000,
+        contacts: contacts.contacts,
+        requests: contacts.requests,
+      });
+    };
+    const storeUnsubscribers = [
+      useIdentityStore.subscribe(reconcileContactFeedPoller),
+      useNetworkStore.subscribe(reconcileContactFeedPoller),
+      useContactsStore.subscribe(reconcileContactFeedPoller),
+      useSettingsStore.subscribe(reconcileContactFeedPoller),
+    ];
+    window.addEventListener('online', reconcileContactFeedPoller);
+    window.addEventListener('offline', reconcileContactFeedPoller);
+    reconcileContactFeedPoller();
 
     function register(unlisten: UnlistenFn) {
       if (cancelled) {
@@ -218,7 +252,10 @@ export function useTauriEvents() {
 
         case 'contact_added':
           console.log(`[Network] Contact added: ${event.display_name} (${event.peer_id})`);
-          coordinator.enqueue({ domains: ['contacts', 'requests', 'posts'], peerId: event.peer_id });
+          coordinator.enqueue({
+            domains: ['contacts', 'requests', 'posts'],
+            peerId: event.peer_id,
+          });
           toast.success('Contact added. Harbor is verifying their relay name.');
           break;
 
@@ -388,9 +425,7 @@ export function useTauriEvents() {
                 eventId: payload.payload.callId,
               });
             }
-            calling
-            .handleBackendEvent(event)
-            .catch((error) => {
+            calling.handleBackendEvent(event).catch((error) => {
               console.warn('[Network] Failed to refresh call state after signaling event:', error);
             });
           }
@@ -413,6 +448,10 @@ export function useTauriEvents() {
     // Cleanup on unmount
     return () => {
       cancelled = true;
+      contactFeedPoller.stop();
+      storeUnsubscribers.forEach((unsubscribe) => unsubscribe());
+      window.removeEventListener('online', reconcileContactFeedPoller);
+      window.removeEventListener('offline', reconcileContactFeedPoller);
       coordinator.stop();
       unlistenersRef.current.forEach((unlisten) => unlisten());
       unlistenersRef.current = [];
