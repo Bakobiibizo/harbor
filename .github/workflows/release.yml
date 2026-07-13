@@ -195,8 +195,11 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_BAKO }}
         run: |
           $key = (op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY/password') -replace '\s', ''
+          $password = op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password'
+          Write-Output "::add-mask::$key"
+          Write-Output "::add-mask::$password"
           "TAURI_SIGNING_PRIVATE_KEY=$key" >> $env:GITHUB_ENV
-          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(op read 'op://bako/TAURI_SIGNING_PRIVATE_KEY_PASSWORD/password')" >> $env:GITHUB_ENV
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$password" >> $env:GITHUB_ENV
 
       - name: Build non-Windows Tauri app
         if: runner.os != 'Windows'
@@ -207,17 +210,17 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
-      - name: Azure login for Artifact Signing
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
+        run: pnpm tauri build --no-bundle
+
+      - name: Azure login to sign Windows executable
         if: runner.os == 'Windows'
         uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
           allow-no-subscriptions: true
-
-      - name: Build Windows executable
-        if: runner.os == 'Windows'
-        run: pnpm tauri build --no-bundle
 
       - name: Sign Windows executable
         if: runner.os == 'Windows'
@@ -233,9 +236,26 @@ jobs:
           description: Harbor
           description-url: https://harbor.social
 
+      - name: Verify signed Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature 'src-tauri/target/release/harbor.exe'
+          if ($signature.Status -ne 'Valid') {
+            throw "Windows executable Authenticode status is $($signature.Status): $($signature.StatusMessage)"
+          }
+
       - name: Bundle signed Windows executable
         if: runner.os == 'Windows'
         run: pnpm tauri bundle --bundles nsis
+
+      - name: Refresh Azure login to sign Windows installer
+        if: runner.os == 'Windows'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          allow-no-subscriptions: true
 
       - name: Sign Windows installer
         if: runner.os == 'Windows'
