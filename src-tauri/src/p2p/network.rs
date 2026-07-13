@@ -8,7 +8,7 @@ use libp2p::{
     Multiaddr, PeerId, Swarm,
 };
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -83,6 +83,23 @@ fn should_ack_ingest<T, E>(result: &std::result::Result<T, E>) -> bool {
 #[derive(Clone)]
 pub struct NetworkHandle {
     command_tx: mpsc::Sender<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
+}
+
+async fn await_name_registration(
+    rx: oneshot::Receiver<NetworkResponse>,
+    timeout: Duration,
+) -> Result<(super::protocols::board_sync::NameClaim, Vec<u8>)> {
+    match tokio::time::timeout(timeout, rx).await {
+        Err(_) => Err(AppError::Network(
+            "Name registration timed out. Check your relay connection and retry.".into(),
+        )),
+        Ok(Ok(NetworkResponse::RelayNameClaim {
+            claim,
+            relay_public_key,
+        })) => Ok((*claim, relay_public_key)),
+        Ok(Ok(NetworkResponse::Error(e))) => Err(AppError::Network(e)),
+        Ok(_) => Err(AppError::Internal("Unexpected relay-name response".into())),
+    }
 }
 
 impl NetworkHandle {
@@ -215,14 +232,7 @@ impl NetworkHandle {
             .map_err(|_| {
                 AppError::NetworkServiceUnavailable("Network service unavailable".into())
             })?;
-        match rx.await {
-            Ok(NetworkResponse::RelayNameClaim {
-                claim,
-                relay_public_key,
-            }) => Ok((*claim, relay_public_key)),
-            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
-            _ => Err(AppError::Internal("Unexpected relay-name response".into())),
-        }
+        await_name_registration(rx, Duration::from_secs(12)).await
     }
     /// Dial a peer at the given addresses
     pub async fn dial(&self, peer_id: PeerId, addresses: Vec<Multiaddr>) -> Result<()> {
@@ -1799,6 +1809,11 @@ impl NetworkService {
                 // This happens when the relay doesn't support the board sync protocol.
                 let was_probe = self.pending_community_probes.remove(&peer).is_some();
                 let was_registration = self.pending_board_registrations.remove(&peer);
+                if let Some(pending) = self.pending_name_registration.remove(&peer) {
+                    let _ = pending.response_tx.send(NetworkResponse::Error(format!(
+                        "Name registration failed while contacting the relay: {error}"
+                    )));
+                }
                 if was_probe || was_registration {
                     debug!(
                         "Relay {} does not support board sync protocol (outbound failure: {})",
@@ -3828,6 +3843,15 @@ impl NetworkService {
                 namespace,
                 response_tx,
             } => {
+                // A timed-out caller drops its receiver. Remove that abandoned operation so a
+                // user retry cannot be trapped behind NAME_REGISTRATION_IN_PROGRESS forever.
+                if self
+                    .pending_name_registration
+                    .get(&relay_peer_id)
+                    .is_some_and(|pending| pending.response_tx.is_closed())
+                {
+                    self.pending_name_registration.remove(&relay_peer_id);
+                }
                 if self.pending_name_registration.contains_key(&relay_peer_id) {
                     let _ = response_tx.send(NetworkResponse::Error(
                         "NAME_REGISTRATION_IN_PROGRESS".into(),
@@ -4755,7 +4779,9 @@ impl NetworkService {
 
 #[cfg(test)]
 mod introduction_ack_tests {
-    use super::should_ack_ingest;
+    use super::{await_name_registration, should_ack_ingest};
+    use std::time::Duration;
+    use tokio::sync::oneshot;
     #[test]
     fn success_duplicate_and_blocked_are_acked() {
         assert!(should_ack_ingest(&Ok::<bool, &str>(true)));
@@ -4764,5 +4790,20 @@ mod introduction_ack_tests {
     #[test]
     fn tamper_or_validation_error_is_not_acked() {
         assert!(!should_ack_ingest(&Err::<bool, &str>("tampered")));
+    }
+
+    #[tokio::test]
+    async fn relay_name_registration_has_a_bounded_wait() {
+        // Keep the response sender alive to model a relay request that never completes.
+        let (response_tx, response_rx) = oneshot::channel();
+        let error = await_name_registration(response_rx, Duration::from_millis(10))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("timed out"));
+        assert!(
+            response_tx.is_closed(),
+            "timeout must abandon stale progress"
+        );
     }
 }

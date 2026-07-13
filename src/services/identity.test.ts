@@ -152,4 +152,15 @@ describe('identityService', () => {
       expect(result).toBe('12D3KooWTest');
     });
   });
+
+  describe('getIdentityEntryState', () => {
+    it('requests the atomic backend-verified returning identity state', async () => {
+      const entry = { mode: 'verified', claim: null } as const;
+      vi.mocked(invoke).mockResolvedValue(entry);
+
+      await expect(identityService.getIdentityEntryState()).resolves.toEqual(entry);
+
+      expect(invoke).toHaveBeenCalledWith('get_identity_entry_state');
+    });
+  });
 });

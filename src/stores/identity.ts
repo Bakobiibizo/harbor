@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import type { IdentityState, CreateIdentityRequest } from '../types';
 import { identityService, networkService } from '../services';
 
+export type IdentityClaimProgress =
+  'preparing' | 'connecting' | 'waiting-for-relay' | 'registering' | 'verifying' | 'saving';
+
 /** Extract error message from various error types (including Tauri errors) */
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -33,7 +36,43 @@ function getErrorMessage(err: unknown): string {
 }
 
 const relayRetryPattern =
-  /NO_ACTIVE_RELAY|no active relay|offline|unavailable|not initialized|network service|old relay/i;
+  /NO_ACTIVE_RELAY|no active relay|offline|unavailable|not initialized|network service|old relay|timed out/i;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function restoreVerifiedIdentity(
+  identity: import('../types').IdentityInfo,
+): Promise<import('../types').IdentityInfo> {
+  const entry = await withTimeout(
+    identityService.getIdentityEntryState(),
+    10_000,
+    'Harbor could not finish checking your saved name. Retry after checking your connection.',
+  );
+  if (!entry.claim) return identity;
+  if (entry.claim.request.peerId !== identity.peerId) {
+    throw new Error('The saved Harbor name does not belong to this identity.');
+  }
+  if (entry.mode !== 'verified') {
+    await withTimeout(
+      identityService.setMigrationMode('verified'),
+      10_000,
+      'Harbor verified your saved name but could not save its restored state. Please retry.',
+    );
+  }
+  return { ...identity, relayNameClaim: entry.claim, relayNameVerified: true };
+}
 
 async function waitForActiveRelay(): Promise<void> {
   let lastError: unknown;
@@ -61,6 +100,7 @@ interface IdentityStore {
     request: CreateIdentityRequest,
     name: string,
     namespace: string,
+    onProgress?: (progress: IdentityClaimProgress) => void,
   ) => Promise<import('../types').IdentityInfo>;
   unlock: (passphrase: string) => Promise<void>;
   lock: () => Promise<void>;
@@ -95,7 +135,15 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       const isUnlocked = await identityService.isUnlocked();
 
       if (isUnlocked) {
-        set({ state: { status: 'unlocked', identity } });
+        let restoredIdentity = identity;
+        try {
+          restoredIdentity = await restoreVerifiedIdentity(identity);
+        } catch (restoreError) {
+          // Unlocking and legacy migration must remain available even if a saved claim is damaged
+          // or temporarily unreadable. The migration gate will show the actionable recovery UI.
+          set({ error: getErrorMessage(restoreError) });
+        }
+        set({ state: { status: 'unlocked', identity: restoredIdentity } });
       } else {
         set({ state: { status: 'locked', identity } });
       }
@@ -118,9 +166,10 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       throw err;
     }
   },
-  completeOnboarding: async (request, name, namespace) => {
+  completeOnboarding: async (request, name, namespace, onProgress) => {
     set({ error: null });
     try {
+      onProgress?.('preparing');
       let identity;
       if (await identityService.hasIdentity()) {
         identity = await identityService.getIdentityInfo();
@@ -130,29 +179,50 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       } else {
         identity = await identityService.createIdentity(request);
       }
-      await networkService.startNetwork();
-      await networkService.connectToPublicRelays();
+      onProgress?.('connecting');
+      await withTimeout(
+        networkService.startNetwork(),
+        15_000,
+        'Harbor could not start networking in time. Please retry.',
+      );
+      await withTimeout(
+        networkService.connectToPublicRelays(),
+        15_000,
+        'Harbor could not connect to a relay in time. Check your connection and retry.',
+      );
+      onProgress?.('waiting-for-relay');
       await waitForActiveRelay();
       let claim;
       for (let attempt = 0; ; attempt++) {
         try {
-          claim = await identityService.registerRelayName({ name, namespace });
+          onProgress?.('registering');
+          claim = await withTimeout(
+            identityService.registerRelayName({ name, namespace }),
+            15_000,
+            'Name registration timed out. Check your relay connection and retry.',
+          );
           break;
         } catch (err) {
-          if (
-            attempt >= 9 ||
-            !relayRetryPattern.test(getErrorMessage(err))
-          )
-            throw err;
+          if (attempt >= 1 || !relayRetryPattern.test(getErrorMessage(err))) throw err;
           await new Promise((r) => setTimeout(r, 300));
         }
       }
+      onProgress?.('verifying');
       if (
         claim.request.peerId !== identity.peerId ||
-        !(await identityService.verifyNameClaim(claim))
+        !(await withTimeout(
+          identityService.verifyNameClaim(claim),
+          10_000,
+          'Harbor could not verify the relay response in time. Please retry.',
+        ))
       )
         throw new Error('Harbor could not verify the relay name claim.');
-      await identityService.setMigrationMode('verified');
+      onProgress?.('saving');
+      await withTimeout(
+        identityService.setMigrationMode('verified'),
+        10_000,
+        'Harbor verified your name but could not save it in time. Please retry.',
+      );
       const complete = { ...identity, relayNameClaim: claim, relayNameVerified: true };
       set({ state: { status: 'unlocked', identity: complete } });
       return complete;
@@ -167,7 +237,14 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     try {
       set({ error: null });
       const identity = await identityService.unlock(passphrase);
-      set({ state: { status: 'unlocked', identity } });
+      let restoredIdentity = identity;
+      try {
+        restoredIdentity = await restoreVerifiedIdentity(identity);
+      } catch (restoreError) {
+        // The identity is still securely unlocked. Preserve access to the migration recovery gate.
+        set({ error: getErrorMessage(restoreError) });
+      }
+      set({ state: { status: 'unlocked', identity: restoredIdentity } });
     } catch (err) {
       set({ error: getErrorMessage(err) });
       throw err;

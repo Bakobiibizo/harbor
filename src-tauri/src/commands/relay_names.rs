@@ -204,26 +204,68 @@ pub fn apply_relay_key_rotation(
 pub struct IdentityMigrationState {
     pub mode: String,
 }
+
+/// The complete, verified state needed by the frontend identity-entry gate.
+///
+/// Returning this as one command prevents the UI from making decisions from a
+/// migration-mode read and a separately verified claim read that can fail or
+/// complete independently. A claim is only included after all user, relay-key,
+/// peer-id, signature, and validity checks have passed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityEntryState {
+    pub mode: String,
+    pub claim: Option<NameClaimDto>,
+}
+
+fn migration_mode(db: &Database, peer: &str) -> Result<String> {
+    db.with_connection(|connection| {
+        connection
+            .query_row(
+                "SELECT mode FROM identity_migration_state WHERE peer_id=?",
+                [peer],
+                |row| row.get(0),
+            )
+            .or_else(|error| {
+                if matches!(error, rusqlite::Error::QueryReturnedNoRows) {
+                    Ok("required".to_string())
+                } else {
+                    Err(error)
+                }
+            })
+    })
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_identity_entry_state(
+    db: State<'_, Arc<Database>>,
+    identity: State<'_, Arc<IdentityService>>,
+) -> Result<IdentityEntryState> {
+    let peer = identity.get_peer_id()?;
+    let mode = migration_mode(&db, &peer)?;
+    let now = chrono::Utc::now().timestamp();
+    let claim = RelayNamesRepository::new(&db)
+        .active_for_peer(&peer, now)?
+        .map(|bytes| {
+            let claim: NameClaim = ciborium::de::from_reader(bytes.as_slice())
+                .map_err(|error| AppError::Serialization(error.to_string()))?;
+            verify_and_cache(&RelayNamesRepository::new(&db), &claim, now)
+                .map_err(|error| AppError::Crypto(error.to_string()))?;
+            Ok::<NameClaimDto, AppError>(claim.into())
+        })
+        .transpose()?;
+
+    Ok(IdentityEntryState { mode, claim })
+}
+
 #[tauri::command]
 pub fn get_identity_migration_state(
     db: State<'_, Arc<Database>>,
     identity: State<'_, Arc<IdentityService>>,
 ) -> Result<IdentityMigrationState> {
     let peer = identity.get_peer_id()?;
-    let mode = db.with_connection(|c| {
-        c.query_row(
-            "SELECT mode FROM identity_migration_state WHERE peer_id=?",
-            [&peer],
-            |r| r.get(0),
-        )
-        .or_else(|e| {
-            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
-                Ok("required".to_string())
-            } else {
-                Err(e)
-            }
-        })
-    })?;
+    let mode = migration_mode(&db, &peer)?;
     Ok(IdentityMigrationState { mode })
 }
 #[tauri::command]
@@ -318,5 +360,21 @@ mod dto_tests {
         assert_eq!(json["request"]["peerId"], "12D3KooWTest");
         assert!(json["request"].get("local_name").is_none());
         assert_eq!(NameClaim::from(dto), protocol);
+    }
+
+    #[test]
+    fn identity_entry_mode_defaults_to_migration_and_restores_persisted_state() {
+        let db = Database::in_memory().unwrap();
+        assert_eq!(migration_mode(&db, "peer-returning").unwrap(), "required");
+
+        db.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?,?,?)",
+                rusqlite::params!["peer-returning", "verified", 123],
+            )
+        })
+        .unwrap();
+
+        assert_eq!(migration_mode(&db, "peer-returning").unwrap(), "verified");
     }
 }

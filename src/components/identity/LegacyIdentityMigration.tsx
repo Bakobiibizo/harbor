@@ -10,6 +10,16 @@ import {
 } from '../../utils/relayNameInput';
 import { publishingPolicy } from '../../services/publishingPolicy';
 import { HarborIcon } from '../icons';
+import type { IdentityClaimProgress } from '../../stores/identity';
+
+const progressLabels: Record<IdentityClaimProgress, string> = {
+  preparing: 'Preparing your identity…',
+  connecting: 'Connecting to Harbor…',
+  'waiting-for-relay': 'Waiting for the relay…',
+  registering: 'Claiming your name…',
+  verifying: 'Verifying the signed claim…',
+  saving: 'Saving your Harbor name…',
+};
 
 export function LegacyIdentityMigration({
   identity,
@@ -21,7 +31,8 @@ export function LegacyIdentityMigration({
   const attachVerifiedRelayName = useIdentityStore((state) => state.attachVerifiedRelayName);
   const completeOnboarding = useIdentityStore((state) => state.completeOnboarding);
   const [claim, setClaim] = useState<RelayNameClaim | null>(identity.relayNameClaim ?? null);
-  const [checked, setChecked] = useState(false);
+  const restoredVerifiedClaim = identity.relayNameVerified === true && !!identity.relayNameClaim;
+  const [checked, setChecked] = useState(restoredVerifiedClaim);
   const [compatible, setCompatible] = useState(false);
   const [name, setName] = useState(
     identity.displayName
@@ -32,32 +43,43 @@ export function LegacyIdentityMigration({
   const [namespace] = useState(configuredRelayNamespace);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<IdentityClaimProgress>('preparing');
 
   useEffect(() => {
+    if (restoredVerifiedClaim) {
+      publishingPolicy.setMode('verified');
+      return;
+    }
     let active = true;
-    Promise.all([identityService.getLocalNameClaim(), identityService.getMigrationState()])
-      .then(async ([local, mode]) => {
-        setCompatible(mode === 'compatibility');
+    identityService
+      .getIdentityEntryState()
+      .then(async ({ claim: local, mode }) => {
+        if (!active) return;
+        const isCompatible = mode === 'compatibility';
+        setCompatible(isCompatible);
         publishingPolicy.setMode(mode);
-        if (
-          active &&
-          local?.request.peerId === identity.peerId &&
-          (await identityService.verifyNameClaim(local))
-        ) {
+        if (local?.request.peerId === identity.peerId) {
+          await identityService.setMigrationMode('verified');
+          if (!active) return;
           setClaim(local);
           attachVerifiedRelayName(local);
-          await identityService.setMigrationMode('verified');
           publishingPolicy.setMode('verified');
+        } else if (mode === 'verified') {
+          setError(
+            'Your previously verified Harbor name is not available locally. Reconnect and retry the claim so Harbor can restore it.',
+          );
         }
       })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => {
         if (active) setChecked(true);
       });
     return () => {
       active = false;
     };
-  }, [attachVerifiedRelayName, identity.peerId]);
+  }, [attachVerifiedRelayName, identity.peerId, restoredVerifiedClaim]);
 
   if (!checked)
     return <div className="min-h-screen grid place-items-center">Checking your Harbor name…</div>;
@@ -65,6 +87,7 @@ export function LegacyIdentityMigration({
 
   async function register() {
     setBusy(true);
+    setProgress('preparing');
     setError(null);
     try {
       const validation = validateRelayLocalName(name);
@@ -84,6 +107,7 @@ export function LegacyIdentityMigration({
         },
         name,
         namespace,
+        setProgress,
       );
       const next = completed.relayNameClaim;
       if (!next) throw new Error('Harbor completed registration without a verified name claim.');
@@ -148,7 +172,7 @@ export function LegacyIdentityMigration({
           </div>
         )}
         <Button className="w-full" disabled={busy || !name || !namespace} onClick={register}>
-          {busy ? 'Claiming name…' : 'Claim this name'}
+          {busy ? progressLabels[progress] : error ? 'Retry name claim' : 'Claim this name'}
         </Button>
         <button
           className="w-full text-sm underline"

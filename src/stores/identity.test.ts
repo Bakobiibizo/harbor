@@ -13,6 +13,7 @@ vi.mock('../services', () => ({
     updateDisplayName: vi.fn(),
     updateBio: vi.fn(),
     updatePassphraseHint: vi.fn(),
+    getIdentityEntryState: vi.fn(),
     registerRelayName: vi.fn(),
     verifyNameClaim: vi.fn(),
     setMigrationMode: vi.fn(),
@@ -43,6 +44,10 @@ describe('useIdentityStore', () => {
       error: null,
     });
     vi.clearAllMocks();
+    vi.mocked(identityService.getIdentityEntryState).mockResolvedValue({
+      mode: 'required',
+      claim: null,
+    });
     vi.mocked(networkService.getNetworkStats).mockResolvedValue({
       connectedPeers: 1,
       totalBytesIn: 0,
@@ -206,6 +211,25 @@ describe('useIdentityStore', () => {
       expect(state.status).toBe('unlocked');
     });
 
+    it('restores a cryptographically verified persisted claim while unlocking', async () => {
+      const claim = { request: { peerId: mockIdentity.peerId } } as never;
+      vi.mocked(identityService.unlock).mockResolvedValue(mockIdentity);
+      vi.mocked(identityService.getIdentityEntryState).mockResolvedValue({
+        mode: 'verified',
+        claim,
+      });
+
+      await useIdentityStore.getState().unlock('test-passphrase-not-real');
+
+      const state = useIdentityStore.getState().state;
+      expect(state.status).toBe('unlocked');
+      if (state.status === 'unlocked') {
+        expect(state.identity.relayNameClaim).toBe(claim);
+        expect(state.identity.relayNameVerified).toBe(true);
+      }
+      expect(identityService.setMigrationMode).not.toHaveBeenCalled();
+    });
+
     it('should set error on a wrong password', async () => {
       vi.mocked(identityService.unlock).mockRejectedValue(new Error('Invalid password'));
 
@@ -213,6 +237,36 @@ describe('useIdentityStore', () => {
 
       expect(useIdentityStore.getState().error).toBe('Invalid password');
     });
+  });
+
+  it('bounds an interrupted relay claim and permits another attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(identityService.hasIdentity).mockResolvedValue(true);
+      vi.mocked(identityService.getIdentityInfo).mockResolvedValue(mockIdentity);
+      vi.mocked(identityService.isUnlocked).mockResolvedValue(true);
+      vi.mocked(networkService.startNetwork).mockResolvedValue();
+      vi.mocked(networkService.connectToPublicRelays).mockResolvedValue();
+      vi.mocked(identityService.registerRelayName).mockImplementation(
+        () => new Promise(() => undefined),
+      );
+
+      const attempt = useIdentityStore
+        .getState()
+        .completeOnboarding(
+          { displayName: 'Test User', passphrase: 'secret-passphrase' },
+          'test-user',
+          'relay.test',
+        );
+      const rejected = expect(attempt).rejects.toThrow('Name registration timed out');
+      await vi.advanceTimersByTimeAsync(31_000);
+      await rejected;
+
+      expect(identityService.registerRelayName).toHaveBeenCalledTimes(2);
+      expect(useIdentityStore.getState().error).toContain('timed out');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe('lock', () => {

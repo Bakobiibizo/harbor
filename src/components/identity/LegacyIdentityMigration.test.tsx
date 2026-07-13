@@ -17,6 +17,7 @@ vi.mock('../../utils/relayNameInput', async () => {
 });
 vi.mock('../../services', () => ({
   identityService: {
+    getIdentityEntryState: vi.fn(),
     getLocalNameClaim: vi.fn(),
     getMigrationState: vi.fn(),
     verifyNameClaim: vi.fn(),
@@ -60,8 +61,10 @@ const claim = {
 describe('LegacyIdentityMigration release gates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(identityService.getLocalNameClaim).mockResolvedValue(null);
-    vi.mocked(identityService.getMigrationState).mockResolvedValue('required');
+    vi.mocked(identityService.getIdentityEntryState).mockResolvedValue({
+      claim: null,
+      mode: 'required',
+    });
     vi.mocked(identityService.setMigrationMode).mockResolvedValue();
   });
   it('recovers from a collision and retries without losing the legacy profile', async () => {
@@ -77,12 +80,12 @@ describe('LegacyIdentityMigration release gates', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'new-name' } });
     fireEvent.click(screen.getByRole('button', { name: 'Claim this name' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('name already taken');
-    fireEvent.click(screen.getByRole('button', { name: 'Claim this name' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry name claim' }));
     expect(await screen.findByText('app restored')).toBeInTheDocument();
     expect(attach).toHaveBeenCalledWith(claim);
   });
   it('surfaces offline startup and permits explicit compatibility retry', async () => {
-    vi.mocked(identityService.getLocalNameClaim).mockRejectedValue(new Error('relay offline'));
+    vi.mocked(identityService.getIdentityEntryState).mockRejectedValue(new Error('relay offline'));
     render(
       <LegacyIdentityMigration identity={identity}>
         <div>compatibility app</div>
@@ -105,8 +108,10 @@ describe('LegacyIdentityMigration release gates', () => {
     expect(screen.queryByText('must not open')).not.toBeInTheDocument();
   });
   it('attaches an existing verified claim on startup and persists verified mode', async () => {
-    vi.mocked(identityService.getLocalNameClaim).mockResolvedValue(claim);
-    vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
+    vi.mocked(identityService.getIdentityEntryState).mockResolvedValue({
+      claim,
+      mode: 'verified',
+    });
     render(
       <LegacyIdentityMigration identity={identity}>
         <div>verified app</div>
@@ -117,7 +122,10 @@ describe('LegacyIdentityMigration release gates', () => {
     expect(identityService.setMigrationMode).toHaveBeenCalledWith('verified');
   });
   it('restores explicitly persisted compatibility mode after remount', async () => {
-    vi.mocked(identityService.getMigrationState).mockResolvedValue('compatibility');
+    vi.mocked(identityService.getIdentityEntryState).mockResolvedValue({
+      claim: null,
+      mode: 'compatibility',
+    });
     const first = render(
       <LegacyIdentityMigration identity={identity}>
         <div>restored app</div>
@@ -131,6 +139,20 @@ describe('LegacyIdentityMigration release gates', () => {
       </LegacyIdentityMigration>,
     );
     expect(await screen.findByText('restored again')).toBeInTheDocument();
-    expect(identityService.getMigrationState).toHaveBeenCalledTimes(2);
+    expect(identityService.getIdentityEntryState).toHaveBeenCalledTimes(2);
+  });
+
+  it('enters immediately with a claim restored and verified during unlock', () => {
+    render(
+      <LegacyIdentityMigration
+        identity={{ ...identity, relayNameClaim: claim, relayNameVerified: true }}
+      >
+        <div>returning user app</div>
+      </LegacyIdentityMigration>,
+    );
+
+    expect(screen.getByText('returning user app')).toBeInTheDocument();
+    expect(screen.queryByText('Choose your verified Harbor name')).not.toBeInTheDocument();
+    expect(identityService.getIdentityEntryState).not.toHaveBeenCalled();
   });
 });
