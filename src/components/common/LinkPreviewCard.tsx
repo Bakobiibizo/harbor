@@ -133,7 +133,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
   if (error || !preview) {
     return (
       <div
-        className="mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
+        className="harbor-interactive card-interactive mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
         style={{
           border: '1px solid hsl(var(--harbor-border-subtle))',
           background: 'hsl(var(--harbor-surface-1))',
@@ -197,7 +197,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
   if (!hasContent) {
     return (
       <div
-        className="mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
+        className="harbor-interactive card-interactive mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
         style={{
           border: '1px solid hsl(var(--harbor-border-subtle))',
           background: 'hsl(var(--harbor-surface-1))',
@@ -259,7 +259,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
 
   return (
     <div
-      className="mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
+      className="harbor-interactive card-interactive mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
       style={{
         border: '1px solid hsl(var(--harbor-border-subtle))',
         background: 'hsl(var(--harbor-surface-1))',

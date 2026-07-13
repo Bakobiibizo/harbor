@@ -10,6 +10,7 @@ import { useKeyboardNavigation } from '../../hooks';
 import { safeIdentityLabel } from '../../utils/relayName';
 import { KeyboardShortcutsModal, CustomizationPanel } from '../common';
 import { LockAccountDialog } from './LockAccountDialog';
+import { OnboardingHero } from '../onboarding';
 import {
   BoardsIcon,
   ChatIcon,
@@ -143,7 +144,7 @@ export function MainLayout({ children }: MainLayoutProps) {
         >
           <button
             onClick={() => setIsCustomizationOpen((prev) => !prev)}
-            className="flex items-center gap-3 w-full text-left group transition-opacity duration-200 hover:opacity-80"
+            className="harbor-interactive flex items-center gap-3 w-full text-left group transition-opacity duration-200 hover:opacity-80"
             title="Customize Harbor"
           >
             <div className="w-10 h-10 flex items-center justify-center transition-transform duration-200 group-hover:scale-105">
@@ -185,7 +186,7 @@ export function MainLayout({ children }: MainLayoutProps) {
           <div className="p-4">
             <button
               onClick={() => navigate('/settings')}
-              className="w-full p-3 rounded-xl text-left transition-all duration-200 hover:opacity-90"
+              className="harbor-interactive card-interactive w-full p-3 rounded-xl text-left transition-all duration-200 hover:opacity-90"
               style={{
                 background: 'hsl(var(--harbor-surface-1))',
                 border: '1px solid hsl(var(--harbor-border-subtle))',
@@ -271,7 +272,12 @@ export function MainLayout({ children }: MainLayoutProps) {
             };
 
             return (
-              <NavLink key={item.to} to={item.to} className="group block" onClick={handleNavClick}>
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className="harbor-interactive group block rounded-xl"
+                onClick={handleNavClick}
+              >
                 <div
                   className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200"
                   style={{
@@ -333,7 +339,7 @@ export function MainLayout({ children }: MainLayoutProps) {
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
           {/* Settings */}
-          <NavLink to="/settings" className="group block">
+          <NavLink to="/settings" className="harbor-interactive group block rounded-xl">
             {({ isActive }) => (
               <div
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200"
@@ -440,6 +446,8 @@ export function MainLayout({ children }: MainLayoutProps) {
           onConfirm={handleLock}
         />
       )}
+
+      {identity && <OnboardingHero key={identity.peerId} identityId={identity.peerId} />}
 
       {/* Keyboard shortcuts modal */}
       <KeyboardShortcutsModal />

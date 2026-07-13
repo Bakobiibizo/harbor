@@ -7,6 +7,7 @@ describe('Input', () => {
     render(<Input />);
 
     expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveClass('harbor-field');
   });
 
   it('should render a label when provided', () => {
