@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { useIdentityStore, useSettingsStore } from '../stores';
+import { useIdentityStore, useNotificationsStore, useSettingsStore } from '../stores';
 import type { ThemeMode } from '../stores/settings';
 import {
   UserIcon,
@@ -14,6 +14,7 @@ import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
 import { useAppVersion } from '../hooks';
 import { BugReportForm, MentionInbox } from '../components/identity';
+import { requestNativeNotificationPermission } from '../services/nativeNotifications';
 import {
   requestCallMediaAccess,
   type MediaPermissionResult,
@@ -227,6 +228,11 @@ export function SettingsPage() {
   const [mediaPermissionResult, setMediaPermissionResult] =
     useState<MediaPermissionResult | null>(null);
   const [isCheckingMedia, setIsCheckingMedia] = useState(false);
+  const nativeNotificationsEnabled = useNotificationsStore((value) => value.nativeEnabled);
+  const setNativeNotificationsEnabled = useNotificationsStore((value) => value.setNativeEnabled);
+  const storedNotifications = useNotificationsStore((value) => value.notifications);
+  const mutedNotificationKeys = useNotificationsStore((value) => value.mutedPeerIds);
+  const clearOwnerNotifications = useNotificationsStore((value) => value.clearOwner);
 
   // Update state
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -235,6 +241,12 @@ export function SettingsPage() {
   const [isUpdating, setIsUpdating] = useState(false);
 
   const identity = state.status === 'unlocked' ? state.identity : null;
+  const notificationCount = storedNotifications.filter(
+    (item) => item.ownerPeerId === identity?.peerId,
+  ).length;
+  const mutedNotificationPeers = mutedNotificationKeys.filter((item) =>
+    item.startsWith(`${identity?.peerId}:`),
+  ).length;
 
   // Initialize form values when identity changes
   useEffect(() => {
@@ -534,11 +546,24 @@ export function SettingsPage() {
     }
   };
 
+  const handleNativeNotifications = async (enabled: boolean) => {
+    if (!enabled) {
+      setNativeNotificationsEnabled(false);
+      toast.success('System notifications disabled');
+      return;
+    }
+    const granted = await requestNativeNotificationPermission();
+    setNativeNotificationsEnabled(granted);
+    if (granted) toast.success('System notifications enabled');
+    else toast.error('Notification permission was not granted. In-app notifications remain available.');
+  };
+
   const sections = [
     { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
     { id: 'appearance', label: 'Appearance', icon: PaletteIcon, description: 'Theme and display' },
     { id: 'security', label: 'Security', icon: LockIcon, description: 'Password and keys' },
     { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'Connection help for calls' },
+    { id: 'notifications', label: 'Notifications', icon: ShieldIcon, description: 'Messages and calls' },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
     { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
     { id: 'support', label: 'Support', icon: ShieldIcon, description: 'Mentions and bug reports' },
@@ -1417,6 +1442,39 @@ export function SettingsPage() {
                     keeps LAN/direct scenarios available and avoids undeclared third-party services.
                   </p>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeSection === 'notifications' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-semibold mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                  Notifications
+                </h3>
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Choose how Harbor alerts you to private messages and calls
+                </p>
+              </div>
+              <div className="rounded-lg p-6" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>System notifications</h4>
+                    <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                      Show an operating-system alert when Harbor is in the background. Message text is never included.
+                    </p>
+                  </div>
+                  <Toggle enabled={nativeNotificationsEnabled} onChange={(value) => void handleNativeNotifications(value)} />
+                </div>
+              </div>
+              <div className="rounded-lg p-6" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
+                <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>Notification history</h4>
+                <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  {notificationCount} saved notification{notificationCount === 1 ? '' : 's'} · {mutedNotificationPeers} muted contact{mutedNotificationPeers === 1 ? '' : 's'}. History and read state remain on this profile.
+                </p>
+                <button type="button" onClick={() => identity && clearOwnerNotifications(identity.peerId)} disabled={notificationCount === 0} className="harbor-interactive mt-4 rounded-lg px-4 py-2 text-sm font-medium" style={{ background: 'hsl(var(--harbor-surface-2))', color: 'hsl(var(--harbor-text-primary))' }}>
+                  Clear notification history
+                </button>
               </div>
             </div>
           )}

@@ -14,6 +14,8 @@ import {
 } from '../stores';
 import { mediaService } from '../services/media';
 import { ReactiveRefreshCoordinator } from '../services/reactiveRefresh';
+import { notifyHarborEvent } from '../services/harborNotifications';
+import { safePeerLabel } from '../utils/relayName';
 
 /**
  * Hook to listen to Tauri events from the Rust backend.
@@ -154,6 +156,10 @@ export function useTauriEvents() {
     }
 
     function handleNetworkEvent(event: NetworkEvent) {
+      const contactName = (peerId: string) => {
+        const contact = useContactsStore.getState().contacts.find((item) => item.peerId === peerId);
+        return safePeerLabel(peerId, contact?.verifiedQualifiedName);
+      };
       switch (event.type) {
         case 'peer_connected':
           console.log(`[Network] Peer connected: ${event.peer_id}`);
@@ -184,6 +190,12 @@ export function useTauriEvents() {
 
         case 'message_received':
           console.log(`[Network] Message received from ${event.peer_id} via ${event.protocol}`);
+          notifyHarborEvent({
+            kind: 'message',
+            peerId: event.peer_id,
+            senderName: contactName(event.peer_id),
+            eventId: `${event.protocol}:${event.payload.slice(0, 16).join('.')}`,
+          });
           // Use getState() to avoid stale closures - call functions directly from the store
           coordinator.enqueue({
             domains: ['messages', 'contacts'],
@@ -341,12 +353,42 @@ export function useTauriEvents() {
           console.log(
             `[Network] Call signaling ${event.message.payload.type} from ${event.peer_id}`,
           );
-          useCallingStore
-            .getState()
+          {
+            const calling = useCallingStore.getState();
+            const payload = event.message.payload;
+            if (payload.type === 'offer') {
+              notifyHarborEvent({
+                kind: 'incoming_call',
+                peerId: event.peer_id,
+                senderName: contactName(event.peer_id),
+                eventId: payload.payload.callId,
+              });
+            } else if (payload.type === 'group_membership' && payload.payload.action === 'invite') {
+              notifyHarborEvent({
+                kind: 'incoming_call',
+                peerId: event.peer_id,
+                senderName: contactName(event.peer_id),
+                eventId: payload.payload.roomId,
+                mediaMode: payload.payload.mediaMode,
+              });
+            } else if (
+              (payload.type === 'hangup' || payload.type === 'decline') &&
+              calling.runtimeSnapshot.peerId === event.peer_id &&
+              ['incoming', 'ringing'].includes(calling.runtimeSnapshot.state)
+            ) {
+              notifyHarborEvent({
+                kind: 'missed_call',
+                peerId: event.peer_id,
+                senderName: contactName(event.peer_id),
+                eventId: payload.payload.callId,
+              });
+            }
+            calling
             .handleBackendEvent(event)
             .catch((error) => {
               console.warn('[Network] Failed to refresh call state after signaling event:', error);
             });
+          }
           window.dispatchEvent(new CustomEvent('harbor:calling-signaling', { detail: event }));
           break;
 

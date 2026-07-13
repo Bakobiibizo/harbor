@@ -15,7 +15,12 @@ import {
   useKeyboardNavigation,
 } from '../../hooks';
 import { safeIdentityLabel } from '../../utils/relayName';
-import { ComposePostModal, KeyboardShortcutsModal, CustomizationPanel } from '../common';
+import {
+  ComposePostModal,
+  KeyboardShortcutsModal,
+  CustomizationPanel,
+  NotificationCenter,
+} from '../common';
 import { LockAccountDialog } from './LockAccountDialog';
 import { OnboardingHero } from '../onboarding';
 import {
@@ -384,6 +389,12 @@ export function MainLayout({ children }: MainLayoutProps) {
           className="p-3 border-t space-y-1"
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
+          <div className="flex items-center gap-3 px-3 py-1.5">
+            <NotificationCenter />
+            <span className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+              Notifications
+            </span>
+          </div>
           <button
             type="button"
             onClick={() =>

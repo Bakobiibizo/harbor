@@ -3,6 +3,8 @@ export { useBoardsStore } from './boards';
 export { useCallingStore } from './calling';
 export { useIdentityStore } from './identity';
 export { useNetworkStore } from './network';
+export { useNotificationsStore } from './notifications';
+export type { HarborNotification, HarborNotificationKind } from './notifications';
 export { useMessagingStore } from './messaging';
 export { useContactsStore } from './contacts';
 export { useContactWallStore } from './contactWall';

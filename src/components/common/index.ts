@@ -7,4 +7,5 @@ export { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 export { CustomizationPanel } from './CustomizationPanel';
 export { EmojiPicker } from './EmojiPicker';
 export { ModalityFilter } from './ModalityFilter';
+export { NotificationCenter } from './NotificationCenter';
 export { ComposePostModal } from './ComposePostModal';
