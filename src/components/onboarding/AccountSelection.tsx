@@ -4,7 +4,6 @@ import { useAccountsStore } from '../../stores';
 import { HarborIcon, UserPlusIcon, TrashIcon, LockIcon } from '../icons';
 import type { AccountInfo } from '../../types';
 import toast from 'react-hot-toast';
-import { safePeerLabel } from '../../utils/relayName';
 
 interface AccountSelectionProps {
   onSelectAccount: (account: AccountInfo) => void;
@@ -50,6 +49,9 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
       day: 'numeric',
     });
   };
+
+  const localAccountLabel = (account: AccountInfo) =>
+    account.displayName.trim() || `Local profile ${account.peerId.slice(0, 8)}…`;
 
   return (
     <div
@@ -166,7 +168,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                           className="w-full h-full rounded-full object-cover"
                         />
                       ) : (
-                        getInitials(safePeerLabel(account.peerId))
+                        getInitials(localAccountLabel(account))
                       )}
                     </div>
 
@@ -176,13 +178,23 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         className="font-semibold truncate"
                         style={{ color: 'hsl(var(--harbor-text-primary))' }}
                       >
-                        {safePeerLabel(account.peerId)}
+                        {localAccountLabel(account)}
                       </p>
+                      {account.bio && (
+                        <p
+                          className="text-xs truncate"
+                          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                        >
+                          {account.bio}
+                        </p>
+                      )}
                       <p
                         className="text-xs truncate font-mono"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                        title={account.peerId}
                       >
-                        {account.peerId.slice(0, 12)}...
+                        {account.peerId.slice(0, 12)}…{account.peerId.slice(-6)} · saved on this
+                        device
                       </p>
                       {account.lastAccessedAt && (
                         <p
