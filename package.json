@@ -41,7 +41,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "acceptance:live-beta": "node scripts/live-beta-acceptance.mjs"
   },
   "type": "module",
   "version": "1.4.1-beta.6"
