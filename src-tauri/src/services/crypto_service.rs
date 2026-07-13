@@ -178,9 +178,7 @@ impl CryptoService {
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            AppError::IdentityInvalidPassphrase(
-                "Decryption failed - invalid password".to_string(),
-            )
+            AppError::IdentityInvalidPassphrase("Decryption failed - invalid password".to_string())
         })?;
 
         let keys: EncryptedKeys = serde_json::from_slice(&plaintext)
