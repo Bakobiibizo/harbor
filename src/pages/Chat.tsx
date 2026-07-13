@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { createLogger } from '../utils/logger';
 import { safePeerLabel } from '../utils/relayName';
+import { callFailureFrom } from '../utils/callErrors';
 import {
   ChatIcon,
   SearchIcon,
@@ -1011,8 +1012,7 @@ export function ChatPage() {
         });
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        toast.error(`Could not start call: ${message}`);
+        toast.error(callFailureFrom(error, 'start-chat-call').message);
       });
   };
 
@@ -1046,8 +1046,7 @@ export function ChatPage() {
         );
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        toast.error(`Could not start group call: ${message}`);
+        toast.error(callFailureFrom(error, 'start-chat-group-call').message);
       });
   };
 

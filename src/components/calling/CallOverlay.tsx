@@ -87,7 +87,8 @@ export function CallOverlay() {
   const snapshot = useCallingStore((state) => state.runtimeSnapshot);
   const groupSnapshot = useCallingStore((state) => state.groupRuntimeSnapshot);
   const error = useCallingStore((state) => state.error);
-  const startError = snapshot.error ?? error;
+  const failure = useCallingStore((state) => state.failure);
+  const startError = failure?.message ?? snapshot.error ?? error;
   const acceptIncomingCall = useCallingStore((state) => state.acceptIncomingCall);
   const acceptIncomingGroupCall = useCallingStore((state) => state.acceptIncomingGroupCall);
   const declineIncomingCall = useCallingStore((state) => state.declineIncomingCall);
@@ -141,9 +142,10 @@ export function CallOverlay() {
                 {groupSnapshot.state}
               </p>
               {groupSnapshot.error && (
-                <p className="text-xs mt-1" style={{ color: 'hsl(var(--harbor-error))' }}>
-                  {groupSnapshot.error}
-                </p>
+                <div className="text-xs mt-1" style={{ color: 'hsl(var(--harbor-error))' }}>
+                  <p>{failure?.message ?? groupSnapshot.error}</p>
+                  {failure?.recovery && <p className="mt-1">{failure.recovery}</p>}
+                </div>
               )}
             </div>
             <span
@@ -328,9 +330,10 @@ export function CallOverlay() {
               </p>
             )}
             {startError && (
-              <p className="text-xs mt-1" style={{ color: 'hsl(var(--harbor-error))' }}>
-                {startError}
-              </p>
+              <div className="text-xs mt-1" style={{ color: 'hsl(var(--harbor-error))' }}>
+                <p>{startError}</p>
+                {failure?.recovery && <p className="mt-1">{failure.recovery}</p>}
+              </div>
             )}
           </div>
         </div>

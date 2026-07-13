@@ -9,6 +9,7 @@ import type {
 } from '../types';
 import { callingService } from './calling';
 import { createCallPeerConnection, type CallPeerConnectionRuntime } from './callingIce';
+import { callFailureFrom } from '../utils/callErrors';
 
 export type AudioCallRuntimeState =
   | 'idle'
@@ -25,6 +26,7 @@ export type CallMediaMode = 'audio' | 'video';
 export type AudioCallTerminalReason =
   | HangupReason
   | 'permission_denied'
+  | 'missing_media_api'
   | 'missing_device'
   | 'peer_disconnected'
   | 'ice_failed'
@@ -129,13 +131,16 @@ export const GROUP_CALL_MAX_REMOTE_PARTICIPANTS = GROUP_CALL_MAX_PARTICIPANTS - 
 const DEFAULT_CALL_TIMEOUT_MS = 45_000;
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return callFailureFrom(error, 'call-media-runtime').message;
 }
 
 function microphoneFailureReason(error: unknown): AudioCallTerminalReason {
   if (error instanceof DOMException) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
       return 'permission_denied';
+    }
+    if (error.name === 'NotSupportedError') {
+      return 'missing_media_api';
     }
     if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
       return 'missing_device';
@@ -165,7 +170,7 @@ function getMediaDevices(
 ): Pick<MediaDevices, 'getUserMedia'> {
   const devices = configured ?? globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
-    throw new DOMException('No microphone device API is available.', 'NotFoundError');
+    throw new DOMException('The media capture API is not available.', 'NotSupportedError');
   }
   return devices;
 }

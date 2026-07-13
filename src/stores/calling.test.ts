@@ -56,6 +56,24 @@ describe('useCallingStore', () => {
     expect(useCallingStore.getState().error).toBeNull();
   });
 
+  it('turns structured backend failures into safe actionable state', async () => {
+    vi.mocked(callingService.getActiveCalls).mockRejectedValue({
+      code: 'NETWORK_PEER_UNREACHABLE',
+      message: 'Could not reach peer',
+      details: 'Network signaling failed',
+      privateKey: 'must-not-leak',
+    });
+    vi.mocked(callingService.getCallHistory).mockResolvedValue([]);
+
+    await useCallingStore.getState().hydrateCalls();
+
+    const state = useCallingStore.getState();
+    expect(state.failure?.code).toBe('signaling_failed');
+    expect(state.error).toBe('Harbor could not reach this contact to set up the call.');
+    expect(JSON.stringify(state.failure)).not.toContain('must-not-leak');
+    expect(state.error).not.toContain('[object Object]');
+  });
+
   it('refreshes persisted calls after backend call signaling events', async () => {
     vi.mocked(callingService.getActiveCalls).mockResolvedValue([activeCall]);
     vi.mocked(callingService.getCallHistory).mockResolvedValue([activeCall]);

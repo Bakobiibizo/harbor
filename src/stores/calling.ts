@@ -16,12 +16,14 @@ import {
 } from '../services/callingRuntime';
 import { useSettingsStore } from './settings';
 import { useIdentityStore } from './identity';
+import { callFailureFrom, type CallFailure } from '../utils/callErrors';
 
 interface CallingState {
   activeCalls: CallSession[];
   callHistory: CallSession[];
   isLoading: boolean;
   error: string | null;
+  failure: CallFailure | null;
   lastEventPeerId: string | null;
   runtimeSnapshot: AudioCallRuntimeSnapshot;
   groupRuntimeSnapshot: GroupCallRuntimeSnapshot;
@@ -90,13 +92,15 @@ const initialState = {
   callHistory: [] as CallSession[],
   isLoading: false,
   error: null as string | null,
+  failure: null as CallFailure | null,
   lastEventPeerId: null as string | null,
   runtimeSnapshot: idleRuntimeSnapshot,
   groupRuntimeSnapshot: idleGroupRuntimeSnapshot,
 };
 
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function failureState(error: unknown, context: string): Pick<CallingState, 'error' | 'failure'> {
+  const failure = callFailureFrom(error, context);
+  return { error: failure.message, failure };
 }
 
 let runtime: AudioCallRuntime | null = null;
@@ -112,7 +116,13 @@ function getRuntime(set: (state: Partial<CallingState>) => void): AudioCallRunti
     const settings = useSettingsStore.getState();
     runtime = new AudioCallRuntime({
       iceServers: settings.iceServers,
-      onStateChange: (runtimeSnapshot) => set({ runtimeSnapshot }),
+      onStateChange: (runtimeSnapshot) =>
+        set({
+          runtimeSnapshot,
+          ...(runtimeSnapshot.error
+            ? failureState(runtimeSnapshot.error, 'voice-video-call-runtime')
+            : {}),
+        }),
     });
   }
   return runtime;
@@ -123,7 +133,13 @@ function getGroupRuntime(set: (state: Partial<CallingState>) => void): GroupMesh
     const settings = useSettingsStore.getState();
     groupRuntime = new GroupMeshCallRuntime({
       iceServers: settings.iceServers,
-      onStateChange: (groupRuntimeSnapshot) => set({ groupRuntimeSnapshot }),
+      onStateChange: (groupRuntimeSnapshot) =>
+        set({
+          groupRuntimeSnapshot,
+          ...(groupRuntimeSnapshot.error
+            ? failureState(groupRuntimeSnapshot.error, 'group-call-runtime')
+            : {}),
+        }),
     });
   }
   return groupRuntime;
@@ -145,7 +161,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
   ...initialState,
 
   hydrateCalls: async () => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, error: null, failure: null });
     try {
       const [activeCalls, callHistory, groupRooms] = await Promise.all([
         callingService.getActiveCalls(),
@@ -177,25 +193,25 @@ export const useCallingStore = create<CallingState>((set, get) => ({
         );
       }
     } catch (error) {
-      set({ error: toErrorMessage(error), isLoading: false });
+      set({ ...failureState(error, 'hydrate-calls'), isLoading: false });
     }
   },
 
   refreshActiveCalls: async () => {
     try {
       const activeCalls = await callingService.getActiveCalls();
-      set({ activeCalls, error: null });
+      set({ activeCalls, error: null, failure: null });
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'refresh-active-calls'));
     }
   },
 
   refreshCallHistory: async (limit = 100) => {
     try {
       const callHistory = await callingService.getCallHistory(limit);
-      set({ callHistory, error: null });
+      set({ callHistory, error: null, failure: null });
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'refresh-call-history'));
     }
   },
 
@@ -266,17 +282,19 @@ export const useCallingStore = create<CallingState>((set, get) => ({
 
   startOutgoingCall: async (peerId: string, options = {}) => {
     try {
+      set({ error: null, failure: null });
       pendingIncomingEnvelope = null;
       await getRuntime(set).startOutgoingCall(peerId, options);
       await get().hydrateCalls();
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'start-outgoing-call'));
       throw error;
     }
   },
 
   startOutgoingGroupCall: async (peerIds: string[], options = {}) => {
     try {
+      set({ error: null, failure: null });
       pendingIncomingEnvelope = null;
       if (peerIds.length > GROUP_CALL_MAX_REMOTE_PARTICIPANTS) {
         throw new Error(
@@ -305,23 +323,24 @@ export const useCallingStore = create<CallingState>((set, get) => ({
       });
       await get().hydrateCalls();
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'start-outgoing-group-call'));
       throw error;
     }
   },
 
   acceptIncomingCall: async () => {
     if (!pendingIncomingEnvelope) {
-      set({ error: 'No incoming call is available to answer.' });
+      set(failureState(new Error('No incoming call is available to answer.'), 'accept-call'));
       return;
     }
 
     try {
+      set({ error: null, failure: null });
       await getRuntime(set).acceptIncomingCall(pendingIncomingEnvelope);
       pendingIncomingEnvelope = null;
       await get().hydrateCalls();
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'accept-incoming-call'));
       throw error;
     }
   },
@@ -329,10 +348,11 @@ export const useCallingStore = create<CallingState>((set, get) => ({
   acceptIncomingGroupCall: async () => {
     const membership = pendingGroupInvite;
     if (!membership) {
-      set({ error: 'No incoming group call is available to answer.' });
+      set(failureState(new Error('No incoming group call is available to answer.'), 'accept-group-call'));
       return;
     }
     try {
+      set({ error: null, failure: null });
       await callingService.sendGroupMembership({
         roomId: membership.roomId,
         creatorPeerId: membership.creatorPeerId,
@@ -349,7 +369,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
       pendingGroupOffers.clear();
       await get().hydrateCalls();
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'accept-incoming-group-call'));
       throw error;
     }
   },
@@ -361,7 +381,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
       try {
         await callingService.declineCall(offer.callId, offer.callerPeerId);
       } catch (error) {
-        set({ error: toErrorMessage(error) });
+        set(failureState(error, 'decline-incoming-call'));
         throw error;
       }
     }
@@ -386,7 +406,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
       pendingIncomingEnvelope = null;
       await get().hydrateCalls();
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'hangup-call'));
       throw error;
     }
   },
@@ -412,7 +432,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
       await groupRuntime?.leave(reason);
       await get().hydrateCalls();
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'leave-group-call'));
       throw error;
     }
   },
@@ -421,7 +441,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     try {
       await runtime?.setCameraEnabled(enabled);
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'set-camera'));
       throw error;
     }
   },
@@ -430,7 +450,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     try {
       await groupRuntime?.setLocalMuted(muted);
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'set-group-muted'));
       throw error;
     }
   },
@@ -439,7 +459,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     try {
       await groupRuntime?.setCameraEnabled(enabled);
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'set-group-camera'));
       throw error;
     }
   },
@@ -448,7 +468,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     try {
       await runtime?.switchCamera(deviceId);
     } catch (error) {
-      set({ error: toErrorMessage(error) });
+      set(failureState(error, 'switch-camera'));
       throw error;
     }
   },
@@ -459,6 +479,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
       runtimeSnapshot: idleRuntimeSnapshot,
       groupRuntimeSnapshot: idleGroupRuntimeSnapshot,
       error: null,
+      failure: null,
     });
   },
 

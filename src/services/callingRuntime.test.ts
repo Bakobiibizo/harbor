@@ -344,7 +344,7 @@ describe('AudioCallRuntime', () => {
     expect(getUserMedia).toHaveBeenNthCalledWith(2, { audio: true, video: false });
     expect(snapshot.mediaMode).toBe('audio');
     expect(snapshot.videoRequested).toBe(true);
-    expect(snapshot.cameraError).toContain('camera denied');
+    expect(snapshot.cameraError).toContain('does not have permission');
     expect(callingService.startCall).toHaveBeenCalled();
   });
 
@@ -424,6 +424,22 @@ describe('AudioCallRuntime', () => {
     expect(runtime.getSnapshot()).toMatchObject({
       state: 'failed',
       terminalReason: 'permission_denied',
+    });
+  });
+
+  it('distinguishes a missing platform media API from missing hardware', async () => {
+    const pc = new MockPeerConnection();
+    const unavailable = new DOMException('The media capture API is not available.', 'NotSupportedError');
+    const { runtime } = runtimeWith(pc, vi.fn().mockRejectedValue(unavailable));
+
+    await expect(runtime.startOutgoingCall('peer-alice')).rejects.toThrow(
+      'The media capture API is not available.',
+    );
+
+    expect(runtime.getSnapshot()).toMatchObject({
+      state: 'failed',
+      terminalReason: 'missing_media_api',
+      error: 'This Harbor build cannot access the system audio or video API.',
     });
   });
 
@@ -615,7 +631,7 @@ describe('GroupMeshCallRuntime', () => {
       snapshot.participants.find((participant) => participant.peerId === 'peer-b'),
     ).toMatchObject({
       state: 'failed',
-      error: 'peer-b unreachable',
+      error: 'Harbor could not start the call.',
     });
   });
 
