@@ -44,12 +44,12 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
     setLocalError(null);
 
     if (passphrase.length < 8) {
-      setLocalError('Passphrase must be at least 8 characters');
+      setLocalError('Password must be at least 8 characters');
       return;
     }
 
     if (passphrase !== confirmPassphrase) {
-      setLocalError('Passphrases do not match');
+      setLocalError('Passwords do not match');
       return;
     }
 
@@ -105,6 +105,9 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
   };
 
   const strength = getPasswordStrength();
+  const passwordsMatch = passphrase === confirmPassphrase;
+  const confirmationState = !confirmPassphrase ? 'neutral' : passwordsMatch ? 'match' : 'mismatch';
+  const canSubmit = passphrase.length >= 8 && confirmationState === 'match' && !loading;
 
   return (
     <div
@@ -306,7 +309,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {step === 1
                   ? 'Choose your relay-unique Harbor address'
-                  : 'Your passphrase encrypts your private keys locally'}
+                  : 'Your password encrypts your private keys locally'}
               </p>
             </div>
 
@@ -372,11 +375,12 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                 <div className="space-y-4">
                   <div>
                     <Input
-                      label="Passphrase"
+                      label="Password"
                       type="password"
                       value={passphrase}
                       onChange={(e) => setPassphrase(e.target.value)}
                       placeholder="At least 8 characters"
+                      autoComplete="new-password"
                       autoFocus
                     />
                     {/* Password strength indicator */}
@@ -403,17 +407,42 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                     )}
                   </div>
 
-                  <Input
-                    label="Confirm Passphrase"
-                    type="password"
-                    value={confirmPassphrase}
-                    onChange={(e) => setConfirmPassphrase(e.target.value)}
-                    placeholder="Enter passphrase again"
-                  />
+                  <div>
+                    <Input
+                      label="Confirm Password"
+                      type="password"
+                      value={confirmPassphrase}
+                      onChange={(e) => setConfirmPassphrase(e.target.value)}
+                      placeholder="Enter password again"
+                      autoComplete="new-password"
+                      aria-describedby="password-confirmation-status"
+                      aria-invalid={confirmationState === 'mismatch' || undefined}
+                    />
+                    <p
+                      id="password-confirmation-status"
+                      role="status"
+                      aria-live="polite"
+                      className="mt-1.5 text-sm font-medium"
+                      style={{
+                        color:
+                          confirmationState === 'match'
+                            ? 'hsl(var(--harbor-success))'
+                            : confirmationState === 'mismatch'
+                              ? 'hsl(var(--harbor-error))'
+                              : 'hsl(var(--harbor-text-tertiary))',
+                      }}
+                    >
+                      {confirmationState === 'match'
+                        ? '✓ Passwords match'
+                        : confirmationState === 'mismatch'
+                          ? '✕ Passwords do not match'
+                          : 'Enter the password again to confirm it'}
+                    </p>
+                  </div>
 
                   <div>
                     <Input
-                      label="Passphrase Hint (optional)"
+                      label="Password Hint (optional)"
                       type="text"
                       value={passphraseHint}
                       onChange={(e) => {
@@ -421,11 +450,11 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                           setPassphraseHint(e.target.value);
                         }
                       }}
-                      placeholder="A hint to help remember your passphrase"
+                      placeholder="A hint to help remember your password"
                     />
                     <div className="flex items-center justify-between mt-1.5">
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
-                        Do not include your actual passphrase in the hint.
+                        Do not include your actual password in the hint.
                       </p>
                       <p
                         className="text-xs flex-shrink-0 ml-2"
@@ -464,7 +493,13 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                     >
                       Back
                     </Button>
-                    <Button type="submit" className="flex-1" size="lg" loading={loading}>
+                    <Button
+                      type="submit"
+                      className="flex-1"
+                      size="lg"
+                      loading={loading}
+                      disabled={!canSubmit}
+                    >
                       {resumeAttempt ? 'Retry name registration' : 'Create Identity'}
                     </Button>
                   </div>
@@ -494,7 +529,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                       Important
                     </p>
                     <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                      Your passphrase encrypts your private keys. If you lose it, you cannot recover
+                      Your password encrypts your private keys. If you lose it, you cannot recover
                       your identity. Store it safely!
                     </p>
                   </div>

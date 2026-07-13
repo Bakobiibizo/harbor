@@ -206,14 +206,12 @@ describe('useIdentityStore', () => {
       expect(state.status).toBe('unlocked');
     });
 
-    it('should set error on wrong passphrase', async () => {
-      vi.mocked(identityService.unlock).mockRejectedValue(new Error('Invalid passphrase'));
+    it('should set error on a wrong password', async () => {
+      vi.mocked(identityService.unlock).mockRejectedValue(new Error('Invalid password'));
 
-      await expect(useIdentityStore.getState().unlock('wrong')).rejects.toThrow(
-        'Invalid passphrase',
-      );
+      await expect(useIdentityStore.getState().unlock('wrong')).rejects.toThrow('Invalid password');
 
-      expect(useIdentityStore.getState().error).toBe('Invalid passphrase');
+      expect(useIdentityStore.getState().error).toBe('Invalid password');
     });
   });
 

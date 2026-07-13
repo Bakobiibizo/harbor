@@ -49,11 +49,11 @@ export function SecuritySection() {
       return;
     }
     if (newPass !== confirmPass) {
-      setPassError('New passphrases do not match');
+      setPassError('New passwords do not match');
       return;
     }
     if (newPass.length < 8) {
-      setPassError('Passphrase must be at least 8 characters');
+      setPassError('Password must be at least 8 characters');
       return;
     }
 
@@ -63,7 +63,7 @@ export function SecuritySection() {
     setCurrentPass('');
     setNewPass('');
     setConfirmPass('');
-    toast.success('Passphrase changed successfully!');
+    toast.success('Password changed successfully!');
   };
 
   const handleSaveHint = async () => {
@@ -71,9 +71,9 @@ export function SecuritySection() {
     try {
       const trimmed = hintValue.trim() || null;
       await updatePassphraseHint(trimmed);
-      toast.success(trimmed ? 'Passphrase hint updated!' : 'Passphrase hint removed.');
+      toast.success(trimmed ? 'Password hint updated!' : 'Password hint removed.');
     } catch {
-      toast.error('Failed to update passphrase hint');
+      toast.error('Failed to update password hint');
     } finally {
       setIsSavingHint(false);
     }
@@ -90,7 +90,7 @@ export function SecuritySection() {
       bio: identity.bio,
       createdAt: new Date().toISOString(),
       encryptedKeys: 'ENCRYPTED_KEY_DATA_PLACEHOLDER',
-      note: "Keep this file safe. You'll need your passphrase to restore it.",
+      note: "Keep this file safe. You'll need your password to restore it.",
     };
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
@@ -125,7 +125,7 @@ export function SecuritySection() {
     if (!importFile) return;
 
     if (!importPassphrase) {
-      setImportError('Passphrase is required to decrypt the backup');
+      setImportError('Password is required to decrypt the backup');
       return;
     }
 
@@ -166,7 +166,7 @@ export function SecuritySection() {
     }
 
     if (!deletePassphrase) {
-      setDeleteError('Passphrase is required');
+      setDeleteError('Password is required');
       return;
     }
 
@@ -187,26 +187,26 @@ export function SecuritySection() {
         className="hidden"
       />
 
-      <SectionHeader title="Security" description="Manage your passphrase and encryption keys" />
+      <SectionHeader title="Security" description="Manage your password and encryption keys" />
 
       {/* Change passphrase */}
       <SettingsCard>
         <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-          Change Passphrase
+          Change Password
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Update your passphrase to keep your identity secure
+          Update your password to keep your identity secure
         </p>
 
         <div className="space-y-3">
           <PasswordInput
-            placeholder="Current passphrase"
+            placeholder="Current password"
             value={currentPass}
             onChange={setCurrentPass}
           />
-          <PasswordInput placeholder="New passphrase" value={newPass} onChange={setNewPass} />
+          <PasswordInput placeholder="New password" value={newPass} onChange={setNewPass} />
           <PasswordInput
-            placeholder="Confirm new passphrase"
+            placeholder="Confirm new password"
             value={confirmPass}
             onChange={setConfirmPass}
           />
@@ -228,17 +228,17 @@ export function SecuritySection() {
             color: 'white',
           }}
         >
-          {isChangingPass ? 'Updating...' : 'Update Passphrase'}
+          {isChangingPass ? 'Updating...' : 'Update Password'}
         </button>
       </SettingsCard>
 
       {/* Passphrase Hint */}
       <SettingsCard>
         <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-          Passphrase Hint
+          Password Hint
         </h4>
         <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          Set a hint to help you remember your passphrase. This will be shown on the unlock screen.
+          Set a hint to help you remember your password. This will be shown on the unlock screen.
         </p>
 
         <div className="space-y-3">
@@ -261,7 +261,7 @@ export function SecuritySection() {
             />
             <div className="flex items-center justify-between mt-1.5">
               <p className="text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
-                Do not include your actual passphrase in the hint.
+                Do not include your actual password in the hint.
               </p>
               <p
                 className="text-xs flex-shrink-0 ml-2"
@@ -349,7 +349,7 @@ export function SecuritySection() {
         </div>
 
         <p className="text-xs mt-3" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-          Your backup file is encrypted with your passphrase. Keep it safe and never share it.
+          Your backup file is encrypted with your password. Keep it safe and never share it.
         </p>
       </SettingsCard>
 
@@ -461,10 +461,10 @@ export function SecuritySection() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Enter your passphrase
+                  Enter your password
                 </label>
                 <PasswordInput
-                  placeholder="Your passphrase"
+                  placeholder="Your password"
                   value={deletePassphrase}
                   onChange={setDeletePassphrase}
                 />
@@ -590,14 +590,14 @@ export function SecuritySection() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Enter backup passphrase
+                  Enter backup password
                 </label>
                 <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Enter the passphrase you used when you created this backup. This will decrypt your
+                  Enter the password you used when you created this backup. This will decrypt your
                   identity keys.
                 </p>
                 <PasswordInput
-                  placeholder="Backup passphrase"
+                  placeholder="Backup password"
                   value={importPassphrase}
                   onChange={setImportPassphrase}
                 />

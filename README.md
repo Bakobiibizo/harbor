@@ -68,12 +68,12 @@ pnpm tauri build
 1. When you first open Harbor, you'll be prompted to create an identity
 2. Enter a **Display Name** (how others will see you)
 3. Optionally add a **Bio**
-4. Create a **Passphrase** (at least 8 characters) - this encrypts your private keys
-5. **Important**: Store your passphrase safely! If you lose it, you cannot recover your identity
+4. Create a **Password** (at least 8 characters) - this encrypts your private keys
+5. **Important**: Store your password safely! If you lose it, you cannot recover your identity
 
 ### Unlocking Your Identity
 
-- On subsequent launches, enter your passphrase to unlock
+- On subsequent launches, enter your password to unlock
 - Your identity remains encrypted on disk when locked
 
 ### Starting the Network
@@ -117,7 +117,7 @@ RSS XML is generated locally from public posts only; Harbor does not currently h
 
 Access settings to:
 - **Profile**: Update your display name, bio, and avatar
-- **Security**: Change passphrase, export/import identity
+- **Security**: Change password, export/import identity
 - **Network**: Configure auto-start and mDNS discovery
 - **Privacy**: Control post visibility and read receipts
 
@@ -213,7 +213,7 @@ src-tauri/src/
 | Identity signing | Ed25519 | All messages signed |
 | Key agreement | X25519 | Derived from Ed25519 |
 | Conversation encryption | AES-256-GCM | HKDF-derived keys |
-| Key encryption | Argon2id + AES-GCM | Passphrase-based |
+| Key encryption | Argon2id + AES-GCM | Password-based |
 | Content hashing | SHA-256 | Media content-addressing |
 
 ### Permission System

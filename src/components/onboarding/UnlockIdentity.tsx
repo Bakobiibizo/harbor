@@ -107,7 +107,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
               Welcome Back
             </h1>
             <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              Enter your passphrase to unlock your identity
+              Enter your password to unlock your identity
             </p>
           </div>
 
@@ -163,11 +163,12 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
           <form onSubmit={handleSubmit} className="relative space-y-4">
             <div className="relative">
               <Input
-                label="Passphrase"
+                label="Password"
                 type={showPassphrase ? 'text' : 'password'}
                 value={passphrase}
                 onChange={(e) => setPassphrase(e.target.value)}
-                placeholder="Enter your passphrase"
+                placeholder="Enter your password"
+                autoComplete="current-password"
                 autoFocus
               />
               {/* Show/hide toggle */}
@@ -208,7 +209,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
               </button>
             </div>
 
-            {/* Passphrase hint toggle */}
+            {/* Password hint toggle */}
             {identity?.passphraseHint && (
               <div>
                 {showHint ? (
@@ -252,7 +253,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
                         d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                       />
                     </svg>
-                    Show passphrase hint
+                    Show password hint
                   </button>
                 )}
               </div>
@@ -301,7 +302,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
               Your identity is encrypted and stored locally.
               <br />
               <span style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                Only you can access it with your passphrase.
+                Only you can access it with your password.
               </span>
             </p>
           </div>

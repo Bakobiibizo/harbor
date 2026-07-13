@@ -38,7 +38,7 @@ requirements:
   evidence_required: true
 constraints:
 - id: con.01
-  text: "Do not log raw private keys, passphrases, raw media bytes, or full contacts-only post content in production logs."
+  text: "Do not log raw private keys, passwords, raw media bytes, or full contacts-only post content in production logs."
 - id: con.02
   text: "Do not turn best-effort relay failures into data-loss errors for locally saved posts."
 - id: con.03

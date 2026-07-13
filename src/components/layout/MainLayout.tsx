@@ -9,6 +9,7 @@ import {
 import { useKeyboardNavigation } from '../../hooks';
 import { safeIdentityLabel } from '../../utils/relayName';
 import { KeyboardShortcutsModal, CustomizationPanel } from '../common';
+import { LockAccountDialog } from './LockAccountDialog';
 import {
   BoardsIcon,
   ChatIcon,
@@ -73,6 +74,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isLocking, setIsLocking] = useState(false);
+  const [showLockWarning, setShowLockWarning] = useState(false);
   const [isCustomizationOpen, setIsCustomizationOpen] = useState(false);
 
   // Enable keyboard navigation
@@ -108,6 +110,7 @@ export function MainLayout({ children }: MainLayoutProps) {
     setIsLocking(true);
     try {
       await lock();
+      setShowLockWarning(false);
     } finally {
       setIsLocking(false);
     }
@@ -359,7 +362,11 @@ export function MainLayout({ children }: MainLayoutProps) {
 
           {/* Lock Wallet */}
           {identity && (
-            <button onClick={handleLock} disabled={isLocking} className="w-full group">
+            <button
+              onClick={() => setShowLockWarning(true)}
+              disabled={isLocking}
+              className="w-full group"
+            >
               <div
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 hover:bg-opacity-80"
                 style={{
@@ -425,6 +432,14 @@ export function MainLayout({ children }: MainLayoutProps) {
         )}
         {children}
       </main>
+
+      {showLockWarning && (
+        <LockAccountDialog
+          isLocking={isLocking}
+          onCancel={() => setShowLockWarning(false)}
+          onConfirm={handleLock}
+        />
+      )}
 
       {/* Keyboard shortcuts modal */}
       <KeyboardShortcutsModal />

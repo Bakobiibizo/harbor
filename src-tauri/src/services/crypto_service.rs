@@ -85,7 +85,7 @@ impl CryptoService {
 
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
-            .map_err(|e| AppError::Crypto(format!("Failed to hash passphrase: {}", e)))?;
+            .map_err(|e| AppError::Crypto(format!("Failed to hash password: {}", e)))?;
 
         let hash_bytes = password_hash
             .hash
@@ -161,7 +161,7 @@ impl CryptoService {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
-            .map_err(|e| AppError::CryptoDecryption(format!("Failed to hash passphrase: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Failed to hash password: {}", e)))?;
 
         let hash_bytes = password_hash
             .hash
@@ -179,7 +179,7 @@ impl CryptoService {
 
         let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
             AppError::IdentityInvalidPassphrase(
-                "Decryption failed - invalid passphrase".to_string(),
+                "Decryption failed - invalid password".to_string(),
             )
         })?;
 

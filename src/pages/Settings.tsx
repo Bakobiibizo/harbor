@@ -309,11 +309,11 @@ export function SettingsPage() {
       return;
     }
     if (newPass !== confirmPass) {
-      setPassError('New passphrases do not match');
+      setPassError('New passwords do not match');
       return;
     }
     if (newPass.length < 8) {
-      setPassError('Passphrase must be at least 8 characters');
+      setPassError('Password must be at least 8 characters');
       return;
     }
 
@@ -326,7 +326,7 @@ export function SettingsPage() {
     setCurrentPass('');
     setNewPass('');
     setConfirmPass('');
-    toast.success('Passphrase changed successfully!');
+    toast.success('Password changed successfully!');
   };
 
   const handleExportIdentity = () => {
@@ -341,7 +341,7 @@ export function SettingsPage() {
       bio: identity.bio,
       createdAt: new Date().toISOString(),
       encryptedKeys: 'ENCRYPTED_KEY_DATA_PLACEHOLDER',
-      note: "Keep this file safe. You'll need your passphrase to restore it.",
+      note: "Keep this file safe. You'll need your password to restore it.",
     };
 
     // Create and download the file
@@ -378,7 +378,7 @@ export function SettingsPage() {
     if (!importFile) return;
 
     if (!importPassphrase) {
-      setImportError('Passphrase is required to decrypt the backup');
+      setImportError('Password is required to decrypt the backup');
       return;
     }
 
@@ -421,7 +421,7 @@ export function SettingsPage() {
     }
 
     if (!deletePassphrase) {
-      setDeleteError('Passphrase is required');
+      setDeleteError('Password is required');
       return;
     }
 
@@ -509,7 +509,7 @@ export function SettingsPage() {
   const sections = [
     { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
     { id: 'appearance', label: 'Appearance', icon: PaletteIcon, description: 'Theme and display' },
-    { id: 'security', label: 'Security', icon: LockIcon, description: 'Passphrase and keys' },
+    { id: 'security', label: 'Security', icon: LockIcon, description: 'Password and keys' },
     { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'Connection help for calls' },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
     { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
@@ -987,7 +987,7 @@ export function SettingsPage() {
                   Security
                 </h3>
                 <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Manage your passphrase and encryption keys
+                  Manage your password and encryption keys
                 </p>
               </div>
 
@@ -1003,25 +1003,21 @@ export function SettingsPage() {
                   className="font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Change Passphrase
+                  Change Password
                 </h4>
                 <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Update your passphrase to keep your identity secure
+                  Update your password to keep your identity secure
                 </p>
 
                 <div className="space-y-3">
                   <PasswordInput
-                    placeholder="Current passphrase"
+                    placeholder="Current password"
                     value={currentPass}
                     onChange={setCurrentPass}
                   />
+                  <PasswordInput placeholder="New password" value={newPass} onChange={setNewPass} />
                   <PasswordInput
-                    placeholder="New passphrase"
-                    value={newPass}
-                    onChange={setNewPass}
-                  />
-                  <PasswordInput
-                    placeholder="Confirm new passphrase"
+                    placeholder="Confirm new password"
                     value={confirmPass}
                     onChange={setConfirmPass}
                   />
@@ -1043,7 +1039,7 @@ export function SettingsPage() {
                     color: 'white',
                   }}
                 >
-                  {isChangingPass ? 'Updating...' : 'Update Passphrase'}
+                  {isChangingPass ? 'Updating...' : 'Update Password'}
                 </button>
               </div>
 
@@ -1108,8 +1104,7 @@ export function SettingsPage() {
                 </div>
 
                 <p className="text-xs mt-3" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                  Your backup file is encrypted with your passphrase. Keep it safe and never share
-                  it.
+                  Your backup file is encrypted with your password. Keep it safe and never share it.
                 </p>
               </div>
 
@@ -1861,10 +1856,10 @@ export function SettingsPage() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Enter your passphrase
+                  Enter your password
                 </label>
                 <PasswordInput
-                  placeholder="Your passphrase"
+                  placeholder="Your password"
                   value={deletePassphrase}
                   onChange={setDeletePassphrase}
                 />
@@ -1994,14 +1989,14 @@ export function SettingsPage() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Enter backup passphrase
+                  Enter backup password
                 </label>
                 <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Enter the passphrase you used when you created this backup. This will decrypt your
+                  Enter the password you used when you created this backup. This will decrypt your
                   identity keys.
                 </p>
                 <PasswordInput
-                  placeholder="Backup passphrase"
+                  placeholder="Backup password"
                   value={importPassphrase}
                   onChange={setImportPassphrase}
                 />
