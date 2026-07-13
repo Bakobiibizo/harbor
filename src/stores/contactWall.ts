@@ -29,6 +29,7 @@ export interface ContactWallState {
   loadWall: (authorPeerId: string, limit?: number) => Promise<void>;
   loadMore: (limit?: number) => Promise<void>;
   refreshWall: (limit?: number) => Promise<void>;
+  reconcileWall: (limit?: number) => Promise<void>;
   toggleLike: (postId: string) => Promise<void>;
   loadComments: (postId: string) => Promise<void>;
   addComment: (postId: string, content: string) => Promise<void>;
@@ -197,6 +198,31 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
     const { authorPeerId } = get();
     if (!authorPeerId) return;
     await get().loadWall(authorPeerId, limit);
+  },
+
+  // Local-only refresh used by the app-wide event reconciler. Deliberately does
+  // not request another relay sync, which would turn sync events into a loop.
+  reconcileWall: async (limit: number = 20) => {
+    const { authorPeerId } = get();
+    if (!authorPeerId) return;
+
+    try {
+      const [canReadContactsOnly, wallItems] = await Promise.all([
+        loadPermission(authorPeerId),
+        feedService.getWall(authorPeerId, limit).then(decorateWallItems),
+      ]);
+      set({
+        wallItems,
+        canReadContactsOnly,
+        error: null,
+        hasMore: wallItems.length === limit,
+      });
+      if (wallItems.length > 0) {
+        get().loadCommentCounts(wallItems.map((item) => item.postId));
+      }
+    } catch (error) {
+      log.warn('Failed to reconcile contact wall from local state', error);
+    }
   },
 
   toggleLike: async (postId: string) => {

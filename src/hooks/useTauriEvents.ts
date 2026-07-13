@@ -13,6 +13,7 @@ import {
   useIdentityStore,
 } from '../stores';
 import { mediaService } from '../services/media';
+import { ReactiveRefreshCoordinator } from '../services/reactiveRefresh';
 
 /**
  * Hook to listen to Tauri events from the Rust backend.
@@ -21,10 +22,33 @@ import { mediaService } from '../services/media';
 export function useTauriEvents() {
   const unlistenersRef = useRef<UnlistenFn[]>([]);
   const { refreshPeers, refreshStats } = useNetworkStore();
-  const { refreshContacts, loadRequests } = useContactsStore();
 
   useEffect(() => {
     let cancelled = false;
+    const coordinator = new ReactiveRefreshCoordinator({
+      contacts: () => useContactsStore.getState().refreshContacts(),
+      requests: () => useContactsStore.getState().loadRequests(),
+      messages: async (peerIds) => {
+        const messaging = useMessagingStore.getState();
+        const activePeer = messaging.activeConversation;
+        await messaging.loadConversations();
+        if (activePeer && (peerIds.size === 0 || peerIds.has(activePeer))) {
+          await messaging.loadMessages(activePeer);
+        }
+      },
+      posts: async (peerIds) => {
+        await useFeedStore.getState().loadFeed();
+        const contactWall = useContactWallStore.getState();
+        if (
+          contactWall.authorPeerId &&
+          (peerIds.size === 0 || peerIds.has(contactWall.authorPeerId))
+        ) {
+          await contactWall.reconcileWall();
+        }
+      },
+      media: () => mediaService.preloadMissingMedia(),
+    });
+    coordinator.start();
 
     function register(unlisten: UnlistenFn) {
       if (cancelled) {
@@ -138,7 +162,7 @@ export function useTauriEvents() {
           refreshStats();
           // Trigger media preloader — a newly connected peer may be an author
           // whose images we need to fetch (e.g. after relay circuit dial)
-          mediaService.preloadMissingMedia().catch(() => {});
+          coordinator.enqueue({ domains: ['media'], peerId: event.peer_id });
           break;
 
         case 'peer_disconnected':
@@ -161,20 +185,10 @@ export function useTauriEvents() {
         case 'message_received':
           console.log(`[Network] Message received from ${event.peer_id} via ${event.protocol}`);
           // Use getState() to avoid stale closures - call functions directly from the store
-          const messagingState = useMessagingStore.getState();
-          // Always refresh conversations to update previews and unread counts
-          messagingState.loadConversations();
-          // Reload messages if we're viewing the sender's conversation
-          const activeConv = messagingState.activeConversation;
-          console.log(
-            `[Network] Active conversation: ${activeConv}, message from: ${event.peer_id}`,
-          );
-          if (activeConv === event.peer_id) {
-            console.log(`[Network] Reloading messages for active conversation: ${activeConv}`);
-            messagingState.loadMessages(activeConv);
-          }
-          // Also refresh contacts in case this is from a new contact
-          refreshContacts();
+          coordinator.enqueue({
+            domains: ['messages', 'contacts'],
+            peerId: event.peer_id,
+          });
           break;
 
         case 'listening_on':
@@ -191,19 +205,19 @@ export function useTauriEvents() {
 
         case 'contact_added':
           console.log(`[Network] Contact added: ${event.display_name} (${event.peer_id})`);
-          refreshContacts();
+          coordinator.enqueue({ domains: ['contacts', 'requests', 'posts'], peerId: event.peer_id });
           toast.success('Contact added. Harbor is verifying their relay name.');
           break;
 
         case 'contact_request_changed':
-          void loadRequests();
+          coordinator.enqueue({ domains: ['requests'], peerId: event.peer_id });
           if (event.direction === 'incoming' && event.status === 'review') {
             toast(`Contact request from ${event.display_name || 'a Harbor user'}`, {
               icon: '👤',
               duration: 6000,
             });
           } else if (event.status === 'accepted') {
-            void refreshContacts();
+            coordinator.enqueue({ domains: ['contacts', 'posts'], peerId: event.peer_id });
             toast.success('Contact request accepted');
           } else if (event.status === 'declined') {
             toast('Contact request declined');
@@ -252,7 +266,7 @@ export function useTauriEvents() {
         case 'content_fetched':
           console.log(`[Network] Content fetched from ${event.peer_id}: post ${event.post_id}`);
           // Refresh the feed to show new posts
-          useFeedStore.getState().loadFeed();
+          coordinator.enqueue({ domains: ['posts'], peerId: event.peer_id });
           break;
 
         case 'content_sync_error':
@@ -286,6 +300,12 @@ export function useTauriEvents() {
               isSyncingRelay: status === 'in_progress',
             });
           }
+          if (event.status === 'success' || event.status === 'partial_failure') {
+            coordinator.enqueue({
+              domains: ['posts'],
+              peerId: event.author_peer_id ?? undefined,
+            });
+          }
           break;
         }
 
@@ -298,19 +318,23 @@ export function useTauriEvents() {
             `[Network] Wall posts received from relay (author: ${event.author_peer_id}, count: ${event.post_count})`,
           );
           // Reload feed to show newly received posts
-          useFeedStore.getState().loadFeed();
-          // Trigger background media preloader (fire-and-forget)
-          mediaService.preloadMissingMedia().catch(() => {});
+          coordinator.enqueue({
+            domains: ['posts', 'media'],
+            peerId: event.author_peer_id,
+          });
           break;
 
         case 'media_fetched':
           console.log(`[Network] Media fetched from ${event.peer_id}: ${event.media_hash}`);
           // Refresh feed to display newly available images
-          useFeedStore.getState().loadFeed();
+          // The media worker already completed this object. Reconcile views only;
+          // enqueueing another preload here would form an event-driven loop.
+          coordinator.enqueue({ domains: ['posts'], peerId: event.peer_id });
           break;
 
         case 'wall_post_deleted_on_relay':
           console.log(`[Network] Wall post deleted on relay: ${event.post_id}`);
+          coordinator.enqueue({ domains: ['posts'] });
           break;
 
         case 'call_signaling_received':
@@ -342,8 +366,9 @@ export function useTauriEvents() {
     // Cleanup on unmount
     return () => {
       cancelled = true;
+      coordinator.stop();
       unlistenersRef.current.forEach((unlisten) => unlisten());
       unlistenersRef.current = [];
     };
-  }, [refreshPeers, refreshStats, refreshContacts, loadRequests]);
+  }, [refreshPeers, refreshStats]);
 }

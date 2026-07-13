@@ -120,6 +120,19 @@ describe('useContactWallStore', () => {
     expect(state.error).toBeNull();
   });
 
+  it('reconciles event-driven wall changes from local state without starting another sync', async () => {
+    useContactWallStore.setState({ authorPeerId: 'peer-alice' });
+    vi.mocked(feedService.getWall).mockResolvedValue(wallItems);
+    vi.mocked(permissionsService.weHaveCapability).mockResolvedValue(true);
+
+    await useContactWallStore.getState().reconcileWall(20);
+
+    expect(feedService.fetchContactWall).not.toHaveBeenCalled();
+    expect(feedService.fetchWallSocialEvents).not.toHaveBeenCalled();
+    expect(feedService.getWall).toHaveBeenCalledWith('peer-alice', 20);
+    expect(useContactWallStore.getState().wallItems).toHaveLength(2);
+  });
+
   it('paginates contact wall posts using the last loaded timestamp', async () => {
     useContactWallStore.setState({
       authorPeerId: 'peer-alice',
