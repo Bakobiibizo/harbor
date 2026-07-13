@@ -124,4 +124,17 @@ describe('contactsService', () => {
       expect(invoke).toHaveBeenCalledWith('request_peer_identity', { peerId: 'peer-alice' });
     });
   });
+
+  it('lists and acts on durable contact requests', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]).mockResolvedValue(undefined);
+    await contactsService.getContactRequests();
+    expect(invoke).toHaveBeenCalledWith('get_contact_requests');
+    await contactsService.respondContactRequest('request-1', 'accepted');
+    expect(invoke).toHaveBeenCalledWith('respond_contact_request', {
+      requestId: 'request-1',
+      decision: 'accepted',
+    });
+    await contactsService.retryContactRequest('request-1');
+    expect(invoke).toHaveBeenCalledWith('retry_contact_request', { requestId: 'request-1' });
+  });
 });

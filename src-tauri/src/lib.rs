@@ -394,6 +394,9 @@ pub fn run() {
             commands::is_contact,
             commands::is_contact_blocked,
             commands::request_peer_identity,
+            commands::get_contact_requests,
+            commands::respond_contact_request,
+            commands::retry_contact_request,
             // Permission commands
             commands::grant_permission,
             commands::revoke_permission,

@@ -1,6 +1,9 @@
 //! Contacts service for managing peer relationships
 
-use crate::db::{Contact, ContactData, ContactsRepository, Database};
+use crate::db::{
+    Contact, ContactData, ContactRequestRecord, ContactRequestsRepository, ContactsRepository,
+    Database,
+};
 use crate::error::{AppError, Result};
 use crate::services::IdentityService;
 use std::sync::Arc;
@@ -12,6 +15,100 @@ pub struct ContactsService {
 }
 
 impl ContactsService {
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_contact_request(
+        &self,
+        request_id: &str,
+        peer_id: &str,
+        direction: &str,
+        display_name: Option<&str>,
+        public_key: Option<&[u8]>,
+        x25519_public: Option<&[u8]>,
+        avatar_hash: Option<&str>,
+        bio: Option<&str>,
+        status: &str,
+        pending_action: Option<&str>,
+        error: Option<&str>,
+        at: i64,
+    ) -> Result<()> {
+        ContactRequestsRepository::new(&self.db)
+            .upsert(
+                request_id,
+                peer_id,
+                direction,
+                display_name,
+                public_key,
+                x25519_public,
+                avatar_hash,
+                bio,
+                status,
+                pending_action,
+                error,
+                at,
+            )
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn contact_requests(&self) -> Result<Vec<ContactRequestRecord>> {
+        ContactRequestsRepository::new(&self.db)
+            .list()
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn contact_request(&self, request_id: &str) -> Result<Option<ContactRequestRecord>> {
+        ContactRequestsRepository::new(&self.db)
+            .get(request_id)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn contact_request_for_peer(
+        &self,
+        peer_id: &str,
+        direction: &str,
+    ) -> Result<Option<ContactRequestRecord>> {
+        ContactRequestsRepository::new(&self.db)
+            .for_peer(peer_id, direction)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn update_contact_request(
+        &self,
+        request_id: &str,
+        status: &str,
+        pending_action: Option<&str>,
+        error: Option<&str>,
+        at: i64,
+    ) -> Result<bool> {
+        ContactRequestsRepository::new(&self.db)
+            .update_status(request_id, status, pending_action, error, at)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn promote_contact_request(&self, request_id: &str) -> Result<i64> {
+        let request = self
+            .contact_request(request_id)?
+            .ok_or_else(|| AppError::NotFound("Contact request not found".into()))?;
+        let public_key = request.public_key.ok_or_else(|| {
+            AppError::Validation("Contact request has no verified signing key".into())
+        })?;
+        let x25519_public = request.x25519_public.ok_or_else(|| {
+            AppError::Validation("Contact request has no verified encryption key".into())
+        })?;
+        self.add_contact(
+            &request.peer_id,
+            &public_key,
+            &x25519_public,
+            request.display_name.as_deref().unwrap_or("Harbor contact"),
+            request.avatar_hash.as_deref(),
+            request.bio.as_deref(),
+        )
+    }
+
+    pub fn revoke_contact_requests(&self, peer_id: &str, at: i64) -> Result<usize> {
+        ContactRequestsRepository::new(&self.db)
+            .revoke_peer(peer_id, at)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
     pub fn verified_qualified_name(&self, peer_id: &str) -> Result<Option<String>> {
         let repo = crate::db::repositories::RelayNamesRepository::new(&self.db);
         let Some(bytes) = repo.active_for_peer(peer_id, chrono::Utc::now().timestamp())? else {

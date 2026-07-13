@@ -5,6 +5,10 @@ import { contactsService } from '../services/contacts';
 vi.mock('../services/contacts', () => ({
   contactsService: {
     getActiveContacts: vi.fn(),
+    getContactRequests: vi.fn(),
+    requestPeerIdentity: vi.fn(),
+    respondContactRequest: vi.fn(),
+    retryContactRequest: vi.fn(),
   },
 }));
 
@@ -45,10 +49,37 @@ describe('useContactsStore', () => {
   beforeEach(() => {
     useContactsStore.setState({
       contacts: [],
+      requests: [],
       isLoading: false,
       error: null,
     });
     vi.clearAllMocks();
+  });
+
+  it('persists visible request state after send, decision, and retry actions', async () => {
+    const pending = {
+      requestId: 'r1',
+      peerId: 'peer-alice',
+      direction: 'outgoing' as const,
+      displayName: 'Alice',
+      status: 'pending' as const,
+      error: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    vi.mocked(contactsService.requestPeerIdentity).mockResolvedValue('r1');
+    vi.mocked(contactsService.getContactRequests).mockResolvedValue([pending]);
+    await useContactsStore.getState().sendRequest('peer-alice');
+    expect(useContactsStore.getState().requests).toEqual([pending]);
+
+    vi.mocked(contactsService.respondContactRequest).mockResolvedValue();
+    vi.mocked(contactsService.getActiveContacts).mockResolvedValue(mockContacts);
+    await useContactsStore.getState().respondToRequest('r1', 'accepted');
+    expect(contactsService.respondContactRequest).toHaveBeenCalledWith('r1', 'accepted');
+
+    vi.mocked(contactsService.retryContactRequest).mockResolvedValue();
+    await useContactsStore.getState().retryRequest('r1');
+    expect(contactsService.retryContactRequest).toHaveBeenCalledWith('r1');
   });
 
   describe('loadContacts', () => {

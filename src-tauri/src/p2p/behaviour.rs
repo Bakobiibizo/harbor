@@ -53,7 +53,15 @@ pub struct ChatBehaviour {
 /// Identity exchange request (simplified for request-response)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IdentityExchangeRequest {
+    pub request_id: String,
+    /// request, accepted, declined, or revoked
+    pub action: String,
     pub requester_peer_id: String,
+    pub public_key: Vec<u8>,
+    pub x25519_public: Vec<u8>,
+    pub display_name: String,
+    pub avatar_hash: Option<String>,
+    pub bio: Option<String>,
     pub timestamp: i64,
     pub signature: Vec<u8>,
 }
@@ -61,6 +69,9 @@ pub struct IdentityExchangeRequest {
 /// Identity exchange response
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IdentityExchangeResponse {
+    pub request_id: String,
+    /// review, accepted, declined, revoked, or failed
+    pub status: String,
     pub peer_id: String,
     pub public_key: Vec<u8>,
     pub x25519_public: Vec<u8>,

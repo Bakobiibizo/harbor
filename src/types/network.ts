@@ -46,6 +46,14 @@ export type NetworkEvent =
   | { type: 'message_received'; peer_id: string; protocol: string; payload: number[] }
   | { type: 'status_changed'; status: ConnectionStatus }
   | { type: 'contact_added'; peer_id: string; display_name: string }
+  | {
+      type: 'contact_request_changed';
+      request_id: string;
+      peer_id: string;
+      display_name: string | null;
+      direction: 'incoming' | 'outgoing';
+      status: import('./contacts').ContactRequestStatus;
+    }
   | { type: 'nat_status_changed'; status: NatStatus }
   | { type: 'relay_connected'; relay_address: string }
   | { type: 'hole_punch_succeeded'; peer_id: string }

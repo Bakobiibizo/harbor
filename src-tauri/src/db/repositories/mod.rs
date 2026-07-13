@@ -2,6 +2,7 @@ pub mod boards_repo;
 pub mod bootstrap_repo;
 pub mod calls_repo;
 pub mod comments_repo;
+pub mod contact_requests_repo;
 pub mod contacts_repo;
 pub mod group_calls_repo;
 pub mod identity_repo;
@@ -20,6 +21,7 @@ pub use calls_repo::{
     CallDirection, CallMediaKind, CallSession, CallState, CallsRepository, NewCallSession,
 };
 pub use comments_repo::{CommentCount, CommentData, CommentsRepository, PostComment};
+pub use contact_requests_repo::{ContactRequestRecord, ContactRequestsRepository};
 pub use contacts_repo::{Contact, ContactData, ContactsRepository};
 pub use group_calls_repo::{GroupCallRoom, GroupCallsRepository};
 pub use identity_repo::IdentityRepository;

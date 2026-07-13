@@ -1,5 +1,6 @@
 export { AddContactDialog } from './AddContactDialog';
 export { Button } from './Button';
+export { ContactRequestsPanel } from './ContactRequestsPanel';
 export { Input } from './Input';
 export { ErrorBoundary } from './ErrorBoundary';
 export { KeyboardShortcutsModal } from './KeyboardShortcutsModal';

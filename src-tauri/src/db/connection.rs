@@ -23,6 +23,7 @@ const MIGRATION_017: &str = include_str!("migrations/017_private_introductions.s
 const MIGRATION_018: &str = include_str!("migrations/018_private_mentions.sql");
 const MIGRATION_019: &str = include_str!("migrations/019_identity_migration_state.sql");
 const MIGRATION_020: &str = include_str!("migrations/020_relay_key_rotation.sql");
+const MIGRATION_021: &str = include_str!("migrations/021_contact_requests.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -369,6 +370,10 @@ impl Database {
         if version < 20 {
             conn.execute_batch(MIGRATION_020)?;
             info!("Migration 020 complete");
+        }
+        if version < 21 {
+            conn.execute_batch(MIGRATION_021)?;
+            info!("Migration 021 complete");
         }
 
         Ok(())
@@ -860,7 +865,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 20);
+            assert_eq!(version, 21);
 
             for table in [
                 "relay_trust_keys",
@@ -872,6 +877,7 @@ mod tests {
                 "private_mention_outbox",
                 "private_mention_blocks",
                 "identity_migration_state",
+                "contact_requests",
             ] {
                 let exists: bool = conn.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",

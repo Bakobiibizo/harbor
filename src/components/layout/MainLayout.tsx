@@ -1,10 +1,11 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   useIdentityStore,
   useSettingsStore,
   useNetworkStore,
   useMessagingStore,
+  useContactsStore,
 } from '../../stores';
 import {
   formatShortcut,
@@ -79,6 +80,8 @@ export function MainLayout({ children }: MainLayoutProps) {
   const { showOnlineStatus, avatarUrl } = useSettingsStore();
   const { isRunning, status, stats } = useNetworkStore();
   const { clearConversationSelection } = useMessagingStore();
+  const requests = useContactsStore((store) => store.requests);
+  const loadRequests = useContactsStore((store) => store.loadRequests);
   const location = useLocation();
   const navigate = useNavigate();
   const [isLocking, setIsLocking] = useState(false);
@@ -87,6 +90,14 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   // Enable keyboard navigation
   useKeyboardNavigation();
+
+  useEffect(() => {
+    void loadRequests();
+  }, [loadRequests]);
+
+  const incomingRequestCount = requests.filter(
+    (request) => request.direction === 'incoming' && request.status === 'review',
+  ).length;
 
   const identity = state.status === 'unlocked' ? state.identity : null;
   const shortcutReference = KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === 'shortcuts');
@@ -331,6 +342,18 @@ export function MainLayout({ children }: MainLayoutProps) {
                       {item.description}
                     </p>
                   </div>
+                  {item.to === '/network' && incomingRequestCount > 0 && (
+                    <span
+                      aria-label={`${incomingRequestCount} contact requests awaiting review`}
+                      className="min-w-5 h-5 px-1 rounded-full text-xs font-semibold flex items-center justify-center"
+                      style={{
+                        background: 'hsl(var(--harbor-accent))',
+                        color: 'hsl(var(--harbor-bg-primary))',
+                      }}
+                    >
+                      {incomingRequestCount}
+                    </span>
+                  )}
                   <ChevronRightIcon
                     className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                     style={{ color: 'hsl(var(--harbor-text-tertiary))' }}

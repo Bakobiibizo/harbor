@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Contact, ContactData } from '../types';
+import type { Contact, ContactData, ContactRequest } from '../types';
 
 /** Contacts service - wraps Tauri commands */
 export const contactsService = {
@@ -59,7 +59,19 @@ export const contactsService = {
   },
 
   /** Request identity exchange with a peer (adds them as a contact) */
-  async requestPeerIdentity(peerId: string): Promise<void> {
-    return invoke<void>('request_peer_identity', { peerId });
+  async requestPeerIdentity(peerId: string): Promise<string> {
+    return invoke<string>('request_peer_identity', { peerId });
+  },
+
+  async getContactRequests(): Promise<ContactRequest[]> {
+    return invoke<ContactRequest[]>('get_contact_requests');
+  },
+
+  async respondContactRequest(requestId: string, decision: 'accepted' | 'declined'): Promise<void> {
+    return invoke<void>('respond_contact_request', { requestId, decision });
+  },
+
+  async retryContactRequest(requestId: string): Promise<void> {
+    return invoke<void>('retry_contact_request', { requestId });
   },
 };

@@ -79,6 +79,55 @@ fn should_ack_ingest<T, E>(result: &std::result::Result<T, E>) -> bool {
     result.is_ok()
 }
 
+fn identity_request_signing_bytes(request: &IdentityExchangeRequest) -> Result<Vec<u8>> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&unsigned, &mut bytes)
+        .map_err(|error| AppError::Serialization(error.to_string()))?;
+    Ok(bytes)
+}
+
+fn verify_identity_request(peer: PeerId, request: &IdentityExchangeRequest, now: i64) -> bool {
+    if request.requester_peer_id != peer.to_string()
+        || uuid::Uuid::parse_str(&request.request_id).is_err()
+        || !matches!(
+            request.action.as_str(),
+            "request" | "accepted" | "declined" | "revoked"
+        )
+        || request.public_key.len() != 32
+        || request.x25519_public.len() != 32
+        || request.display_name.is_empty()
+        || request.display_name.chars().count() > 128
+        || request.timestamp > now + 30
+        || now - request.timestamp > 300
+    {
+        return false;
+    }
+    let Ok(raw) = <[u8; 32]>::try_from(request.public_key.as_slice()) else {
+        return false;
+    };
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(&raw) else {
+        return false;
+    };
+    let Ok(derived) =
+        crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)
+    else {
+        return false;
+    };
+    if derived != request.requester_peer_id {
+        return false;
+    }
+    let Ok(signature) = ed25519_dalek::Signature::from_slice(&request.signature) else {
+        return false;
+    };
+    let Ok(bytes) = identity_request_signing_bytes(request) else {
+        return false;
+    };
+    use ed25519_dalek::Verifier;
+    verifying_key.verify(&bytes, &signature).is_ok()
+}
+
 /// Handle to interact with the network service
 #[derive(Clone)]
 pub struct NetworkHandle {
@@ -368,10 +417,22 @@ impl NetworkHandle {
     }
 
     /// Request identity from a peer
-    pub async fn request_identity(&self, peer_id: PeerId) -> Result<()> {
+    pub async fn request_identity_action(
+        &self,
+        peer_id: PeerId,
+        request_id: String,
+        action: String,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send((NetworkCommand::RequestIdentity { peer_id }, Some(tx)))
+            .send((
+                NetworkCommand::RequestIdentity {
+                    peer_id,
+                    request_id,
+                    action,
+                },
+                Some(tx),
+            ))
             .await
             .map_err(|_| {
                 AppError::NetworkServiceUnavailable("Network service unavailable".into())
@@ -891,6 +952,7 @@ pub struct NetworkService {
     /// Pending signaling requests waiting for a request-response outcome.
     pending_signaling_requests:
         HashMap<request_response::OutboundRequestId, oneshot::Sender<NetworkResponse>>,
+    pending_identity_requests: HashMap<request_response::OutboundRequestId, (String, String)>,
     pending_name_registration: HashMap<PeerId, PendingNameRegistration>,
     pending_introduction_submit: HashMap<PeerId, PendingIntroductionSubmit>,
     pending_introduction_fetch: HashMap<PeerId, PendingIntroductionFetch>,
@@ -963,6 +1025,7 @@ impl NetworkService {
             community_relays: HashMap::new(),
             pending_board_registrations: std::collections::HashSet::new(),
             pending_signaling_requests: HashMap::new(),
+            pending_identity_requests: HashMap::new(),
             pending_name_registration: HashMap::new(),
             pending_introduction_submit: HashMap::new(),
             pending_introduction_fetch: HashMap::new(),
@@ -1026,19 +1089,66 @@ impl NetworkService {
     }
 
     /// Create an identity exchange request
-    fn create_identity_request(&self) -> Result<IdentityExchangeRequest> {
+    fn create_identity_request(
+        &self,
+        request_id: String,
+        action: String,
+    ) -> Result<IdentityExchangeRequest> {
         let info = self
             .identity_service
             .get_identity_info()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
+        let engine = base64::engine::general_purpose::STANDARD;
+        let mut request = IdentityExchangeRequest {
+            request_id,
+            action,
+            requester_peer_id: info.peer_id,
+            public_key: engine
+                .decode(info.public_key)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            x25519_public: engine
+                .decode(info.x25519_public)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            display_name: info.display_name,
+            avatar_hash: info.avatar_hash,
+            bio: info.bio,
+            timestamp,
+            signature: Vec::new(),
+        };
+        let bytes = identity_request_signing_bytes(&request)?;
+        request.signature = self.identity_service.sign_raw(&bytes)?;
+        Ok(request)
+    }
+
+    fn create_identity_response(
+        &self,
+        request_id: String,
+        status: String,
+    ) -> Result<IdentityExchangeResponse> {
+        let info = self
+            .identity_service
+            .get_identity_info()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+        let timestamp = chrono::Utc::now().timestamp();
         let signature = self
             .identity_service
-            .sign_raw(format!("{}:{}", info.peer_id, timestamp).as_bytes())?;
-
-        Ok(IdentityExchangeRequest {
-            requester_peer_id: info.peer_id,
+            .sign_raw(format!("{}:{}:{}", info.peer_id, info.display_name, timestamp).as_bytes())?;
+        let engine = base64::engine::general_purpose::STANDARD;
+        Ok(IdentityExchangeResponse {
+            request_id,
+            status,
+            peer_id: info.peer_id,
+            public_key: engine
+                .decode(info.public_key)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            x25519_public: engine
+                .decode(info.x25519_public)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            display_name: info.display_name,
+            avatar_hash: info.avatar_hash,
+            bio: info.bio,
             timestamp,
             signature,
         })
@@ -1705,8 +1815,8 @@ impl NetworkService {
         &mut self,
         event: request_response::Event<IdentityExchangeRequest, IdentityExchangeResponse>,
     ) {
-        if let request_response::Event::Message { peer, message, .. } = event {
-            match message {
+        match event {
+            request_response::Event::Message { peer, message, .. } => match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1724,7 +1834,43 @@ impl NetworkService {
                     self.handle_identity_response(peer, request_id, response)
                         .await;
                 }
+            },
+            request_response::Event::OutboundFailure {
+                request_id, error, ..
+            } => {
+                if let Some((contact_request_id, action)) =
+                    self.pending_identity_requests.remove(&request_id)
+                {
+                    if let Some(service) = &self.contacts_service {
+                        let message = format!("Contact request delivery failed: {error}");
+                        let failure_status = if action == "revoked" {
+                            "revoked"
+                        } else {
+                            "failed"
+                        };
+                        let _ = service.update_contact_request(
+                            &contact_request_id,
+                            failure_status,
+                            Some(&action),
+                            Some(&message),
+                            chrono::Utc::now().timestamp(),
+                        );
+                        if let Ok(Some(request)) = service.contact_request(&contact_request_id) {
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::ContactRequestChanged {
+                                    request_id: request.request_id,
+                                    peer_id: request.peer_id,
+                                    display_name: request.display_name,
+                                    direction: request.direction,
+                                    status: failure_status.into(),
+                                })
+                                .await;
+                        }
+                    }
+                }
             }
+            _ => {}
         }
     }
 
@@ -3331,82 +3477,156 @@ impl NetworkService {
 
     async fn handle_identity_request(
         &mut self,
-        _peer: PeerId,
+        peer: PeerId,
         _request_id: request_response::InboundRequestId,
-        _request: IdentityExchangeRequest,
+        request: IdentityExchangeRequest,
         channel: ResponseChannel<IdentityExchangeResponse>,
     ) {
-        // Get our libp2p peer ID (this is what other peers see us as)
-        let local_peer_id = *self.swarm.local_peer_id();
+        let now = chrono::Utc::now().timestamp();
+        if !verify_identity_request(peer, &request, now) {
+            warn!("Rejected invalid signed contact request from {peer}");
+            return;
+        }
+        let Some(service) = self.contacts_service.as_ref() else {
+            return;
+        };
 
-        // Get our identity info to respond with
-        match self.identity_service.get_identity_info() {
-            Ok(Some(info)) => {
-                // Sign the response using the libp2p peer ID
-                let timestamp = chrono::Utc::now().timestamp();
-                let signature = match self.identity_service.sign_raw(
-                    format!("{}:{}:{}", local_peer_id, info.display_name, timestamp).as_bytes(),
-                ) {
-                    Ok(sig) => sig,
-                    Err(e) => {
-                        warn!("Failed to sign identity response: {}", e);
-                        return;
+        let status = match request.action.as_str() {
+            "request" => {
+                let _ = service.record_contact_request(
+                    &request.request_id,
+                    &request.requester_peer_id,
+                    "incoming",
+                    Some(&request.display_name),
+                    Some(&request.public_key),
+                    Some(&request.x25519_public),
+                    request.avatar_hash.as_deref(),
+                    request.bio.as_deref(),
+                    "review",
+                    None,
+                    None,
+                    request.timestamp,
+                );
+                "review"
+            }
+            "accepted" => {
+                if let Ok(Some(existing)) =
+                    service.contact_request_for_peer(&request.requester_peer_id, "outgoing")
+                {
+                    if existing.request_id == request.request_id {
+                        let _ = service.record_contact_request(
+                            &existing.request_id,
+                            &request.requester_peer_id,
+                            "outgoing",
+                            Some(&request.display_name),
+                            Some(&request.public_key),
+                            Some(&request.x25519_public),
+                            request.avatar_hash.as_deref(),
+                            request.bio.as_deref(),
+                            "accepted",
+                            None,
+                            None,
+                            now,
+                        );
+                        let _ = service.update_contact_request(
+                            &existing.request_id,
+                            "accepted",
+                            None,
+                            None,
+                            now,
+                        );
+                        let _ = service.promote_contact_request(&existing.request_id);
+                        if let Some(ref permissions_service) = self.permissions_service {
+                            let _ = permissions_service.create_permission_grant(
+                                &request.requester_peer_id,
+                                Capability::Chat,
+                                None,
+                            );
+                        }
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::ContactAdded {
+                                peer_id: request.requester_peer_id.clone(),
+                                display_name: request.display_name.clone(),
+                            })
+                            .await;
                     }
-                };
-
-                // Decode base64 public keys to bytes for the network protocol
-                let engine = base64::engine::general_purpose::STANDARD;
-                let public_key = match engine.decode(&info.public_key) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        warn!("Failed to decode public key: {}", e);
-                        return;
+                }
+                "accepted"
+            }
+            "declined" => {
+                if let Ok(Some(existing)) =
+                    service.contact_request_for_peer(&request.requester_peer_id, "outgoing")
+                {
+                    if existing.request_id == request.request_id {
+                        let _ = service.update_contact_request(
+                            &existing.request_id,
+                            "declined",
+                            None,
+                            None,
+                            now,
+                        );
                     }
-                };
-                let x25519_public = match engine.decode(&info.x25519_public) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        warn!("Failed to decode x25519 public key: {}", e);
-                        return;
-                    }
-                };
+                }
+                "declined"
+            }
+            "revoked" => {
+                let _ = service.remove_contact(&request.requester_peer_id);
+                let _ = service.revoke_contact_requests(&request.requester_peer_id, now);
+                "revoked"
+            }
+            _ => return,
+        };
 
-                let response = IdentityExchangeResponse {
-                    // Use the libp2p peer ID, not the stored Harbor peer_id
-                    peer_id: local_peer_id.to_string(),
-                    public_key,
-                    x25519_public,
-                    display_name: info.display_name,
-                    avatar_hash: info.avatar_hash,
-                    bio: info.bio,
-                    timestamp,
-                    signature,
-                };
+        if let Ok(Some(stored)) = service.contact_request_for_peer(
+            &request.requester_peer_id,
+            if request.action == "request" {
+                "incoming"
+            } else {
+                "outgoing"
+            },
+        ) {
+            let _ = self
+                .event_tx
+                .send(NetworkEvent::ContactRequestChanged {
+                    request_id: stored.request_id,
+                    peer_id: stored.peer_id,
+                    display_name: stored.display_name,
+                    direction: stored.direction,
+                    status: stored.status,
+                })
+                .await;
+        }
 
-                if let Err(e) = self
+        match self.create_identity_response(request.request_id, status.into()) {
+            Ok(response) => {
+                if let Err(error) = self
                     .swarm
                     .behaviour_mut()
                     .identity_exchange
                     .send_response(channel, response)
                 {
-                    warn!("Failed to send identity response: {:?}", e);
+                    warn!("Failed to send contact-request response: {error:?}");
                 }
             }
-            Ok(None) => {
-                warn!("No identity configured, cannot respond to identity request");
-            }
-            Err(e) => {
-                warn!("Failed to get identity info: {}", e);
-            }
+            Err(error) => warn!("Failed to create contact-request response: {error}"),
         }
     }
 
     async fn handle_identity_response(
         &mut self,
         peer: PeerId,
-        _request_id: request_response::OutboundRequestId,
+        outbound_id: request_response::OutboundRequestId,
         response: IdentityExchangeResponse,
     ) {
+        let Some((request_id, action)) = self.pending_identity_requests.remove(&outbound_id) else {
+            warn!("Ignoring uncorrelated identity response from {peer}");
+            return;
+        };
+        if response.request_id != request_id {
+            warn!("Ignoring identity response with mismatched request ID from {peer}");
+            return;
+        }
         info!(
             "Got identity from {}: {} ({})",
             peer, response.display_name, response.peer_id
@@ -3414,6 +3634,16 @@ impl NetworkService {
 
         // Store in contacts database if we have the contacts service
         if let Some(ref contacts_service) = self.contacts_service {
+            let now = chrono::Utc::now().timestamp();
+            if !matches!(
+                response.status.as_str(),
+                "review" | "accepted" | "declined" | "revoked" | "failed"
+            ) || response.timestamp > now + 30
+                || now - response.timestamp > 300
+            {
+                warn!("Rejected stale or invalid contact-request response from {peer}");
+                return;
+            }
             // Verify the response peer ID matches the peer we received from
             if response.peer_id != peer.to_string() {
                 warn!(
@@ -3514,45 +3744,75 @@ impl NetworkService {
                 peer
             );
 
-            match contacts_service.add_contact(
-                &response.peer_id,
-                &response.public_key,
-                &response.x25519_public,
-                &response.display_name,
-                response.avatar_hash.as_deref(),
-                response.bio.as_deref(),
-            ) {
-                Ok(contact_id) => {
-                    info!(
-                        "Added contact {} with ID {}",
-                        response.display_name, contact_id
+            match response.status.as_str() {
+                "review" if action == "request" => {
+                    let _ = contacts_service.record_contact_request(
+                        &request_id,
+                        &response.peer_id,
+                        "outgoing",
+                        Some(&response.display_name),
+                        Some(&response.public_key),
+                        Some(&response.x25519_public),
+                        response.avatar_hash.as_deref(),
+                        response.bio.as_deref(),
+                        "pending",
+                        None,
+                        None,
+                        now,
                     );
-
-                    // Grant chat permission to the new contact
+                }
+                "accepted" => {
+                    let _ = contacts_service.update_contact_request(
+                        &request_id,
+                        "accepted",
+                        None,
+                        None,
+                        now,
+                    );
+                    // The incoming request was already promoted when the user accepted it.
+                    // Promotion here is idempotent and covers an accepted replay after restart.
+                    let _ = contacts_service.promote_contact_request(&request_id);
                     if let Some(ref permissions_service) = self.permissions_service {
-                        match permissions_service.create_permission_grant(
+                        let _ = permissions_service.create_permission_grant(
                             &response.peer_id,
                             Capability::Chat,
-                            None, // No expiration
-                        ) {
-                            Ok(_) => {
-                                info!("Granted chat permission to {}", response.peer_id);
-                            }
-                            Err(e) => {
-                                warn!("Failed to grant chat permission: {}", e);
-                            }
-                        }
+                            None,
+                        );
                     }
-
-                    // Emit event to notify frontend
-                    drop(self.event_tx.send(NetworkEvent::ContactAdded {
-                        peer_id: response.peer_id.clone(),
-                        display_name: response.display_name.clone(),
-                    }));
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::ContactAdded {
+                            peer_id: response.peer_id.clone(),
+                            display_name: response.display_name.clone(),
+                        })
+                        .await;
                 }
-                Err(e) => {
-                    warn!("Failed to add contact: {}", e);
+                "declined" => {
+                    let _ = contacts_service.update_contact_request(
+                        &request_id,
+                        "declined",
+                        None,
+                        None,
+                        now,
+                    );
                 }
+                "revoked" => {
+                    let _ = contacts_service.remove_contact(&response.peer_id);
+                    let _ = contacts_service.revoke_contact_requests(&response.peer_id, now);
+                }
+                status => warn!("Unexpected contact-request response status: {status}"),
+            }
+            if let Ok(Some(stored)) = contacts_service.contact_request(&request_id) {
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::ContactRequestChanged {
+                        request_id: stored.request_id,
+                        peer_id: stored.peer_id,
+                        display_name: stored.display_name,
+                        direction: stored.direction,
+                        status: stored.status,
+                    })
+                    .await;
             }
         } else {
             warn!("No contacts service configured, cannot store identity");
@@ -3936,14 +4196,21 @@ impl NetworkService {
                 NetworkResponse::Ok
             }
 
-            NetworkCommand::RequestIdentity { peer_id } => {
+            NetworkCommand::RequestIdentity {
+                peer_id,
+                request_id,
+                action,
+            } => {
                 // Create identity request
-                match self.create_identity_request() {
+                match self.create_identity_request(request_id.clone(), action.clone()) {
                     Ok(request) => {
-                        self.swarm
+                        let outbound_id = self
+                            .swarm
                             .behaviour_mut()
                             .identity_exchange
                             .send_request(&peer_id, request);
+                        self.pending_identity_requests
+                            .insert(outbound_id, (request_id, action));
                         NetworkResponse::Ok
                     }
                     Err(e) => {
@@ -4805,5 +5072,49 @@ mod introduction_ack_tests {
             response_tx.is_closed(),
             "timeout must abandon stale progress"
         );
+    }
+}
+
+#[cfg(test)]
+mod contact_request_protocol_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn signed_request(action: &str, now: i64) -> (PeerId, IdentityExchangeRequest) {
+        let key = SigningKey::from_bytes(&[42; 32]);
+        let peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&key.verifying_key())
+                .unwrap();
+        let peer: PeerId = peer_id.parse().unwrap();
+        let mut request = IdentityExchangeRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            action: action.into(),
+            requester_peer_id: peer_id,
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            x25519_public: vec![7; 32],
+            display_name: "Alice".into(),
+            avatar_hash: None,
+            bio: None,
+            timestamp: now,
+            signature: Vec::new(),
+        };
+        request.signature = key
+            .sign(&identity_request_signing_bytes(&request).unwrap())
+            .to_bytes()
+            .to_vec();
+        (peer, request)
+    }
+
+    #[test]
+    fn signed_request_actions_are_bound_and_tamper_evident() {
+        let now = 10_000;
+        let (peer, request) = signed_request("request", now);
+        assert!(verify_identity_request(peer, &request, now));
+        let mut altered = request.clone();
+        altered.action = "accepted".into();
+        assert!(!verify_identity_request(peer, &altered, now));
+        let mut stale = request;
+        stale.timestamp = now - 301;
+        assert!(!verify_identity_request(peer, &stale, now));
     }
 }

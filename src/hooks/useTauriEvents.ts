@@ -21,7 +21,7 @@ import { mediaService } from '../services/media';
 export function useTauriEvents() {
   const unlistenersRef = useRef<UnlistenFn[]>([]);
   const { refreshPeers, refreshStats } = useNetworkStore();
-  const { refreshContacts } = useContactsStore();
+  const { refreshContacts, loadRequests } = useContactsStore();
 
   useEffect(() => {
     let cancelled = false;
@@ -195,6 +195,23 @@ export function useTauriEvents() {
           toast.success(`Added ${event.display_name} to contacts!`);
           break;
 
+        case 'contact_request_changed':
+          void loadRequests();
+          if (event.direction === 'incoming' && event.status === 'review') {
+            toast(`Contact request from ${event.display_name || 'a Harbor user'}`, {
+              icon: '👤',
+              duration: 6000,
+            });
+          } else if (event.status === 'accepted') {
+            void refreshContacts();
+            toast.success('Contact request accepted');
+          } else if (event.status === 'declined') {
+            toast('Contact request declined');
+          } else if (event.status === 'failed') {
+            toast.error('Contact request could not be delivered');
+          }
+          break;
+
         case 'nat_status_changed':
           console.log(`[Network] NAT status changed: ${event.status}`);
           // Update NAT status in store
@@ -328,5 +345,5 @@ export function useTauriEvents() {
       unlistenersRef.current.forEach((unlisten) => unlisten());
       unlistenersRef.current = [];
     };
-  }, [refreshPeers, refreshStats, refreshContacts]);
+  }, [refreshPeers, refreshStats, refreshContacts, loadRequests]);
 }

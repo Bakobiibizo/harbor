@@ -13,7 +13,7 @@ pub use messaging::*;
 pub use signaling::*;
 
 /// Protocol version string for identity exchange
-pub const IDENTITY_PROTOCOL: &str = "/harbor/identity/1.0.0";
+pub const IDENTITY_PROTOCOL: &str = "/harbor/identity/2.0.0";
 
 /// Protocol version string for direct messaging
 pub const MESSAGING_PROTOCOL: &str = "/harbor/messaging/1.0.0";

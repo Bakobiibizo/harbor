@@ -18,6 +18,7 @@ import {
   ChevronRightIcon,
   TrashIcon,
 } from '../components/icons';
+import { ContactRequestsPanel } from '../components/common';
 import {
   RELAY_CLOUDFORMATION_TEMPLATE,
   COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
@@ -200,7 +201,15 @@ export function NetworkPage() {
     connectToPublicRelays,
   } = useNetworkStore();
 
-  const { contacts, refreshContacts } = useContactsStore();
+  const {
+    contacts,
+    requests,
+    refreshContacts,
+    loadRequests,
+    sendRequest,
+    respondToRequest,
+    retryRequest,
+  } = useContactsStore();
   const { autoStartNetwork, localDiscovery, setAutoStartNetwork, setLocalDiscovery } =
     useSettingsStore();
 
@@ -219,6 +228,7 @@ export function NetworkPage() {
   // Check network status on mount and set up refresh interval
   useEffect(() => {
     checkStatus();
+    void loadRequests();
 
     const interval = setInterval(() => {
       if (isRunning) {
@@ -237,6 +247,7 @@ export function NetworkPage() {
     refreshStats,
     refreshAddresses,
     refreshShareableAddresses,
+    loadRequests,
   ]);
 
   // NAT status "Detecting..." timeout (30s)
@@ -971,6 +982,26 @@ export function NetworkPage() {
             </div>
           )}
 
+          <ContactRequestsPanel
+            requests={requests}
+            onDecision={async (requestId, decision) => {
+              try {
+                await respondToRequest(requestId, decision);
+                toast.success(decision === 'accepted' ? 'Contact accepted' : 'Request declined');
+              } catch (error) {
+                toast.error(`Could not update request: ${error}`);
+              }
+            }}
+            onRetry={async (requestId) => {
+              try {
+                await retryRequest(requestId);
+                toast.success('Contact request queued again');
+              } catch (error) {
+                toast.error(`Retry failed: ${error}`);
+              }
+            }}
+          />
+
           {/* Section D: Peers (consolidated tabs) */}
           <div
             className="rounded-2xl overflow-hidden"
@@ -1210,20 +1241,31 @@ export function NetworkPage() {
                       const displayName = knownContact
                         ? safePeerLabel(knownContact.peerId, knownContact.verifiedQualifiedName)
                         : undefined;
+                      const contactRequest = requests.find(
+                        (request) =>
+                          request.peerId === peer.peerId &&
+                          (request.status === 'pending' || request.status === 'review'),
+                      );
                       return (
                         <PeerRow
                           key={peer.peerId}
                           peerId={peer.peerId}
                           displayName={displayName}
                           isConnected
-                          actionLabel={knownContact ? 'Message' : 'Add Contact'}
+                          actionLabel={
+                            knownContact
+                              ? 'Message'
+                              : contactRequest?.status === 'pending'
+                                ? 'Pending'
+                                : contactRequest?.status === 'review'
+                                  ? 'Review Request'
+                                  : 'Add Contact'
+                          }
                           actionStyle="success"
+                          actionDisabled={Boolean(contactRequest)}
                           onAction={async () => {
                             try {
-                              await contactsService.requestPeerIdentity(peer.peerId);
-                              toast.success(
-                                `Requesting identity from ${displayName ?? getPeerFriendlyName(peer.peerId)}...`,
-                              );
+                              await sendRequest(peer.peerId);
                             } catch (err) {
                               toast.error(`Failed to add contact: ${err}`);
                             }
@@ -1376,6 +1418,7 @@ function PeerRow({
   actionLabel,
   actionStyle,
   onAction,
+  actionDisabled = false,
 }: {
   peerId: string;
   displayName?: string;
@@ -1383,6 +1426,7 @@ function PeerRow({
   actionLabel: string;
   actionStyle: 'primary' | 'success';
   onAction: () => Promise<void>;
+  actionDisabled?: boolean;
 }) {
   const friendlyName = displayName ?? getPeerFriendlyName(peerId);
   const avatarColor = getPeerColor(peerId);
@@ -1430,7 +1474,8 @@ function PeerRow({
       )}
 
       <button
-        className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+        disabled={actionDisabled}
+        className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         style={
           actionStyle === 'success'
             ? {

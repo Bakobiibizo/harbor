@@ -24,3 +24,17 @@ export interface ContactData {
   avatarHash?: string | null;
   bio?: string | null;
 }
+
+export type ContactRequestStatus =
+  'pending' | 'review' | 'accepted' | 'declined' | 'failed' | 'revoked';
+
+export interface ContactRequest {
+  requestId: string;
+  peerId: string;
+  direction: 'incoming' | 'outgoing';
+  displayName: string | null;
+  status: ContactRequestStatus;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}

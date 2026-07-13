@@ -8,8 +8,9 @@ use tauri::State;
 use tracing::info;
 
 use crate::commands::network::NetworkState;
+use crate::db::Capability;
 use crate::error::AppError;
-use crate::services::ContactsService;
+use crate::services::{ContactsService, PermissionsService};
 
 /// Contact info for the frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,43 @@ pub struct ContactInfo {
     pub trust_level: i32,
     pub last_seen_at: Option<i64>,
     pub added_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactRequestInfo {
+    pub request_id: String,
+    pub peer_id: String,
+    pub direction: String,
+    pub display_name: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+fn request_info(value: crate::db::ContactRequestRecord) -> ContactRequestInfo {
+    ContactRequestInfo {
+        request_id: value.request_id,
+        peer_id: value.peer_id,
+        direction: value.direction,
+        display_name: value.display_name,
+        status: value.status,
+        error: value.error,
+        created_at: value.created_at,
+        updated_at: value.updated_at,
+    }
+}
+
+#[tauri::command]
+pub async fn get_contact_requests(
+    contacts_service: State<'_, Arc<ContactsService>>,
+) -> Result<Vec<ContactRequestInfo>, AppError> {
+    Ok(contacts_service
+        .contact_requests()?
+        .into_iter()
+        .map(request_info)
+        .collect())
 }
 
 /// Get all contacts
@@ -146,9 +184,24 @@ pub async fn unblock_contact(
 #[tauri::command]
 pub async fn remove_contact(
     contacts_service: State<'_, Arc<ContactsService>>,
+    network: State<'_, NetworkState>,
     peer_id: String,
 ) -> Result<bool, AppError> {
-    contacts_service.remove_contact(&peer_id)
+    let existing_request = contacts_service
+        .contact_request_for_peer(&peer_id, "incoming")?
+        .or(contacts_service.contact_request_for_peer(&peer_id, "outgoing")?);
+    let removed = contacts_service.remove_contact(&peer_id)?;
+    contacts_service.revoke_contact_requests(&peer_id, chrono::Utc::now().timestamp())?;
+    if let Some(request) = existing_request {
+        if let Ok(peer) = PeerId::from_str(&peer_id) {
+            if let Ok(handle) = network.get_handle().await {
+                let _ = handle
+                    .request_identity_action(peer, request.request_id, "revoked".into())
+                    .await;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// Check if a peer is a contact
@@ -173,14 +226,153 @@ pub async fn is_contact_blocked(
 #[tauri::command]
 pub async fn request_peer_identity(
     network: State<'_, NetworkState>,
+    contacts_service: State<'_, Arc<ContactsService>>,
     peer_id: String,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     let libp2p_peer_id = PeerId::from_str(&peer_id)
         .map_err(|e| AppError::Validation(format!("Invalid peer ID: {}", e)))?;
 
-    let handle = network.get_handle().await?;
-    handle.request_identity(libp2p_peer_id).await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+    contacts_service.record_contact_request(
+        &request_id,
+        &peer_id,
+        "outgoing",
+        None,
+        None,
+        None,
+        None,
+        None,
+        "pending",
+        Some("request"),
+        None,
+        now,
+    )?;
+    let delivery = match network.get_handle().await {
+        Ok(handle) => {
+            handle
+                .request_identity_action(libp2p_peer_id, request_id.clone(), "request".into())
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = delivery {
+        contacts_service.update_contact_request(
+            &request_id,
+            "failed",
+            Some("request"),
+            Some(&error.to_string()),
+            chrono::Utc::now().timestamp(),
+        )?;
+        return Err(error);
+    }
 
     info!("Requested identity from peer {}", peer_id);
+    Ok(request_id)
+}
+
+#[tauri::command]
+pub async fn respond_contact_request(
+    network: State<'_, NetworkState>,
+    contacts_service: State<'_, Arc<ContactsService>>,
+    permissions_service: State<'_, Arc<PermissionsService>>,
+    request_id: String,
+    decision: String,
+) -> Result<(), AppError> {
+    if decision != "accepted" && decision != "declined" {
+        return Err(AppError::Validation(
+            "Invalid contact request decision".into(),
+        ));
+    }
+    let request = contacts_service
+        .contact_request(&request_id)?
+        .ok_or_else(|| AppError::NotFound("Contact request not found".into()))?;
+    if request.direction != "incoming" || !matches!(request.status.as_str(), "review" | "failed") {
+        return Err(AppError::Validation(
+            "Contact request is no longer awaiting review".into(),
+        ));
+    }
+
+    if decision == "accepted" {
+        contacts_service.promote_contact_request(&request_id)?;
+        permissions_service.create_permission_grant(&request.peer_id, Capability::Chat, None)?;
+    }
+    contacts_service.update_contact_request(
+        &request_id,
+        &decision,
+        Some(&decision),
+        None,
+        chrono::Utc::now().timestamp(),
+    )?;
+    let peer = PeerId::from_str(&request.peer_id)
+        .map_err(|error| AppError::Validation(format!("Invalid peer ID: {error}")))?;
+    let delivery = match network.get_handle().await {
+        Ok(handle) => {
+            handle
+                .request_identity_action(peer, request_id.clone(), decision.clone())
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = delivery {
+        contacts_service.update_contact_request(
+            &request_id,
+            "failed",
+            Some(&decision),
+            Some(&error.to_string()),
+            chrono::Utc::now().timestamp(),
+        )?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn retry_contact_request(
+    network: State<'_, NetworkState>,
+    contacts_service: State<'_, Arc<ContactsService>>,
+    request_id: String,
+) -> Result<(), AppError> {
+    let request = contacts_service
+        .contact_request(&request_id)?
+        .ok_or_else(|| AppError::NotFound("Contact request not found".into()))?;
+    if request.status != "failed" {
+        return Err(AppError::Validation(
+            "Only failed contact requests can be retried".into(),
+        ));
+    }
+    let action = request.pending_action.unwrap_or_else(|| "request".into());
+    let next_status = if action == "request" {
+        "pending"
+    } else {
+        &action
+    };
+    contacts_service.update_contact_request(
+        &request_id,
+        next_status,
+        Some(&action),
+        None,
+        chrono::Utc::now().timestamp(),
+    )?;
+    let peer = PeerId::from_str(&request.peer_id)
+        .map_err(|error| AppError::Validation(format!("Invalid peer ID: {error}")))?;
+    let delivery = match network.get_handle().await {
+        Ok(handle) => {
+            handle
+                .request_identity_action(peer, request_id.clone(), action.clone())
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = delivery {
+        contacts_service.update_contact_request(
+            &request_id,
+            "failed",
+            Some(&action),
+            Some(&error.to_string()),
+            chrono::Utc::now().timestamp(),
+        )?;
+        return Err(error);
+    }
     Ok(())
 }

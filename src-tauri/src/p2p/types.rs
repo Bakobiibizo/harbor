@@ -86,6 +86,14 @@ pub enum NetworkEvent {
         peer_id: String,
         display_name: String,
     },
+    /// A durable contact-request row changed state.
+    ContactRequestChanged {
+        request_id: String,
+        peer_id: String,
+        display_name: Option<String>,
+        direction: String,
+        status: String,
+    },
     /// NAT status changed
     NatStatusChanged { status: NatStatus },
     /// Successfully connected to a relay and have a relay address
@@ -209,6 +217,8 @@ pub enum NetworkCommand {
     /// Request identity from a peer
     RequestIdentity {
         peer_id: PeerId,
+        request_id: String,
+        action: String,
     },
     /// Get current network stats
     GetStats,
@@ -404,5 +414,21 @@ mod tests {
         assert_eq!(json["cursor"], 42);
         assert!(json.get("content_text").is_none());
         assert!(json.get("media_bytes").is_none());
+    }
+
+    #[test]
+    fn contact_request_event_exposes_state_but_not_identity_keys() {
+        let event = NetworkEvent::ContactRequestChanged {
+            request_id: "request-1".into(),
+            peer_id: "peer-1".into(),
+            display_name: Some("Alice".into()),
+            direction: "incoming".into(),
+            status: "review".into(),
+        };
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["type"], "contact_request_changed");
+        assert_eq!(json["status"], "review");
+        assert!(json.get("public_key").is_none());
+        assert!(json.get("x25519_public").is_none());
     }
 }
