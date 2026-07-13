@@ -40,6 +40,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
+    "test:acceptance-gate": "node --test scripts/live-beta-acceptance.node-test.mjs",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "acceptance:live-beta": "node scripts/live-beta-acceptance.mjs"

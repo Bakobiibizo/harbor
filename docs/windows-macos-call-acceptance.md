@@ -100,7 +100,11 @@ Repeat the accepted call with macOS as caller and Windows as callee.
 4. Disconnect the third profile. Confirm its tile becomes failed/degraded while the Windows to macOS leg remains connected and usable.
 5. Rejoin or start a fresh room, then reject on the third profile. Confirm rejection does not end the remaining leg.
 6. Leave from the creator. Confirm every remaining leg closes and relaunch shows no stale room or media stream.
-7. If TURN is configured, repeat one accepted call from networks that require relay. Record the selected route class and connected/failed state only.
+7. Leave and rejoin with a non-creator profile. Confirm the roster converges on every remaining
+   profile and media returns without duplicating a participant tile.
+8. Attempt to start a call above the four-total-participant mesh cap. Confirm it is rejected before
+   opening another media leg and the existing room remains usable.
+9. If TURN is configured, repeat one accepted call from networks that require relay. Record the selected route class and connected/failed state only.
 
 ## 7. Evidence record
 
