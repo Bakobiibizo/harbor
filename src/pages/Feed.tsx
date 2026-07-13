@@ -570,6 +570,9 @@ export function FeedPage() {
                     : 'image') as 'image' | 'video' | 'audio',
                 url: m.mediaHash,
                 name: m.fileName,
+                sourcePeerId: item.authorPeerId,
+                mimeType: m.mimeType,
+                totalBytes: m.fileSize,
               }));
             }
           } catch {

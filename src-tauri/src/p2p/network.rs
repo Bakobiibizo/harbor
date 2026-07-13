@@ -966,6 +966,7 @@ pub struct NetworkService {
     pending_introduction_submit: HashMap<PeerId, PendingIntroductionSubmit>,
     pending_introduction_fetch: HashMap<PeerId, PendingIntroductionFetch>,
     pending_delivery_resolution: HashMap<PeerId, (String, oneshot::Sender<NetworkResponse>)>,
+    pending_media_fetches: HashMap<request_response::OutboundRequestId, (PeerId, String)>,
 }
 
 struct PendingNameRegistration {
@@ -1039,6 +1040,7 @@ impl NetworkService {
             pending_introduction_submit: HashMap::new(),
             pending_introduction_fetch: HashMap::new(),
             pending_delivery_resolution: HashMap::new(),
+            pending_media_fetches: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -2126,18 +2128,70 @@ impl NetworkService {
                         warn!("Failed to send media sync response: {:?}", e);
                     }
                 }
-                request_response::Message::Response { response, .. } => {
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
                     // Outbound: we received media bytes from a peer
-                    self.handle_media_fetch_response(peer, response).await;
+                    let pending = self.pending_media_fetches.remove(&request_id);
+                    self.handle_media_fetch_response(peer, pending, response)
+                        .await;
                 }
             },
-            request_response::Event::OutboundFailure { peer, error, .. } => {
+            request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            } => {
                 warn!("Media fetch outbound failure to peer {}: {}", peer, error);
+                if let Some((_, hash)) = self.pending_media_fetches.remove(&request_id) {
+                    self.transition_media(
+                        &hash,
+                        "failed",
+                        None,
+                        None,
+                        Some("transport_timeout"),
+                        Some("The attachment source did not respond. You can retry."),
+                        false,
+                    );
+                }
             }
             request_response::Event::InboundFailure { peer, error, .. } => {
                 warn!("Media fetch inbound failure from peer {}: {}", peer, error);
             }
             _ => {}
+        }
+    }
+
+    fn transition_media(
+        &self,
+        hash: &str,
+        status: &str,
+        bytes_received: Option<u64>,
+        total_bytes: Option<u64>,
+        error_code: Option<&str>,
+        error_message: Option<&str>,
+        increment_attempt: bool,
+    ) {
+        let Some(media_service) = self.media_service.as_ref() else {
+            return;
+        };
+        match media_service.update_transfer(
+            hash,
+            status,
+            bytes_received,
+            total_bytes,
+            error_code,
+            error_message,
+            increment_attempt,
+        ) {
+            Ok(state) => {
+                let _ = self
+                    .event_tx
+                    .try_send(NetworkEvent::MediaTransferChanged { state });
+            }
+            Err(error) => warn!("Could not persist media lifecycle update: {error}"),
         }
     }
 
@@ -2282,32 +2336,50 @@ impl NetworkService {
     ) -> super::protocols::media_sync::MediaFetchResponse {
         use super::protocols::media_sync::MediaFetchResponse;
 
-        // Verify requester is in contacts
-        if let Some(ref contacts_service) = self.contacts_service {
-            match contacts_service.is_contact(&request.requester_peer_id) {
-                Ok(true) => {}
-                Ok(false) => {
-                    info!(
-                        "Media fetch denied: {} is not a contact",
-                        request.requester_peer_id
-                    );
-                    return MediaFetchResponse::Error {
-                        error: "Not a contact".to_string(),
-                    };
-                }
-                Err(e) => {
-                    warn!("Error checking contact status: {}", e);
-                    return MediaFetchResponse::Error {
-                        error: "Internal error".to_string(),
-                    };
-                }
-            }
-        }
-
         // Verify the requester_peer_id matches the actual peer
         if request.requester_peer_id != peer.to_string() {
             return MediaFetchResponse::Error {
                 error: "peer_id mismatch".to_string(),
+            };
+        }
+
+        let Some(contacts_service) = self.contacts_service.as_ref() else {
+            return MediaFetchResponse::Error {
+                error: "Authorization unavailable".to_string(),
+            };
+        };
+        if !contacts_service
+            .is_contact(&request.requester_peer_id)
+            .unwrap_or(false)
+        {
+            info!("Media fetch denied for an unknown requester");
+            return MediaFetchResponse::Error {
+                error: "Not authorized".to_string(),
+            };
+        }
+        if (chrono::Utc::now().timestamp() - request.timestamp).abs() > 300 {
+            return MediaFetchResponse::Error {
+                error: "Request expired".to_string(),
+            };
+        }
+        let verified = contacts_service
+            .get_public_key(&request.requester_peer_id)
+            .ok()
+            .flatten()
+            .and_then(|key| <[u8; 32]>::try_from(key.as_slice()).ok())
+            .and_then(|key| ed25519_dalek::VerifyingKey::from_bytes(&key).ok())
+            .and_then(|key| {
+                let signable = crate::services::SignableMediaFetchRequest {
+                    media_hash: request.media_hash.clone(),
+                    requester_peer_id: request.requester_peer_id.clone(),
+                    timestamp: request.timestamp,
+                };
+                crate::services::verify(&key, &signable, &request.signature).ok()
+            })
+            .unwrap_or(false);
+        if !verified {
+            return MediaFetchResponse::Error {
+                error: "Not authorized".to_string(),
             };
         }
 
@@ -2378,6 +2450,7 @@ impl NetworkService {
     async fn handle_media_fetch_response(
         &mut self,
         peer: PeerId,
+        pending: Option<(PeerId, String)>,
         response: super::protocols::media_sync::MediaFetchResponse,
     ) {
         use super::protocols::media_sync::MediaFetchResponse;
@@ -2389,6 +2462,43 @@ impl NetworkService {
                 mime_type,
                 data,
             } => {
+                let Some((expected_peer, expected_hash)) = pending else {
+                    warn!("Ignoring uncorrelated media response from {peer}");
+                    return;
+                };
+                if expected_peer != peer || expected_hash != media_hash {
+                    self.transition_media(
+                        &expected_hash,
+                        "failed",
+                        None,
+                        None,
+                        Some("response_mismatch"),
+                        Some("The attachment response could not be verified."),
+                        false,
+                    );
+                    return;
+                }
+                if data.len() > crate::services::posts_service::MAX_POST_MEDIA_BYTES as usize {
+                    self.transition_media(
+                        &media_hash,
+                        "failed",
+                        None,
+                        Some(data.len() as u64),
+                        Some("size_limit"),
+                        Some("The attachment exceeds Harbor's transfer limit."),
+                        false,
+                    );
+                    return;
+                }
+                self.transition_media(
+                    &media_hash,
+                    "transferring",
+                    Some(data.len() as u64),
+                    Some(data.len() as u64),
+                    None,
+                    None,
+                    false,
+                );
                 // Verify hash matches actual SHA256 of received bytes
                 let mut hasher = Sha256::new();
                 hasher.update(&data);
@@ -2398,6 +2508,15 @@ impl NetworkService {
                     warn!(
                         "Media hash mismatch from {}: expected {} got {}",
                         peer, media_hash, actual_hash
+                    );
+                    self.transition_media(
+                        &media_hash,
+                        "failed",
+                        Some(data.len() as u64),
+                        Some(data.len() as u64),
+                        Some("integrity_failed"),
+                        Some("The attachment failed its integrity check."),
+                        false,
                     );
                     return;
                 }
@@ -2435,6 +2554,15 @@ impl NetworkService {
                                     media_hash,
                                 })
                                 .await;
+                            self.transition_media(
+                                &hash,
+                                "ready",
+                                Some(data.len() as u64),
+                                Some(data.len() as u64),
+                                None,
+                                None,
+                                false,
+                            );
                         }
                         Err(e) => {
                             warn!("Failed to store media from {}: {}", peer, e);
@@ -2452,6 +2580,15 @@ impl NetworkService {
                                 Some(e.to_string()),
                             )
                             .await;
+                            self.transition_media(
+                                &media_hash,
+                                "failed",
+                                Some(data.len() as u64),
+                                Some(data.len() as u64),
+                                Some("storage_failed"),
+                                Some("Harbor could not save this attachment. You can retry."),
+                                false,
+                            );
                         }
                     }
                 } else {
@@ -2464,16 +2601,26 @@ impl NetworkService {
                         None,
                         Some(peer.to_string()),
                         None,
-                        Some(media_hash),
+                        Some(media_hash.clone()),
                         None,
                         None,
                         Some("Media service unavailable".to_string()),
                     )
                     .await;
+                    self.transition_media(
+                        &media_hash,
+                        "failed",
+                        Some(data.len() as u64),
+                        Some(data.len() as u64),
+                        Some("service_unavailable"),
+                        Some("Media storage is unavailable. Restart Harbor and retry."),
+                        false,
+                    );
                 }
             }
             MediaFetchResponse::Error { error } => {
                 warn!("Media fetch error from {}: {}", peer, error);
+                let pending_hash = pending.map(|(_, hash)| hash);
                 Self::emit_wall_sync_status(
                     self.event_tx.clone(),
                     "media",
@@ -2485,9 +2632,29 @@ impl NetworkService {
                     None,
                     None,
                     None,
-                    Some(error),
+                    Some(error.clone()),
                 )
                 .await;
+                if let Some(hash) = pending_hash {
+                    let unavailable = error.to_ascii_lowercase().contains("not found");
+                    self.transition_media(
+                        &hash,
+                        if unavailable { "unavailable" } else { "failed" },
+                        None,
+                        None,
+                        Some(if unavailable {
+                            "source_missing"
+                        } else {
+                            "remote_error"
+                        }),
+                        Some(if unavailable {
+                            "The source does not currently have this attachment."
+                        } else {
+                            "The source could not provide this attachment. You can retry."
+                        }),
+                        false,
+                    );
+                }
             }
         }
     }
@@ -4957,6 +5124,13 @@ impl NetworkService {
                 };
 
                 let now = chrono::Utc::now().timestamp();
+                if self
+                    .pending_media_fetches
+                    .values()
+                    .any(|(_, pending_hash)| pending_hash == &media_hash)
+                {
+                    return NetworkResponse::Ok;
+                }
                 let signable = crate::services::SignableMediaFetchRequest {
                     media_hash: media_hash.clone(),
                     requester_peer_id: identity.peer_id.clone(),
@@ -4966,15 +5140,27 @@ impl NetworkService {
                 match self.identity_service.sign(&signable) {
                     Ok(signature) => {
                         let request = MediaFetchRequest {
-                            media_hash,
+                            media_hash: media_hash.clone(),
                             requester_peer_id: identity.peer_id,
                             timestamp: now,
                             signature,
                         };
-                        self.swarm
+                        self.transition_media(
+                            &media_hash,
+                            "transferring",
+                            Some(0),
+                            None,
+                            None,
+                            None,
+                            true,
+                        );
+                        let outbound_id = self
+                            .swarm
                             .behaviour_mut()
                             .media_sync
                             .send_request(&peer_id, request);
+                        self.pending_media_fetches
+                            .insert(outbound_id, (peer_id, media_hash));
                         NetworkResponse::Ok
                     }
                     Err(e) => {
@@ -5304,5 +5490,35 @@ mod contact_request_protocol_tests {
                 &signature
             )
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod media_authorization_tests {
+    use super::*;
+    use crate::p2p::protocols::media_sync::{MediaFetchRequest, MediaFetchResponse};
+
+    #[tokio::test]
+    async fn media_request_fails_closed_without_authorized_contact_context() {
+        let db = Arc::new(crate::db::Database::in_memory().unwrap());
+        let identity = Arc::new(IdentityService::new(db));
+        let network_key = libp2p::identity::Keypair::generate_ed25519();
+        let requester_key = libp2p::identity::Keypair::generate_ed25519();
+        let requester = requester_key.public().to_peer_id();
+        let (service, _, _) =
+            NetworkService::new(NetworkConfig::default(), identity, network_key).unwrap();
+        let response = service.handle_media_fetch_request(
+            requester,
+            &MediaFetchRequest {
+                media_hash: "d".repeat(64),
+                requester_peer_id: requester.to_string(),
+                timestamp: chrono::Utc::now().timestamp(),
+                signature: vec![0; 64],
+            },
+        );
+        assert!(matches!(
+            response,
+            MediaFetchResponse::Error { error } if error == "Authorization unavailable"
+        ));
     }
 }

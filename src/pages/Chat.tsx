@@ -21,6 +21,8 @@ import {
 import { useCallingStore, useContactsStore, useMessagingStore } from '../stores';
 import { getInitials, getContactColor, formatRelativeTime } from '../utils/formatting';
 import { EmojiPicker } from '../components/common/EmojiPicker';
+import { PostMedia } from '../components/common/PostMedia';
+import { mediaService } from '../services/media';
 import {
   HARBOR_SHORTCUT_EVENTS,
   isEditableShortcutTarget,
@@ -99,55 +101,27 @@ function hasMediaContent(content: string): boolean {
 }
 
 /** Inline media display component for chat messages */
-function ChatMediaDisplay({ url, mimeType }: { url: string; mimeType: string; isMine?: boolean }) {
-  const [fullscreen, setFullscreen] = useState(false);
-  const isVideo = mimeType.startsWith('video/');
-
+function ChatMediaDisplay({
+  url,
+  mimeType,
+  sourcePeerId,
+}: {
+  url: string;
+  mimeType: string;
+  sourcePeerId?: string;
+  isMine?: boolean;
+}) {
   return (
-    <>
-      {isVideo ? (
-        <video
-          src={url}
-          controls
-          className="rounded-lg max-w-full"
-          style={{ maxHeight: '300px' }}
-          preload="metadata"
-        />
-      ) : (
-        <img
-          src={url}
-          alt="Shared image"
-          className="rounded-lg max-w-full cursor-pointer hover:opacity-90 transition-opacity"
-          style={{ maxHeight: '300px' }}
-          onClick={() => setFullscreen(true)}
-          loading="lazy"
-        />
-      )}
-
-      {/* Fullscreen lightbox for images */}
-      {fullscreen && !isVideo && (
-        <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 cursor-pointer"
-          onClick={() => setFullscreen(false)}
-        >
-          <button
-            className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              setFullscreen(false);
-            }}
-          >
-            <XIcon className="w-6 h-6" />
-          </button>
-          <img
-            src={url}
-            alt="Full size image"
-            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
-    </>
+    <PostMedia
+      media={[
+        {
+          type: mimeType.startsWith('video/') ? 'video' : 'image',
+          url,
+          mimeType,
+          sourcePeerId,
+        },
+      ]}
+    />
   );
 }
 
@@ -956,22 +930,21 @@ export function ChatPage() {
 
     if ((!hasText && !hasAttachment) || !selectedConversation || !selectedConv) return;
 
-    // Build message content: text + optional media marker
-    let content = messageInput.trim();
-    let contentType = 'text';
-
-    if (hasAttachment) {
-      const mediaMarker = `[media:${pendingAttachment!.previewUrl}:${pendingAttachment!.file.type}]`;
-      content = content ? `${content}\n${mediaMarker}` : mediaMarker;
-      contentType = pendingAttachment!.type;
-    }
-
-    setMessageInput('');
-    setPendingAttachment(null);
-    inputRef.current?.focus();
-
     try {
+      let content = messageInput.trim();
+      let contentType = 'text';
+      if (pendingAttachment) {
+        const bytes = new Uint8Array(await pendingAttachment.file.arrayBuffer());
+        const mediaHash = await mediaService.storeMediaBytes(bytes, pendingAttachment.file.type);
+        const mediaMarker = `[media:${mediaHash}:${pendingAttachment.file.type}]`;
+        content = content ? `${content}\n${mediaMarker}` : mediaMarker;
+        contentType = pendingAttachment.type;
+      }
       await sendRealMessage(selectedConv.peerId, content, contentType);
+      if (pendingAttachment) URL.revokeObjectURL(pendingAttachment.previewUrl);
+      setMessageInput('');
+      setPendingAttachment(null);
+      inputRef.current?.focus();
       loadMessages(selectedConv.peerId).catch((err) =>
         log.error('Failed to reload messages after send', err),
       );
@@ -1830,6 +1803,7 @@ export function ChatPage() {
                             url={segment.value}
                             mimeType={segment.mimeType || 'image/jpeg'}
                             isMine={isMine}
+                            sourcePeerId={message.senderPeerId}
                           />
                         ) : (
                           <p key={segIdx} className="text-sm whitespace-pre-wrap px-2.5 py-1">

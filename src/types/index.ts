@@ -9,3 +9,4 @@ export * from './posts';
 export * from './feed';
 export * from './calling';
 export * from './mentions';
+export * from './media';

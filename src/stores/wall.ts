@@ -31,7 +31,14 @@ export interface WallPost {
   likes: number;
   comments: number;
   liked: boolean;
-  media?: { type: 'image' | 'video' | 'audio'; url: string; name?: string }[];
+  media?: {
+    type: 'image' | 'video' | 'audio';
+    url: string;
+    name?: string;
+    sourcePeerId?: string;
+    mimeType?: string;
+    totalBytes?: number;
+  }[];
   // Repost data
   sharedFrom?: SharedFrom;
   // Backend data
@@ -72,21 +79,6 @@ interface WallState {
   setEditingPost: (postId: string | null) => void;
 }
 
-/** Resolve a media hash to a displayable URL using the media storage service */
-async function resolveMediaUrl(mediaHash: string): Promise<string> {
-  try {
-    // If it looks like a blob URL or data URL, return it as-is (legacy/preview)
-    if (mediaHash.startsWith('blob:') || mediaHash.startsWith('data:')) {
-      return mediaHash;
-    }
-    return await mediaService.getMediaUrl(mediaHash);
-  } catch {
-    // If the media file is not found locally, return a placeholder
-    log.warn('Could not resolve media URL for hash:', mediaHash);
-    return '';
-  }
-}
-
 /** Map backend content_type string to WallContentType */
 function parseContentType(backendType: string): WallContentType {
   switch (backendType) {
@@ -110,21 +102,17 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
   let resolvedMedia: WallPost['media'] = undefined;
 
   if (media && media.length > 0) {
-    resolvedMedia = await Promise.all(
-      media.map(async (m) => ({
+    resolvedMedia = media.map((m) => ({
         type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as
           | 'image'
           | 'video'
           | 'audio',
-        url: await resolveMediaUrl(m.mediaHash),
+        url: m.mediaHash,
         name: m.fileName,
-      })),
-    );
-    // Filter out any media with empty URLs (not found)
-    resolvedMedia = resolvedMedia.filter((m) => m.url !== '');
-    if (resolvedMedia.length === 0) {
-      resolvedMedia = undefined;
-    }
+        sourcePeerId: post.authorPeerId,
+        mimeType: m.mimeType,
+        totalBytes: m.fileSize,
+      }));
   }
 
   return {

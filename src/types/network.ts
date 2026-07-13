@@ -83,5 +83,6 @@ export type NetworkEvent =
     }
   | { type: 'wall_post_deleted_on_relay'; relay_peer_id: string; post_id: string }
   | { type: 'media_fetched'; peer_id: string; media_hash: string }
+  | { type: 'media_transfer_changed'; state: import('./media').MediaTransferState }
   | { type: 'call_signaling_received'; peer_id: string; message: SignalingEnvelope }
   | { type: 'call_signaling_error'; peer_id: string; error: string };

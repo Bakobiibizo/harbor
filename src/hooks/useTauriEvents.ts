@@ -11,6 +11,7 @@ import {
   useWallStore,
   useCallingStore,
   useIdentityStore,
+  useMediaTransfersStore,
 } from '../stores';
 import { mediaService } from '../services/media';
 import { ReactiveRefreshCoordinator } from '../services/reactiveRefresh';
@@ -337,11 +338,15 @@ export function useTauriEvents() {
           break;
 
         case 'media_fetched':
-          console.log(`[Network] Media fetched from ${event.peer_id}: ${event.media_hash}`);
+          console.log(`[Network] Attachment received from ${event.peer_id}`);
           // Refresh feed to display newly available images
           // The media worker already completed this object. Reconcile views only;
           // enqueueing another preload here would form an event-driven loop.
           coordinator.enqueue({ domains: ['posts'], peerId: event.peer_id });
+          break;
+
+        case 'media_transfer_changed':
+          useMediaTransfersStore.getState().apply(event.state);
           break;
 
         case 'wall_post_deleted_on_relay':

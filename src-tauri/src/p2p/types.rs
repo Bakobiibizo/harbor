@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::protocols::board_sync::{WallPostMediaItem, WallSocialEventItem};
 use super::protocols::signaling::SignalingEnvelope;
+use crate::services::MediaTransferState;
 
 /// Network connection status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +178,8 @@ pub enum NetworkEvent {
     },
     /// Media was fetched from a peer and stored locally
     MediaFetched { peer_id: String, media_hash: String },
+    /// Canonical per-hash attachment lifecycle update for internal UI state.
+    MediaTransferChanged { state: MediaTransferState },
     /// A verified call signaling message was received from a peer
     CallSignalingReceived {
         peer_id: String,

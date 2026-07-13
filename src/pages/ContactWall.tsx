@@ -89,6 +89,9 @@ export function ContactWallPage({
                   m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image',
                 url: m.mediaHash,
                 name: m.fileName,
+                sourcePeerId: item.authorPeerId,
+                mimeType: m.mimeType,
+                totalBytes: m.fileSize,
               }));
             }
           } catch (err) {

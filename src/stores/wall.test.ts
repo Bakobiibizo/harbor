@@ -128,7 +128,7 @@ describe('useWallStore', () => {
       expect(state.error).toContain('Network error');
     });
 
-    it('should render image and video media after reload or sync', async () => {
+    it('should preserve image and video metadata after reload even before bytes arrive', async () => {
       vi.mocked(postsService.getMyPosts).mockResolvedValue([mockBackendPost]);
       vi.mocked(postsService.getPostMedia).mockResolvedValue([
         {
@@ -160,16 +160,27 @@ describe('useWallStore', () => {
           signature: [4, 5, 6],
         },
       ]);
-      vi.mocked(mediaService.getMediaUrl)
-        .mockResolvedValueOnce('data:image/png;base64,image')
-        .mockResolvedValueOnce('data:video/mp4;base64,video');
-
       await useWallStore.getState().loadPosts();
 
       expect(useWallStore.getState().posts[0].media).toEqual([
-        { type: 'image', url: 'data:image/png;base64,image', name: 'photo.png' },
-        { type: 'video', url: 'data:video/mp4;base64,video', name: 'clip.mp4' },
+        {
+          type: 'image',
+          url: 'a'.repeat(64),
+          name: 'photo.png',
+          sourcePeerId: 'peer-abc',
+          mimeType: 'image/png',
+          totalBytes: 100,
+        },
+        {
+          type: 'video',
+          url: 'b'.repeat(64),
+          name: 'clip.mp4',
+          sourcePeerId: 'peer-abc',
+          mimeType: 'video/mp4',
+          totalBytes: 200,
+        },
       ]);
+      expect(mediaService.getMediaUrl).not.toHaveBeenCalled();
     });
 
     it('should handle media fetch errors gracefully per post', async () => {

@@ -13,6 +13,7 @@ export type { Comment } from './feed';
 export { useMockPeersStore } from './mockPeers';
 export { useSettingsStore } from './settings';
 export { useWallStore } from './wall';
+export { useMediaTransfersStore } from './mediaTransfers';
 export type {
   MockPeer,
   MockPost,

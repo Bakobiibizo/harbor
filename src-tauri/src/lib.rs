@@ -290,6 +290,9 @@ pub fn run() {
                 MediaStorageService::new(&data_dir, db.clone())
                     .expect("Failed to initialize media storage"),
             );
+            if let Err(error) = media_service.reconstruct_transfers() {
+                tracing::warn!("Failed to reconstruct media transfer state: {error}");
+            }
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
@@ -490,6 +493,9 @@ pub fn run() {
             commands::store_media_bytes,
             commands::get_media_url,
             commands::has_media,
+            commands::ensure_media_transfer,
+            commands::get_media_transfer,
+            commands::retry_media_transfer,
             commands::preload_missing_media,
             // Wall sync commands (relay-based wall post sync)
             commands::sync_wall_to_relay,

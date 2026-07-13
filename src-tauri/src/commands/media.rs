@@ -6,7 +6,18 @@ use tauri::State;
 
 use crate::commands::NetworkState;
 use crate::db::Database;
-use crate::services::{IdentityService, MediaStorageService};
+use crate::services::{IdentityService, MediaStorageService, MediaTransferState};
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureMediaTransferInput {
+    pub media_hash: String,
+    pub source_peer_id: Option<String>,
+    pub media_type: String,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+    pub total_bytes: Option<u64>,
+}
 
 /// Store a media file from a filesystem path, returning its SHA256 hash.
 ///
@@ -107,6 +118,101 @@ pub async fn has_media(
     Ok(media_service.has_media(&hash))
 }
 
+#[tauri::command]
+pub async fn ensure_media_transfer(
+    input: EnsureMediaTransferInput,
+    media_service: State<'_, Arc<MediaStorageService>>,
+) -> Result<MediaTransferState, String> {
+    media_service
+        .ensure_transfer(
+            &input.media_hash,
+            input.source_peer_id.as_deref(),
+            &input.media_type,
+            input.mime_type.as_deref(),
+            input.file_name.as_deref(),
+            input.total_bytes,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_media_transfer(
+    media_hash: String,
+    media_service: State<'_, Arc<MediaStorageService>>,
+) -> Result<Option<MediaTransferState>, String> {
+    media_service
+        .get_transfer(&media_hash)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn retry_media_transfer(
+    media_hash: String,
+    media_service: State<'_, Arc<MediaStorageService>>,
+    network_state: State<'_, NetworkState>,
+) -> Result<MediaTransferState, String> {
+    let existing = media_service
+        .get_transfer(&media_hash)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "This attachment is not registered on this device".to_string())?;
+    if existing.status == "ready" {
+        return Ok(existing);
+    }
+    let source = existing
+        .source_peer_id
+        .as_deref()
+        .ok_or_else(|| "The attachment source is not currently known".to_string())?;
+    let peer_id = source
+        .parse::<libp2p::PeerId>()
+        .map_err(|_| "The attachment source is invalid".to_string())?;
+    let _retrying = media_service
+        .update_transfer(
+            &media_hash,
+            "retrying",
+            Some(0),
+            existing.total_bytes,
+            None,
+            None,
+            true,
+        )
+        .map_err(|error| error.to_string())?;
+    let handle = match network_state.get_handle().await {
+        Ok(handle) => handle,
+        Err(_) => {
+            let _ = media_service.update_transfer(
+                &media_hash,
+                "unavailable",
+                Some(0),
+                existing.total_bytes,
+                Some("offline"),
+                Some("Harbor is offline. Reconnect before retrying."),
+                false,
+            );
+            return Err("Harbor is offline; reconnect before retrying".to_string());
+        }
+    };
+    if handle
+        .fetch_media(peer_id, media_hash.clone())
+        .await
+        .is_err()
+    {
+        let _ = media_service.update_transfer(
+            &media_hash,
+            "failed",
+            Some(0),
+            existing.total_bytes,
+            Some("start_failed"),
+            Some("The attachment retry could not be started."),
+            false,
+        );
+        return Err("The attachment retry could not be started".to_string());
+    }
+    media_service
+        .get_transfer(&media_hash)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Attachment lifecycle disappeared during retry".to_string())
+}
+
 /// Preload missing media from connected peers.
 ///
 /// Scans post_media for supported media entries where the file is missing locally,
@@ -134,7 +240,8 @@ pub async fn preload_missing_media(
     let all_media = db
         .with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT pm.media_hash, pm.media_type, p.author_peer_id
+                "SELECT pm.media_hash, pm.media_type, p.author_peer_id,
+                        pm.mime_type, pm.file_name, pm.file_size
                  FROM post_media pm
                  JOIN posts p ON pm.post_id = p.post_id
                  WHERE pm.media_type IN ('image', 'video', 'audio')",
@@ -144,28 +251,50 @@ pub async fn preload_missing_media(
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
                 let media_hash: String = row.get(0)?;
-                let _media_type: String = row.get(1)?;
+                let media_type: String = row.get(1)?;
                 let author_peer_id: String = row.get(2)?;
-                results.push((media_hash, author_peer_id));
+                let mime_type: String = row.get(3)?;
+                let file_name: String = row.get(4)?;
+                let file_size: i64 = row.get(5)?;
+                results.push((
+                    media_hash,
+                    author_peer_id,
+                    media_type,
+                    mime_type,
+                    file_name,
+                    file_size,
+                ));
             }
             Ok(results)
         })
         .map_err(|e| format!("Failed to query post_media: {}", e))?;
 
     // Filter out own posts — our media files should already exist locally
-    let all_media: Vec<(String, String)> = if let Some(ref local_id) = local_peer_id {
+    let all_media = if let Some(ref local_id) = local_peer_id {
         all_media
             .into_iter()
-            .filter(|(_, author)| author != local_id)
+            .filter(|(_, author, ..)| author != local_id)
             .collect()
     } else {
         all_media
     };
 
     // Filter to missing media only
+    for (hash, author, media_type, mime_type, file_name, file_size) in &all_media {
+        let _ = media_service.ensure_transfer(
+            hash,
+            Some(author),
+            media_type,
+            Some(mime_type),
+            Some(file_name),
+            (*file_size).try_into().ok(),
+        );
+    }
+
     let missing: Vec<(String, String)> = all_media
         .into_iter()
-        .filter(|(hash, _)| !media_service.has_media(hash))
+        .filter(|(hash, ..)| !media_service.has_media(hash))
+        .map(|(hash, author, ..)| (hash, author))
         .collect();
 
     if missing.is_empty() {
@@ -242,6 +371,17 @@ pub async fn preload_missing_media(
                 }
             }
         } else if !relay_base_addrs.is_empty() {
+            for hash in hashes {
+                let _ = media_service.update_transfer(
+                    hash,
+                    "discovering",
+                    Some(0),
+                    None,
+                    None,
+                    None,
+                    false,
+                );
+            }
             // Author is NOT connected — dial them through the relay circuit.
             // On the next preloader invocation (triggered by peer_connected or
             // wall_posts_received), they'll be connected and we can fetch.
@@ -269,6 +409,17 @@ pub async fn preload_missing_media(
                 }
             }
         } else {
+            for hash in hashes {
+                let _ = media_service.update_transfer(
+                    hash,
+                    "unavailable",
+                    None,
+                    None,
+                    Some("source_offline"),
+                    Some("The attachment source is offline. You can retry when they reconnect."),
+                    false,
+                );
+            }
             tracing::debug!(
                 "Cannot fetch media from {}: not connected and no relay available",
                 author_peer_id

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { EnsureMediaTransferInput, MediaTransferState } from '../types';
 
 /** Media storage service - wraps Tauri commands for content-addressed media storage */
 export const mediaService = {
@@ -42,5 +43,17 @@ export const mediaService = {
    */
   async preloadMissingMedia(): Promise<number> {
     return invoke<number>('preload_missing_media');
+  },
+
+  async ensureTransfer(input: EnsureMediaTransferInput): Promise<MediaTransferState> {
+    return invoke<MediaTransferState>('ensure_media_transfer', { input });
+  },
+
+  async getTransfer(mediaHash: string): Promise<MediaTransferState | null> {
+    return invoke<MediaTransferState | null>('get_media_transfer', { mediaHash });
+  },
+
+  async retryTransfer(mediaHash: string): Promise<MediaTransferState> {
+    return invoke<MediaTransferState>('retry_media_transfer', { mediaHash });
   },
 };
