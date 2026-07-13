@@ -30,6 +30,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "entitlements": "./Entitlements.plist",
+      "infoPlist": "./Info.plist"
+    },
     "targets": "all"
   },
   "identifier": "io.harbor.desktop",

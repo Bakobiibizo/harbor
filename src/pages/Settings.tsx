@@ -14,6 +14,11 @@ import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
 import { useAppVersion } from '../hooks';
 import { BugReportForm, MentionInbox } from '../components/identity';
+import {
+  requestCallMediaAccess,
+  type MediaPermissionResult,
+  type MediaPermissionState,
+} from '../services/mediaPermissions';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -219,6 +224,9 @@ export function SettingsPage() {
   const [iceCredentialPersistence, setIceCredentialPersistence] = useState<'session' | 'device'>(
     'session',
   );
+  const [mediaPermissionResult, setMediaPermissionResult] =
+    useState<MediaPermissionResult | null>(null);
+  const [isCheckingMedia, setIsCheckingMedia] = useState(false);
 
   // Update state
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -505,6 +513,30 @@ export function SettingsPage() {
   };
 
   const redactedIceServers = getRedactedIceServers();
+
+  const handleCheckCallMedia = async () => {
+    setIsCheckingMedia(true);
+    try {
+      setMediaPermissionResult(await requestCallMediaAccess());
+    } finally {
+      setIsCheckingMedia(false);
+    }
+  };
+
+  const mediaStateLabel = (value: MediaPermissionState) => {
+    switch (value) {
+      case 'ready':
+        return 'Ready';
+      case 'permission_denied':
+        return 'Permission denied';
+      case 'missing_device':
+        return 'No device found';
+      case 'missing_media_api':
+        return 'Unavailable in this Harbor build';
+      default:
+        return 'Could not verify';
+    }
+  };
 
   const sections = [
     { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
@@ -1150,6 +1182,69 @@ export function SettingsPage() {
                 <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                   Help Harbor connect calls across different networks
                 </p>
+              </div>
+
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div>
+                    <h4
+                      className="font-medium mb-2"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      Microphone and camera
+                    </h4>
+                    <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                      Check access before a call. Harbor releases the test audio and video
+                      immediately and only captures media during calls.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => void handleCheckCallMedia()}
+                    disabled={isCheckingMedia}
+                    className="px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap"
+                    style={{
+                      background: 'hsl(var(--harbor-primary))',
+                      color: 'hsl(var(--harbor-bg-primary))',
+                    }}
+                  >
+                    {isCheckingMedia ? 'Checking…' : 'Check access'}
+                  </button>
+                </div>
+                {mediaPermissionResult && (
+                  <div
+                    className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg p-4 text-sm"
+                    aria-live="polite"
+                    style={{ background: 'hsl(var(--harbor-surface-1))' }}
+                  >
+                    <p>
+                      <strong>Microphone:</strong>{' '}
+                      {mediaStateLabel(mediaPermissionResult.microphone)}
+                      {mediaPermissionResult.audioInputCount !== null &&
+                        ` (${mediaPermissionResult.audioInputCount} found)`}
+                    </p>
+                    <p>
+                      <strong>Camera:</strong> {mediaStateLabel(mediaPermissionResult.camera)}
+                      {mediaPermissionResult.videoInputCount !== null &&
+                        ` (${mediaPermissionResult.videoInputCount} found)`}
+                    </p>
+                    {(mediaPermissionResult.microphone !== 'ready' ||
+                      mediaPermissionResult.camera !== 'ready') && (
+                      <p
+                        className="sm:col-span-2"
+                        style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                      >
+                        Enable Harbor under your system Privacy &amp; Security settings, then check
+                        again. Voice calls can still work when only the camera is unavailable.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div

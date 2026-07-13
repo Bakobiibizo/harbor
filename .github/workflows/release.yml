@@ -210,6 +210,21 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
+      - name: Verify macOS media declarations
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app_bundle="$(find src-tauri/target -type d -path '*/bundle/macos/Harbor.app' -print -quit)"
+          test -n "$app_bundle"
+          plist="$app_bundle/Contents/Info.plist"
+          test "$(plutil -extract NSMicrophoneUsageDescription raw "$plist")" = \
+            "Harbor uses your microphone only while you are participating in a voice or video call."
+          test "$(plutil -extract NSCameraUsageDescription raw "$plist")" = \
+            "Harbor uses your camera only while you are participating in a video call."
+          codesign -d --entitlements :- "$app_bundle" > "$RUNNER_TEMP/harbor-entitlements.plist" 2>/dev/null
+          test "$(plutil -extract com.apple.security.device.audio-input raw "$RUNNER_TEMP/harbor-entitlements.plist")" = "true"
+          test "$(plutil -extract com.apple.security.device.camera raw "$RUNNER_TEMP/harbor-entitlements.plist")" = "true"
+
       - name: Build Windows executable
         if: runner.os == 'Windows'
         run: pnpm tauri build --no-bundle
