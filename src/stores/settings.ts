@@ -5,6 +5,7 @@ import {
   validateIceServerInput,
 } from '../services/callingIce';
 import type { IceServerConfig, IceServerInput, RedactedIceServerConfig } from '../types';
+import { clearProviderSessionConsent, type ProviderEmbedConsent } from '../utils/providerEmbeds';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSize = 'small' | 'medium' | 'large';
@@ -98,6 +99,7 @@ interface SettingsState {
   defaultVisibility: 'contacts' | 'public';
   socialView: SocialView;
   communityView: SocialView;
+  providerEmbedConsent: ProviderEmbedConsent;
 
   // Profile settings
   avatarUrl: string | null;
@@ -121,6 +123,7 @@ interface SettingsState {
   setDefaultVisibility: (value: 'contacts' | 'public') => void;
   setSocialView: (value: SocialView) => void;
   setCommunityView: (value: SocialView) => void;
+  setProviderEmbedConsent: (value: ProviderEmbedConsent) => void;
   setAvatarUrl: (url: string | null) => void;
   setTheme: (value: ThemeMode) => void;
   setAccentColor: (value: AccentColor) => void;
@@ -175,6 +178,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultVisibility: 'contacts',
       socialView: 'all',
       communityView: 'all',
+      providerEmbedConsent: 'per-use',
       avatarUrl: null,
       theme: 'system',
       accentColor: 'harbor',
@@ -220,6 +224,10 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultVisibility: (value) => set({ defaultVisibility: value }),
       setSocialView: (value) => set({ socialView: value }),
       setCommunityView: (value) => set({ communityView: value }),
+      setProviderEmbedConsent: (value) => {
+        if (value === 'per-use') clearProviderSessionConsent();
+        set({ providerEmbedConsent: value });
+      },
       setAvatarUrl: (url) => set({ avatarUrl: url }),
       setTheme: (value) => {
         applyTheme(value);
@@ -245,6 +253,7 @@ export const useSettingsStore = create<SettingsState>()(
           ...state,
           socialView: normalizeView(state.socialView),
           communityView: normalizeView(state.communityView),
+          providerEmbedConsent: state.providerEmbedConsent === 'session' ? 'session' : 'per-use',
         } as SettingsState;
       },
       partialize: (state) => ({
@@ -258,6 +267,7 @@ export const useSettingsStore = create<SettingsState>()(
         defaultVisibility: state.defaultVisibility,
         socialView: state.socialView,
         communityView: state.communityView,
+        providerEmbedConsent: state.providerEmbedConsent,
         avatarUrl: state.avatarUrl,
         theme: state.theme,
         accentColor: state.accentColor,

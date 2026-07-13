@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getDomainFromUrl } from '../../utils/urlDetection';
+import { parseProviderEmbed } from '../../utils/providerEmbeds';
+import { ProviderEmbed } from './ProviderEmbed';
 
 interface LinkPreviewData {
   url: string;
@@ -153,7 +155,7 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
   if (state.status === 'loading') {
     return (
       <div
-        className="mt-3 rounded-lg overflow-hidden animate-pulse"
+        className="mt-3 rounded-lg overflow-hidden animate-pulse motion-reduce:animate-none"
         style={{
           border: '1px solid hsl(var(--harbor-border-subtle))',
           background: 'hsl(var(--harbor-surface-1))',
@@ -175,81 +177,87 @@ export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
   const preview = state.status === 'ready' || state.status === 'fallback' ? state.preview : null;
   const isClickable = targetUrl !== null;
   const image = preview?.image_url?.startsWith('data:image/') ? preview.image_url : null;
+  const providerEmbed = preview ? parseProviderEmbed(preview.url) : null;
 
   return (
-    <div
-      className={`mt-3 rounded-lg overflow-hidden transition-all duration-200 ${
-        isClickable ? 'harbor-interactive card-interactive cursor-pointer hover:brightness-110' : ''
-      }`}
-      style={{
-        border: '1px solid hsl(var(--harbor-border-subtle))',
-        background: 'hsl(var(--harbor-surface-1))',
-      }}
-      onClick={isClickable ? handleOpen : undefined}
-      role={isClickable ? 'link' : 'status'}
-      tabIndex={isClickable ? 0 : undefined}
-      data-state={state.status}
-      onKeyDown={(event) => {
-        if (isClickable && (event.key === 'Enter' || event.key === ' ')) {
-          event.preventDefault();
-          handleOpen();
-        }
-      }}
-    >
-      <div className="flex">
-        <div className="flex-1 min-w-0 p-3 flex flex-col justify-center">
-          <p
-            className="text-xs font-medium uppercase tracking-wide mb-1 truncate"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
-            {preview?.site_name || domain}
-          </p>
-          {preview?.title && (
+    <>
+      <div
+        className={`mt-3 rounded-lg overflow-hidden transition-all duration-200 motion-reduce:transition-none ${
+          isClickable
+            ? 'harbor-interactive card-interactive cursor-pointer hover:brightness-110'
+            : ''
+        }`}
+        style={{
+          border: '1px solid hsl(var(--harbor-border-subtle))',
+          background: 'hsl(var(--harbor-surface-1))',
+        }}
+        onClick={isClickable ? handleOpen : undefined}
+        role={isClickable ? 'link' : 'status'}
+        tabIndex={isClickable ? 0 : undefined}
+        data-state={state.status}
+        onKeyDown={(event) => {
+          if (isClickable && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            handleOpen();
+          }
+        }}
+      >
+        <div className="flex">
+          <div className="flex-1 min-w-0 p-3 flex flex-col justify-center">
             <p
-              className="text-sm font-semibold leading-snug mb-1 line-clamp-2"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              className="text-xs font-medium uppercase tracking-wide mb-1 truncate"
+              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
             >
-              {preview.title}
+              {preview?.site_name || domain}
             </p>
-          )}
-          {preview?.description && (
-            <p
-              className="text-xs leading-relaxed line-clamp-2"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+            {preview?.title && (
+              <p
+                className="text-sm font-semibold leading-snug mb-1 line-clamp-2"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              >
+                {preview.title}
+              </p>
+            )}
+            {preview?.description && (
+              <p
+                className="text-xs leading-relaxed line-clamp-2"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                {preview.description}
+              </p>
+            )}
+            {state.status === 'fallback' && (
+              <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                No preview details were published for this link.
+              </p>
+            )}
+            {state.status === 'error' && (
+              <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                {state.message}
+              </p>
+            )}
+            {targetUrl && (
+              <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                {targetUrl}
+              </p>
+            )}
+          </div>
+          {image && (
+            <div
+              className="w-28 flex-shrink-0 relative"
+              style={{ background: 'hsl(var(--harbor-surface-2))' }}
             >
-              {preview.description}
-            </p>
-          )}
-          {state.status === 'fallback' && (
-            <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-              No preview details were published for this link.
-            </p>
-          )}
-          {state.status === 'error' && (
-            <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-              {state.message}
-            </p>
-          )}
-          {targetUrl && (
-            <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-              {targetUrl}
-            </p>
+              <img
+                src={image}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover"
+                loading="lazy"
+              />
+            </div>
           )}
         </div>
-        {image && (
-          <div
-            className="w-28 flex-shrink-0 relative"
-            style={{ background: 'hsl(var(--harbor-surface-2))' }}
-          >
-            <img
-              src={image}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover"
-              loading="lazy"
-            />
-          </div>
-        )}
       </div>
-    </div>
+      {providerEmbed && <ProviderEmbed embed={providerEmbed} />}
+    </>
   );
 }

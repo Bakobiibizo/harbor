@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useSettingsStore } from '../../stores';
+import { clearProviderSessionConsent } from '../../utils/providerEmbeds';
 import { clearLinkPreviewCacheForTests, LinkPreviewCard } from './LinkPreviewCard';
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }));
@@ -18,6 +20,8 @@ describe('LinkPreviewCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLinkPreviewCacheForTests();
+    clearProviderSessionConsent();
+    useSettingsStore.setState({ providerEmbedConsent: 'per-use' });
   });
 
   it('shows an explicit loading state and then canonical metadata', async () => {
@@ -46,6 +50,14 @@ describe('LinkPreviewCard', () => {
     render(<LinkPreviewCard url="https://example.com/tracked?utm_source=test" />);
 
     fireEvent.click(await screen.findByRole('link'));
+    await waitFor(() => expect(openUrl).toHaveBeenCalledWith('https://example.com/canonical'));
+  });
+
+  it('opens the safe card with standard keyboard activation', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(preview);
+    render(<LinkPreviewCard url="https://example.com/post" />);
+    const card = await screen.findByRole('link');
+    fireEvent.keyDown(card, { key: ' ' });
     await waitFor(() => expect(openUrl).toHaveBeenCalledWith('https://example.com/canonical'));
   });
 
@@ -121,5 +133,20 @@ describe('LinkPreviewCard', () => {
     expect(invoke).toHaveBeenLastCalledWith('fetch_link_preview', {
       url: 'https://second.example/post',
     });
+  });
+
+  it('keeps provider content inert while showing the safe metadata card', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      ...preview,
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      title: 'A YouTube video',
+      site_name: 'YouTube',
+      image_url: null,
+    });
+    render(<LinkPreviewCard url="https://youtu.be/dQw4w9WgXcQ" />);
+
+    expect(await screen.findByText('A YouTube video')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load YouTube player' })).toBeInTheDocument();
+    expect(screen.queryByTitle('YouTube video player')).not.toBeInTheDocument();
   });
 });

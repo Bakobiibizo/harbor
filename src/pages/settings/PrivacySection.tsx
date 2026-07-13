@@ -7,9 +7,11 @@ export function PrivacySection() {
     showReadReceipts,
     showOnlineStatus,
     defaultVisibility,
+    providerEmbedConsent,
     setShowReadReceipts,
     setShowOnlineStatus,
     setDefaultVisibility,
+    setProviderEmbedConsent,
   } = useSettingsStore();
 
   const handleOnlineStatusChange = (value: boolean) => {
@@ -40,6 +42,30 @@ export function PrivacySection() {
         >
           <option value="contacts">Contacts only</option>
           <option value="public">Anyone with the link</option>
+        </select>
+      </SettingsCard>
+
+      <SettingsCard>
+        <h4 className="font-medium mb-2" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+          Third-party media players
+        </h4>
+        <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+          Players can disclose your IP address and browser details to YouTube, SoundCloud, Spotify,
+          or TikTok. Harbor always asks before the first provider connection.
+        </p>
+        <select
+          value={providerEmbedConsent}
+          onChange={(event) => setProviderEmbedConsent(event.target.value as 'per-use' | 'session')}
+          aria-label="Third-party player consent memory"
+          className="w-full px-4 py-3 rounded-lg text-sm"
+          style={{
+            background: 'hsl(var(--harbor-surface-1))',
+            border: '1px solid hsl(var(--harbor-border-subtle))',
+            color: 'hsl(var(--harbor-text-primary))',
+          }}
+        >
+          <option value="per-use">Ask every time</option>
+          <option value="session">Remember each provider until Harbor closes</option>
         </select>
       </SettingsCard>
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useSettingsStore } from './settings';
+import { grantProviderSessionConsent, hasProviderSessionConsent } from '../utils/providerEmbeds';
 
 describe('useSettingsStore', () => {
   beforeEach(() => {
@@ -16,6 +17,7 @@ describe('useSettingsStore', () => {
       defaultVisibility: 'contacts',
       socialView: 'all',
       communityView: 'all',
+      providerEmbedConsent: 'per-use',
       avatarUrl: null,
       theme: 'system',
       accentColor: 'harbor',
@@ -157,6 +159,26 @@ describe('useSettingsStore', () => {
       useSettingsStore.getState().setDefaultVisibility('contacts');
       expect(useSettingsStore.getState().defaultVisibility).toBe('contacts');
     });
+
+    it('requires per-use provider consent by default and accepts an explicit session setting', () => {
+      expect(useSettingsStore.getState().providerEmbedConsent).toBe('per-use');
+      useSettingsStore.getState().setProviderEmbedConsent('session');
+      grantProviderSessionConsent('youtube');
+      expect(hasProviderSessionConsent('youtube')).toBe(true);
+      expect(useSettingsStore.getState().providerEmbedConsent).toBe('session');
+      useSettingsStore.getState().setProviderEmbedConsent('per-use');
+      expect(useSettingsStore.getState().providerEmbedConsent).toBe('per-use');
+      expect(hasProviderSessionConsent('youtube')).toBe(false);
+    });
+
+    it('persists the consent policy but never persists session provider grants', () => {
+      useSettingsStore.getState().setProviderEmbedConsent('session');
+      grantProviderSessionConsent('spotify');
+
+      const stored = JSON.parse(localStorage.getItem('harbor-settings') ?? '{}');
+      expect(stored.state.providerEmbedConsent).toBe('session');
+      expect(JSON.stringify(stored)).not.toContain('spotify');
+    });
   });
 
   describe('profile settings', () => {
@@ -222,6 +244,7 @@ describe('useSettingsStore', () => {
       expect(state.defaultVisibility).toBe('contacts');
       expect(state.socialView).toBe('all');
       expect(state.communityView).toBe('all');
+      expect(state.providerEmbedConsent).toBe('per-use');
       expect(state.avatarUrl).toBeNull();
       expect(state.theme).toBe('system');
       expect(state.accentColor).toBe('harbor');

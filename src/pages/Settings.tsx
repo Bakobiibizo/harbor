@@ -177,6 +177,7 @@ export function SettingsPage() {
     showReadReceipts,
     showOnlineStatus,
     defaultVisibility,
+    providerEmbedConsent,
     avatarUrl,
     theme,
     iceServers,
@@ -186,6 +187,7 @@ export function SettingsPage() {
     setShowReadReceipts,
     setShowOnlineStatus,
     setDefaultVisibility,
+    setProviderEmbedConsent,
     setAvatarUrl,
     setTheme,
   } = useSettingsStore();
@@ -225,8 +227,9 @@ export function SettingsPage() {
   const [iceCredentialPersistence, setIceCredentialPersistence] = useState<'session' | 'device'>(
     'session',
   );
-  const [mediaPermissionResult, setMediaPermissionResult] =
-    useState<MediaPermissionResult | null>(null);
+  const [mediaPermissionResult, setMediaPermissionResult] = useState<MediaPermissionResult | null>(
+    null,
+  );
   const [isCheckingMedia, setIsCheckingMedia] = useState(false);
   const nativeNotificationsEnabled = useNotificationsStore((value) => value.nativeEnabled);
   const setNativeNotificationsEnabled = useNotificationsStore((value) => value.setNativeEnabled);
@@ -1521,6 +1524,41 @@ export function SettingsPage() {
                 >
                   <option value="contacts">Contacts only</option>
                   <option value="public">Anyone with the link</option>
+                </select>
+              </div>
+
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <h4
+                  className="font-medium mb-2"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  Third-party media players
+                </h4>
+                <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Players can disclose your IP address and browser details to YouTube, SoundCloud,
+                  Spotify, or TikTok. Harbor always asks before the first provider connection.
+                </p>
+                <select
+                  value={providerEmbedConsent}
+                  onChange={(event) =>
+                    setProviderEmbedConsent(event.target.value as 'per-use' | 'session')
+                  }
+                  aria-label="Third-party player consent memory"
+                  className="w-full px-4 py-3 rounded-lg text-sm"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-1))',
+                    border: '1px solid hsl(var(--harbor-border-subtle))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                  }}
+                >
+                  <option value="per-use">Ask every time</option>
+                  <option value="session">Remember each provider until Harbor closes</option>
                 </select>
               </div>
 
