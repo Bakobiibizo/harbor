@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
+import { safePeerLabel } from '../utils/relayName';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
 import { contactsService } from '../services/contacts';
 import * as networkService from '../services/network';
@@ -392,8 +393,9 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-    const contactName =
-      contacts.find((contact) => contact.peerId === peer.peerId)?.displayName?.toLowerCase() ?? '';
+    const contactName = contacts.find((contact) => contact.peerId === peer.peerId)
+      ? safePeerLabel(peer.peerId).toLowerCase()
+      : '';
     return (
       friendlyName.includes(query) ||
       contactName.includes(query) ||
@@ -408,7 +410,7 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     return (
-      contact.displayName.toLowerCase().includes(query) ||
+      safePeerLabel(contact.peerId, contact.verifiedQualifiedName).toLowerCase().includes(query) ||
       contact.peerId.toLowerCase().includes(query)
     );
   });
@@ -1149,7 +1151,14 @@ export function NetworkPage() {
                         <PeerRow
                           key={peer.peerId}
                           peerId={peer.peerId}
-                          displayName={knownContact?.displayName}
+                          displayName={
+                            knownContact
+                              ? safePeerLabel(
+                                  knownContact.peerId,
+                                  knownContact.verifiedQualifiedName,
+                                )
+                              : undefined
+                          }
                           actionLabel="Connect"
                           actionStyle="primary"
                           onAction={async () => {
@@ -1200,7 +1209,9 @@ export function NetworkPage() {
                       const knownContact = contacts.find(
                         (contact) => contact.peerId === peer.peerId,
                       );
-                      const displayName = knownContact?.displayName;
+                      const displayName = knownContact
+                        ? safePeerLabel(knownContact.peerId, knownContact.verifiedQualifiedName)
+                        : undefined;
                       return (
                         <PeerRow
                           key={peer.peerId}
@@ -1260,7 +1271,7 @@ export function NetworkPage() {
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                         style={{ background: getPeerColor(contact.peerId) }}
                       >
-                        {contact.displayName
+                        {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)
                           .split(' ')
                           .map((word) => word[0])
                           .join('')
@@ -1272,7 +1283,7 @@ export function NetworkPage() {
                           className="font-medium text-sm"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {contact.displayName}
+                          {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
                         </p>
                         <p
                           className="text-xs font-mono truncate"
@@ -1293,7 +1304,7 @@ export function NetworkPage() {
                       <button
                         className="px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 text-xs font-medium"
                         style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                        title={`Open ${contact.displayName}'s wall`}
+                        title={`Open ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}'s wall`}
                         onClick={() =>
                           navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)
                         }
@@ -1308,7 +1319,9 @@ export function NetworkPage() {
                           try {
                             await contactsService.removeContact(contact.peerId);
                             await refreshContacts();
-                            toast.success(`Removed ${contact.displayName} from contacts`);
+                            toast.success(
+                              `Removed ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName)} from contacts`,
+                            );
                           } catch (err) {
                             toast.error(`Failed to remove contact: ${err}`);
                           }
@@ -1497,8 +1510,8 @@ function DeployRelayContent() {
             Deploy Your Own Server
           </p>
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Choose between a lightweight relay or a full community server. Both are free tier
-            eligible!
+            Choose a connection-only relay or a community relay with boards. AWS may charge for
+            compute, storage, addresses, and traffic; review the estimate before creating the stack.
           </p>
         </div>
       </div>
@@ -1517,7 +1530,7 @@ function DeployRelayContent() {
               className="text-sm font-semibold"
               style={{ color: 'hsl(var(--harbor-text-primary))' }}
             >
-              Option A: Relay Server (Free)
+              Option A: Connection Relay
             </p>
             <span
               className="px-2 py-0.5 rounded-full text-xs font-medium"
@@ -1543,7 +1556,7 @@ function DeployRelayContent() {
             )
           }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
-          style={{ background: 'linear-gradient(135deg, #FF9900, #FF6600)', color: 'white' }}
+          style={{ background: 'hsl(var(--harbor-primary))', color: 'white' }}
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -1598,8 +1611,7 @@ function DeployRelayContent() {
           }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
           style={{
-            background:
-              'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+            background: 'hsl(var(--harbor-primary))',
             color: 'white',
           }}
         >

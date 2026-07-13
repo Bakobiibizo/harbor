@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { IdentityState, CreateIdentityRequest } from '../types';
-import { identityService } from '../services';
+import { identityService, networkService } from '../services';
 
 /** Extract error message from various error types (including Tauri errors) */
 function getErrorMessage(err: unknown): string {
@@ -32,6 +32,24 @@ function getErrorMessage(err: unknown): string {
   return 'An unknown error occurred';
 }
 
+const relayRetryPattern =
+  /NO_ACTIVE_RELAY|no active relay|offline|unavailable|not initialized|network service|old relay/i;
+
+async function waitForActiveRelay(): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      const stats = await networkService.getNetworkStats();
+      if (stats.relayAddresses.length > 0) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  const detail = lastError ? ` ${getErrorMessage(lastError)}` : '';
+  throw new Error(`Harbor connected to the network, but the relay is not ready yet.${detail}`);
+}
+
 interface IdentityStore {
   state: IdentityState;
   error: string | null;
@@ -39,12 +57,18 @@ interface IdentityStore {
   // Actions
   initialize: () => Promise<void>;
   createIdentity: (request: CreateIdentityRequest) => Promise<import('../types').IdentityInfo>;
+  completeOnboarding: (
+    request: CreateIdentityRequest,
+    name: string,
+    namespace: string,
+  ) => Promise<import('../types').IdentityInfo>;
   unlock: (passphrase: string) => Promise<void>;
   lock: () => Promise<void>;
   updateDisplayName: (displayName: string) => Promise<void>;
   updateBio: (bio: string | null) => Promise<void>;
   updatePassphraseHint: (hint: string | null) => Promise<void>;
   clearError: () => void;
+  attachVerifiedRelayName: (claim: import('../types').RelayNameClaim) => void;
 }
 
 export const useIdentityStore = create<IdentityStore>((set, get) => ({
@@ -92,6 +116,50 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
     } catch (err) {
       set({ error: getErrorMessage(err) });
       throw err;
+    }
+  },
+  completeOnboarding: async (request, name, namespace) => {
+    set({ error: null });
+    try {
+      let identity;
+      if (await identityService.hasIdentity()) {
+        identity = await identityService.getIdentityInfo();
+        if (!identity) throw new Error('Harbor could not resume the local identity.');
+        if (!(await identityService.isUnlocked()))
+          throw new Error('Unlock this identity to resume name registration.');
+      } else {
+        identity = await identityService.createIdentity(request);
+      }
+      await networkService.startNetwork();
+      await networkService.connectToPublicRelays();
+      await waitForActiveRelay();
+      let claim;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          claim = await identityService.registerRelayName({ name, namespace });
+          break;
+        } catch (err) {
+          if (
+            attempt >= 9 ||
+            !relayRetryPattern.test(getErrorMessage(err))
+          )
+            throw err;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      }
+      if (
+        claim.request.peerId !== identity.peerId ||
+        !(await identityService.verifyNameClaim(claim))
+      )
+        throw new Error('Harbor could not verify the relay name claim.');
+      await identityService.setMigrationMode('verified');
+      const complete = { ...identity, relayNameClaim: claim, relayNameVerified: true };
+      set({ state: { status: 'unlocked', identity: complete } });
+      return complete;
+    } catch (err) {
+      const message = getErrorMessage(err);
+      set({ error: message });
+      throw new Error(message);
     }
   },
 
@@ -170,4 +238,18 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+  attachVerifiedRelayName: (claim) => {
+    const { state } = get();
+    if (
+      (state.status === 'unlocked' || state.status === 'locked') &&
+      claim.request.peerId === state.identity.peerId
+    ) {
+      set({
+        state: {
+          ...state,
+          identity: { ...state.identity, relayNameClaim: claim, relayNameVerified: true },
+        },
+      });
+    }
+  },
 }));

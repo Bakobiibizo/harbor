@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Message, Conversation, SendMessageResult } from '../types';
+import { publishingPolicy } from './publishingPolicy';
 
 /** Messaging service - wraps Tauri commands */
 export const messagingService = {
@@ -10,6 +11,7 @@ export const messagingService = {
     contentType?: string,
     replyTo?: string,
   ): Promise<SendMessageResult> {
+    publishingPolicy.assertAllowed();
     return invoke<SendMessageResult>('send_message', {
       peerId,
       content,

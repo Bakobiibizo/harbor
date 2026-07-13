@@ -6,6 +6,7 @@ import type {
   CreatePostResult,
   CreatePostMediaInput,
 } from '../types';
+import { publishingPolicy } from './publishingPolicy';
 
 /** Posts service - wraps Tauri commands for wall/blog functionality */
 export const postsService = {
@@ -16,6 +17,7 @@ export const postsService = {
     visibility?: PostVisibility,
     media?: CreatePostMediaInput[],
   ): Promise<CreatePostResult> {
+    publishingPolicy.assertAllowed();
     return invoke<CreatePostResult>('create_post', {
       contentType,
       contentText,

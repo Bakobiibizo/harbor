@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
 import { HarborIcon, LockIcon, UnlockIcon, UsersIcon } from '../icons';
+import { safeIdentityLabel } from '../../utils/relayName';
 
 interface UnlockIdentityProps {
   onSwitchAccount?: () => void;
@@ -135,7 +136,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
                       className="w-full h-full rounded-full object-cover"
                     />
                   ) : (
-                    getInitials(identity.displayName)
+                    getInitials(safeIdentityLabel(identity))
                   )}
                 </div>
 
@@ -145,7 +146,7 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
                     className="font-semibold truncate"
                     style={{ color: 'hsl(var(--harbor-text-primary))' }}
                   >
-                    {identity.displayName}
+                    {safeIdentityLabel(identity)}
                   </p>
                   <p
                     className="text-xs truncate font-mono"

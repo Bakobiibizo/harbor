@@ -11,6 +11,7 @@
 #   ./update-relay.sh --type relay             # lightweight relay service name
 #   ./update-relay.sh --name my-relay          # custom stack name
 #   ./update-relay.sh --region us-west-2       # different region
+#   ./update-relay.sh --artifact-url URL --sha256 SHA256
 
 set -euo pipefail
 
@@ -18,7 +19,9 @@ set -euo pipefail
 STACK_NAME="harbor-relay"
 REGION="us-east-1"
 TEMPLATE_TYPE="community"
-EXPECTED_SHA256="a4b5f161fa78cb1d5453831a3c0bb28c3281b0db581352989a83eb088bf6e079"
+EXPECTED_SHA256="b6d3a64b27c818ca67b1d9cccbb8a0629da641b5d10438e93001f751221eba40"
+BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
+IDENTITY_NAMESPACE="harbor.social"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -26,16 +29,35 @@ while [[ $# -gt 0 ]]; do
     --name)    STACK_NAME="$2"; shift 2 ;;
     --region)  REGION="$2"; shift 2 ;;
     --type)    TEMPLATE_TYPE="$2"; shift 2 ;;
+    --artifact-url) BINARY_URL="$2"; shift 2 ;;
+    --sha256) EXPECTED_SHA256="$2"; shift 2 ;;
+    --identity-namespace) IDENTITY_NAMESPACE="$2"; shift 2 ;;
     --help|-h)
       echo "Usage: $0 [options]"
       echo "  --name NAME      Stack name (default: harbor-relay)"
       echo "  --region REGION  AWS region (default: us-east-1)"
       echo "  --type TYPE      Template/service type: 'community' or 'relay' (default: community)"
+      echo "  --artifact-url URL  Immutable relay artifact URL"
+      echo "  --sha256 SHA256     Expected artifact checksum"
+      echo "  --identity-namespace HOST  Relay name authority (default: harbor.social)"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "ERROR: --sha256 must be a lowercase 64-character SHA-256 digest" >&2
+  exit 1
+fi
+if [[ ! "$IDENTITY_NAMESPACE" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])$ ]]; then
+  echo "ERROR: --identity-namespace must be a canonical lowercase DNS hostname" >&2
+  exit 1
+fi
+if [[ ! "$BINARY_URL" =~ ^https:// ]]; then
+  echo "ERROR: --artifact-url must use HTTPS" >&2
+  exit 1
+fi
 
 if [ "$TEMPLATE_TYPE" = "community" ]; then
   SERVICE_NAME="${STACK_NAME}-community-relay"
@@ -45,8 +67,6 @@ else
   echo "ERROR: unknown --type '$TEMPLATE_TYPE' (expected 'community' or 'relay')"
   exit 1
 fi
-BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
-
 echo "=== Updating Harbor Relay ==="
 echo "Stack:   $STACK_NAME"
 echo "Region:  $REGION"
@@ -87,28 +107,41 @@ echo "       SSM status: Online"
 echo "[3/5] Downloading new binary and restarting service..."
 PARAMETERS_FILE=$(mktemp)
 trap 'rm -f "$PARAMETERS_FILE"' EXIT
-python3 - "$PARAMETERS_FILE" "$SERVICE_NAME" "$BINARY_URL" "$EXPECTED_SHA256" <<'PY'
+python3 - "$PARAMETERS_FILE" "$SERVICE_NAME" "$BINARY_URL" "$EXPECTED_SHA256" "$IDENTITY_NAMESPACE" <<'PY'
 import json
 import sys
 
-path, service_name, binary_url, expected_sha256 = sys.argv[1:]
+path, service_name, binary_url, expected_sha256, identity_namespace = sys.argv[1:]
 commands = [
+    "set -euo pipefail",
     "echo '[+] Downloading new binary...'",
     f"curl -fSL --retry 3 -o /tmp/harbor-relay-new '{binary_url}'",
     "chmod +x /tmp/harbor-relay-new",
     "echo '[+] Verifying binary sha256...'",
     "ACTUAL_SHA256=$(sha256sum /tmp/harbor-relay-new | awk '{print $1}')",
     f"test \"$ACTUAL_SHA256\" = '{expected_sha256}' || {{ echo sha256 mismatch: expected {expected_sha256} got $ACTUAL_SHA256; rm -f /tmp/harbor-relay-new; exit 1; }}",
+    "/tmp/harbor-relay-new --version",
+    "/tmp/harbor-relay-new --help | grep -q -- '--identity-namespace'",
+    "BACKUP_SUFFIX=$(date -u +%Y%m%dT%H%M%SZ)",
+    "cp -a /usr/local/bin/harbor-relay /usr/local/bin/harbor-relay.rollback-$BACKUP_SUFFIX",
+    f"cp -a /etc/systemd/system/{service_name}.service /etc/systemd/system/{service_name}.service.rollback-$BACKUP_SUFFIX",
+    "if [ -d /var/lib/harbor-relay/data ]; then cp -a /var/lib/harbor-relay/data /var/lib/harbor-relay/data.rollback-$BACKUP_SUFFIX; fi",
     "echo '[+] Stopping relay service...'",
-    f"systemctl stop {service_name} || true",
+    f"systemctl stop {service_name}",
     "echo '[+] Replacing binary...'",
     "install -m 0755 /tmp/harbor-relay-new /usr/local/bin/harbor-relay",
     "rm -f /tmp/harbor-relay-new",
+    f"sed -i '/^ExecStart=/ {{ /--identity-namespace/! s/$/ --identity-namespace {identity_namespace}/; }}' /etc/systemd/system/{service_name}.service",
+    "systemctl daemon-reload",
     "echo '[+] Starting relay service...'",
-    f"systemctl start {service_name}",
+    f"if ! systemctl start {service_name}; then cp -a /usr/local/bin/harbor-relay.rollback-$BACKUP_SUFFIX /usr/local/bin/harbor-relay; cp -a /etc/systemd/system/{service_name}.service.rollback-$BACKUP_SUFFIX /etc/systemd/system/{service_name}.service; systemctl daemon-reload; systemctl start {service_name}; echo '[!] Update failed and relay binary/service were rolled back'; exit 1; fi",
     "sleep 3",
     "echo '[+] Service status:'",
     f"systemctl is-active {service_name}",
+    "/usr/local/bin/harbor-relay --version",
+    f"systemctl show {service_name} --property=ExecStart --no-pager",
+    "sha256sum /usr/local/bin/harbor-relay",
+    "echo \"[+] Rollback suffix: $BACKUP_SUFFIX\"",
     "echo '[+] Update complete.'",
 ]
 with open(path, "w", encoding="utf-8") as fh:

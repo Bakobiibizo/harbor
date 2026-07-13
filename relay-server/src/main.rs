@@ -3,8 +3,12 @@
 //! A libp2p relay server that enables NAT traversal for Harbor chat app users.
 //! Run with `--community` to enable community boards with SQLite storage.
 
+mod abuse;
+mod auth;
 mod board_service;
 mod db;
+mod introduction;
+mod name_registration;
 
 use board_service::{BoardService, WallReadGrantProof};
 use clap::Parser;
@@ -37,6 +41,128 @@ const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 
 /// How often to purge stale entries from the rate limiter (in seconds)
 const RATE_LIMITER_CLEANUP_INTERVAL_SECS: u64 = 300;
+fn source_bucket(addr: &Multiaddr) -> String {
+    use libp2p::multiaddr::Protocol;
+    for p in addr.iter() {
+        match p {
+            Protocol::Ip4(ip) => {
+                let o = ip.octets();
+                return format!("{}.{}.{}.0/24", o[0], o[1], o[2]);
+            }
+            Protocol::Ip6(ip) => {
+                let s = ip.segments();
+                return format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3]);
+            }
+            _ => {}
+        }
+    }
+    "unknown".into()
+}
+fn response_delay(request_id: &str) -> Duration {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    request_id.hash(&mut h);
+    Duration::from_millis(20 + h.finish() % 21)
+}
+fn opaque_delivery_key(
+    database: &RelayDatabase,
+    target: &str,
+    key: &libp2p::identity::Keypair,
+) -> Vec<u8> {
+    database.with_connection(|conn|conn.query_row("SELECT claim_cbor FROM relay_name_claims WHERE ('@' || local_name || '@' || relay)=? AND status='active' ORDER BY sequence DESC LIMIT 1",[target],|r|r.get::<_,Vec<u8>>(0)).ok().and_then(|b|ciborium::de::from_reader::<name_registration::NameClaim,_>(b.as_slice()).ok()).map(|c|c.request.x25519_public_key)).unwrap_or_else(||{let signature=key.sign(format!("harbor/decoy-delivery-key/1:{target}").as_bytes()).unwrap_or_default();let mut seed=[0u8;32];if signature.len()>=32{seed.copy_from_slice(&signature[..32])}x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(seed)).to_bytes().to_vec()})
+}
+
+struct IdentityTransport {
+    auth: auth::AuthService,
+    abuse: abuse::AbuseGuard,
+    database: RelayDatabase,
+    relay_name: String,
+    relay_key_id: String,
+    relay_signing_key: ed25519_dalek::SigningKey,
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    #[test]
+    fn source_network_uses_privacy_preserving_prefix() {
+        assert_eq!(
+            source_bucket(&"/ip4/203.0.113.47/tcp/4001".parse().unwrap()),
+            "203.0.113.0/24"
+        );
+        assert_eq!(
+            source_bucket(&"/ip6/2001:db8:1:2::7/tcp/4001".parse().unwrap()),
+            "2001:db8:1:2::/64"
+        );
+    }
+    #[test]
+    fn response_jitter_is_deterministic_and_bounded() {
+        for id in ["known", "unknown", "blocked", "offline"] {
+            let d = response_delay(id);
+            assert!(d >= Duration::from_millis(20) && d <= Duration::from_millis(40));
+            assert_eq!(d, response_delay(id));
+        }
+    }
+    #[test]
+    fn delivery_key_is_real_for_a_claim_and_stable_decoy_otherwise() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let target_secret = x25519_dalek::StaticSecret::from([19; 32]);
+        let target_public = x25519_dalek::PublicKey::from(&target_secret)
+            .to_bytes()
+            .to_vec();
+        let claim = name_registration::NameClaim {
+            request: name_registration::NameClaimRequest {
+                domain: "harbor/name-claim-request/1".into(),
+                version: 1,
+                local_name: "alice".into(),
+                relay: "alpha.test".into(),
+                peer_id: "peer-alice".into(),
+                ed25519_public_key: vec![1; 32],
+                x25519_public_key: target_public.clone(),
+                sequence: 1,
+                issued_at: 100,
+                nonce: vec![2; 16],
+            },
+            user_signature: vec![3; 64],
+            status: "active".into(),
+            not_before: 100,
+            not_after: 1_000,
+            relay_key_id: "key-1".into(),
+            relay_signature: vec![4; 64],
+        };
+        let mut claim_cbor = Vec::new();
+        ciborium::ser::into_writer(&claim, &mut claim_cbor).unwrap();
+        database.with_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO relay_name_claims VALUES(?,?,?,?,?,?,?,?, 'active',?,NULL)",
+                    rusqlite::params![
+                        "alice",
+                        "alpha.test",
+                        "peer-alice",
+                        1,
+                        claim_cbor,
+                        100,
+                        1_000,
+                        "key-1",
+                        100
+                    ],
+                )
+                .unwrap();
+        });
+
+        assert_eq!(
+            opaque_delivery_key(&database, "@alice@alpha.test", &relay_key),
+            target_public
+        );
+        let first = opaque_delivery_key(&database, "@nobody@alpha.test", &relay_key);
+        let second = opaque_delivery_key(&database, "@nobody@alpha.test", &relay_key);
+        assert_eq!(first.len(), 32);
+        assert_eq!(first, second);
+        assert_ne!(first, target_public);
+    }
+}
 
 /// Per-peer rate limiter for board sync requests.
 ///
@@ -120,6 +246,35 @@ impl PeerRateLimiter {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BoardSyncRequest {
+    RelayAuthChallenge {
+        peer_id: String,
+        audience: String,
+    },
+    RelayAuthComplete {
+        challenge: auth::AuthChallenge,
+        public_key: Vec<u8>,
+        signature: Vec<u8>,
+    },
+    RegisterRelayName {
+        session_token: String,
+        signed_request: name_registration::SignedNameClaimRequest,
+    },
+    SubmitIntroduction {
+        session_token: String,
+        envelope: introduction::IntroductionEnvelope,
+    },
+    RequestIntroductionWork {
+        session_token: String,
+        target: String,
+    },
+    FetchIntroductions {
+        session_token: String,
+        limit: u32,
+    },
+    AckIntroductions {
+        session_token: String,
+        request_ids: Vec<String>,
+    },
     ListBoards {
         requester_peer_id: String,
         timestamp: i64,
@@ -292,6 +447,28 @@ pub struct WallSocialEventItemProto {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BoardSyncResponse {
+    RelayAuthChallenge {
+        challenge: auth::AuthChallenge,
+    },
+    RelaySession {
+        token: String,
+    },
+    RelayNameRegistered {
+        claim: name_registration::NameClaim,
+    },
+    IntroductionAccepted {
+        request_id: String,
+        retry_after: u32,
+    },
+    IntroductionWork {
+        challenge: abuse::WorkChallenge,
+    },
+    Introductions {
+        envelopes: Vec<introduction::QueuedEnvelope>,
+    },
+    IntroductionsAcked {
+        count: u32,
+    },
     BoardList {
         boards: Vec<BoardInfoProto>,
         relay_peer_id: String,
@@ -343,6 +520,9 @@ pub enum BoardSyncResponse {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// DNS namespace used for relay-unique names
+    #[arg(long, default_value = "harbor.social")]
+    identity_namespace: String,
     /// Port to listen on
     #[arg(short, long, default_value_t = 4001)]
     port: u16,
@@ -460,7 +640,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Using identity key at {}", args.identity_key_path);
 
     // Initialize database and board service only in community mode
-    let board_service: Option<BoardService> = if args.community {
+    let board_service: Option<(BoardService, RelayDatabase)> = if args.community {
         let db_path = if let Some(ref data_dir) = args.data_dir {
             fs::create_dir_all(data_dir)?;
             format!("{}/relay.db", data_dir)
@@ -473,12 +653,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let relay_db = RelayDatabase::open(&db_path)?;
+        let identity_database = relay_db.clone();
         let service = BoardService::new(relay_db, args.community_name.clone());
         info!("Database initialized at {}", db_path);
-        Some(service)
+        Some((service, identity_database))
     } else {
         None
     };
+
+    let (board_service, identity_database) = board_service
+        .map(|(s, d)| (Some(s), Some(d)))
+        .unwrap_or((None, None));
+    let ed = keypair
+        .clone()
+        .try_into_ed25519()
+        .map_err(|_| "relay identity must be Ed25519")?;
+    let ed_bytes = ed.to_bytes();
+    let mut secret = [0u8; 32];
+    secret.copy_from_slice(&ed_bytes[..32]);
+    let mut identity_transport = identity_database.map(|database| IdentityTransport {
+        auth: auth::AuthService::new(
+            args.identity_namespace.clone(),
+            "relay-key-1",
+            keypair.clone(),
+        ),
+        abuse: abuse::AbuseGuard::new(abuse::Limits {
+            peer: 10,
+            network: 30,
+            target: 20,
+            action: 100,
+            global: 1000,
+            window_secs: 60,
+        }),
+        database,
+        relay_name: args.identity_namespace.clone(),
+        relay_key_id: "relay-key-1".into(),
+        relay_signing_key: ed25519_dalek::SigningKey::from_bytes(&secret),
+    });
 
     // Initialize rate limiter for board sync requests (community mode only)
     let mut rate_limiter: Option<PeerRateLimiter> = if args.community {
@@ -563,6 +774,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let local_peer_id = *swarm.local_peer_id();
+    let mut source_networks: HashMap<PeerId, String> = HashMap::new();
     info!("Local Peer ID: {}", local_peer_id);
 
     // Listen on all interfaces
@@ -652,14 +864,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Check per-peer rate limit before processing the request
                             let response = if let Some(ref mut limiter) = rate_limiter {
                                 match limiter.check_rate_limit(&peer) {
-                                    Ok(()) => handle_board_request(service, &local_peer_id, &peer, request),
+                                    Ok(()) => handle_board_request(service, identity_transport.as_mut(), source_networks.get(&peer).map(String::as_str).unwrap_or("unknown"), &local_peer_id, &peer, request),
                                     Err(rate_limit_error) => BoardSyncResponse::Error {
                                         error: rate_limit_error,
                                     },
                                 }
                             } else {
-                                handle_board_request(service, &local_peer_id, &peer, request)
+                                handle_board_request(service, identity_transport.as_mut(), source_networks.get(&peer).map(String::as_str).unwrap_or("unknown"), &local_peer_id, &peer, request)
                             };
+
+                            if let BoardSyncResponse::IntroductionAccepted{request_id,..}=&response{tokio::time::sleep(response_delay(request_id)).await;}
 
                             if let Err(send_error) = swarm
                                 .behaviour_mut()
@@ -677,9 +891,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } => {
+                    source_networks.insert(peer_id,source_bucket(endpoint.get_remote_address()));
                     info!("Connection established with: {} via {:?} ({:?})", peer_id, connection_id, endpoint);
                 }
                 SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, endpoint, .. } => {
+                    source_networks.remove(&peer_id);
                     info!("Connection closed with: {} via {:?} ({:?}), cause: {:?}", peer_id, connection_id, endpoint, cause);
                 }
                 _ => {}
@@ -690,11 +906,249 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn handle_board_request(
     service: &BoardService,
+    identity: Option<&mut IdentityTransport>,
+    source_network: &str,
     local_peer_id: &PeerId,
     peer: &PeerId,
     request: BoardSyncRequest,
 ) -> BoardSyncResponse {
     match request {
+        BoardSyncRequest::RelayAuthChallenge { peer_id, audience } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            if peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "AUTH_PEER_MISMATCH".into(),
+                };
+            }
+            match state
+                .auth
+                .issue_challenge(peer, &audience, chrono::Utc::now().timestamp())
+            {
+                Ok(challenge) => BoardSyncResponse::RelayAuthChallenge { challenge },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "AUTH_CHALLENGE_REJECTED".into(),
+                },
+            }
+        }
+        BoardSyncRequest::RelayAuthComplete {
+            challenge,
+            public_key,
+            signature,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            if challenge.peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "AUTH_PEER_MISMATCH".into(),
+                };
+            }
+            match state.auth.complete(
+                &challenge,
+                &public_key,
+                &signature,
+                chrono::Utc::now().timestamp(),
+            ) {
+                Ok(token) => BoardSyncResponse::RelaySession { token },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "AUTH_RESPONSE_REJECTED".into(),
+                },
+            }
+        }
+        BoardSyncRequest::RegisterRelayName {
+            session_token,
+            signed_request,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let Ok(authenticated) = state.auth.authorize(
+                &session_token,
+                "name:register",
+                chrono::Utc::now().timestamp(),
+            ) else {
+                return BoardSyncResponse::Error {
+                    error: "NAME_REGISTRATION_REJECTED".into(),
+                };
+            };
+            if authenticated != *peer || signed_request.request.peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "NAME_REGISTRATION_REJECTED".into(),
+                };
+            }
+            let result = state.database.with_connection(|conn| {
+                name_registration::register(
+                    conn,
+                    &state.relay_name,
+                    &state.relay_key_id,
+                    &state.relay_signing_key,
+                    signed_request,
+                    chrono::Utc::now().timestamp(),
+                )
+            });
+            match result {
+                Ok(claim) => BoardSyncResponse::RelayNameRegistered { claim },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "NAME_REGISTRATION_REJECTED".into(),
+                },
+            }
+        }
+        BoardSyncRequest::SubmitIntroduction {
+            session_token,
+            envelope,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let now = chrono::Utc::now().timestamp();
+            if state
+                .auth
+                .authorize(&session_token, "introduce", now)
+                .ok()
+                .as_ref()
+                != Some(peer)
+            {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_UNAVAILABLE".into(),
+                };
+            }
+            let response = state.database.with_connection(|conn| {
+                introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse).map(
+                    |mut s| {
+                        s.submit(
+                            &session_token,
+                            source_network,
+                            envelope,
+                            chrono::Utc::now().timestamp(),
+                            false,
+                        )
+                    },
+                )
+            });
+            match response {
+                Ok(r) => BoardSyncResponse::IntroductionAccepted {
+                    request_id: r.request_id,
+                    retry_after: r.retry_after,
+                },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "INTRODUCTION_UNAVAILABLE".into(),
+                },
+            }
+        }
+        BoardSyncRequest::RequestIntroductionWork {
+            session_token,
+            target,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let now = chrono::Utc::now().timestamp();
+            let Ok(requester) = state.auth.authorize(&session_token, "introduce", now) else {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_WORK_REJECTED".into(),
+                };
+            };
+            if requester != *peer {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_WORK_REJECTED".into(),
+                };
+            }
+            let signing_key = state.auth.signing_key();
+            let delivery_key = opaque_delivery_key(&state.database, &target, &signing_key);
+            match state.abuse.issue_with_delivery_key(
+                &state.relay_name,
+                &requester.to_string(),
+                &target,
+                "introduce",
+                now,
+                &state.relay_key_id,
+                &signing_key,
+                delivery_key,
+            ) {
+                Ok(challenge) => BoardSyncResponse::IntroductionWork { challenge },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "INTRODUCTION_WORK_REJECTED".into(),
+                },
+            }
+        }
+        BoardSyncRequest::FetchIntroductions {
+            session_token,
+            limit,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let now = chrono::Utc::now().timestamp();
+            if state
+                .auth
+                .authorize(&session_token, "introductions:read", now)
+                .ok()
+                .as_ref()
+                != Some(peer)
+            {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_FETCH_REJECTED".into(),
+                };
+            }
+            let response = state.database.with_connection(|conn| {
+                introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse)
+                    .map_err(|e| e.to_string())?
+                    .take(&session_token, chrono::Utc::now().timestamp(), limit)
+            });
+            match response {
+                Ok(envelopes) => BoardSyncResponse::Introductions { envelopes },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "INTRODUCTION_FETCH_REJECTED".into(),
+                },
+            }
+        }
+        BoardSyncRequest::AckIntroductions {
+            session_token,
+            request_ids,
+        } => {
+            let Some(state) = identity else {
+                return BoardSyncResponse::Error {
+                    error: "IDENTITY_SERVICE_DISABLED".into(),
+                };
+            };
+            let now = chrono::Utc::now().timestamp();
+            if state
+                .auth
+                .authorize(&session_token, "introductions:read", now)
+                .ok()
+                .as_ref()
+                != Some(peer)
+            {
+                return BoardSyncResponse::Error {
+                    error: "INTRODUCTION_ACK_REJECTED".into(),
+                };
+            }
+            let result = state.database.with_connection(|conn| {
+                introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse)
+                    .map_err(|e| e.to_string())?
+                    .acknowledge(&session_token, &request_ids, now)
+            });
+            match result {
+                Ok(count) => BoardSyncResponse::IntroductionsAcked { count },
+                Err(_) => BoardSyncResponse::Error {
+                    error: "INTRODUCTION_ACK_REJECTED".into(),
+                },
+            }
+        }
         BoardSyncRequest::RegisterPeer {
             peer_id,
             public_key,
@@ -937,6 +1391,11 @@ fn handle_board_request(
             }
         }
         BoardSyncRequest::RegisterWallReadGrant { grant } => {
+            if grant.issuer_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "authenticated peer is not the grant issuer".to_string(),
+                };
+            }
             let grant_id = grant.grant_id.clone();
             match service.process_wall_read_grant(&grant) {
                 Ok(()) => BoardSyncResponse::WallReadGrantStored { grant_id },
@@ -949,16 +1408,23 @@ fn handle_board_request(
             lamport_clock,
             revoked_at,
             signature,
-        } => match service.process_wall_read_revoke(
-            &grant_id,
-            &issuer_peer_id,
-            lamport_clock,
-            revoked_at,
-            &signature,
-        ) {
-            Ok(()) => BoardSyncResponse::WallReadGrantRevoked { grant_id },
-            Err(e) => BoardSyncResponse::Error { error: e },
-        },
+        } => {
+            if issuer_peer_id != peer.to_string() {
+                return BoardSyncResponse::Error {
+                    error: "authenticated peer is not the revocation issuer".to_string(),
+                };
+            }
+            match service.process_wall_read_revoke(
+                &grant_id,
+                &issuer_peer_id,
+                lamport_clock,
+                revoked_at,
+                &signature,
+            ) {
+                Ok(()) => BoardSyncResponse::WallReadGrantRevoked { grant_id },
+                Err(e) => BoardSyncResponse::Error { error: e },
+            }
+        }
         BoardSyncRequest::DeleteWallPost {
             author_peer_id,
             post_id,

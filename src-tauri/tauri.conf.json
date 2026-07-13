@@ -36,16 +36,12 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "harbor"
-        ]
+        "schemes": ["harbor"]
       },
       "mobile": []
     },
     "updater": {
-      "endpoints": [
-        "https://github.com/bakobiibizo/harbor/releases/latest/download/latest.json"
-      ],
+      "endpoints": ["https://github.com/bakobiibizo/harbor/releases/latest/download/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE0QkFDOTAwMkUzQzIyODkKUldTSklqd3VBTW02RkdtNFhYeTd5USs1SWR0VWxHRzA4K3ZwaGdRQ2lXWXk5YTZUaUhvQzZxeU0K"
     }
   },

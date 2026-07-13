@@ -11,6 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  VITE_HARBOR_RELAY_NAMESPACE: harbor.social
 
 jobs:
   frontend:

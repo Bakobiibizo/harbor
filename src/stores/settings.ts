@@ -8,6 +8,7 @@ import type { IceServerConfig, IceServerInput, RedactedIceServerConfig } from '.
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSize = 'small' | 'medium' | 'large';
+export type SocialView = 'posts' | 'images' | 'videos' | 'audio';
 export type AccentColor =
   'harbor' | 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'teal' | 'amber';
 
@@ -18,9 +19,9 @@ export const ACCENT_COLORS: Record<
 > = {
   harbor: {
     primary: '214 81% 47%',
-    accent: '50 100% 47%',
+    accent: '214 81% 47%',
     label: 'Harbor',
-    swatch: '#F0C900',
+    swatch: '#1769D7',
   },
   blue: {
     primary: '220 91% 54%',
@@ -95,6 +96,8 @@ interface SettingsState {
   showReadReceipts: boolean;
   showOnlineStatus: boolean;
   defaultVisibility: 'contacts' | 'public';
+  socialView: SocialView;
+  communityView: SocialView;
 
   // Profile settings
   avatarUrl: string | null;
@@ -116,6 +119,8 @@ interface SettingsState {
   setShowReadReceipts: (value: boolean) => void;
   setShowOnlineStatus: (value: boolean) => void;
   setDefaultVisibility: (value: 'contacts' | 'public') => void;
+  setSocialView: (value: SocialView) => void;
+  setCommunityView: (value: SocialView) => void;
   setAvatarUrl: (url: string | null) => void;
   setTheme: (value: ThemeMode) => void;
   setAccentColor: (value: AccentColor) => void;
@@ -168,6 +173,8 @@ export const useSettingsStore = create<SettingsState>()(
       showReadReceipts: true,
       showOnlineStatus: true,
       defaultVisibility: 'contacts',
+      socialView: 'posts',
+      communityView: 'posts',
       avatarUrl: null,
       theme: 'system',
       accentColor: 'harbor',
@@ -211,6 +218,8 @@ export const useSettingsStore = create<SettingsState>()(
       setShowReadReceipts: (value) => set({ showReadReceipts: value }),
       setShowOnlineStatus: (value) => set({ showOnlineStatus: value }),
       setDefaultVisibility: (value) => set({ defaultVisibility: value }),
+      setSocialView: (value) => set({ socialView: value }),
+      setCommunityView: (value) => set({ communityView: value }),
       setAvatarUrl: (url) => set({ avatarUrl: url }),
       setTheme: (value) => {
         applyTheme(value);
@@ -236,6 +245,8 @@ export const useSettingsStore = create<SettingsState>()(
         showReadReceipts: state.showReadReceipts,
         showOnlineStatus: state.showOnlineStatus,
         defaultVisibility: state.defaultVisibility,
+        socialView: state.socialView,
+        communityView: state.communityView,
         avatarUrl: state.avatarUrl,
         theme: state.theme,
         accentColor: state.accentColor,

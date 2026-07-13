@@ -4,6 +4,7 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::db::repositories::PrivateIntroductionsRepository;
 use crate::db::{
     Capability, Database, GrantData, Permission, PermissionsRepository, RecordPermissionEventParams,
 };
@@ -57,6 +58,39 @@ pub struct PermissionRevokeMessage {
 }
 
 impl PermissionsService {
+    fn contact_card_capability(capability: Capability) -> &'static str {
+        match capability {
+            Capability::Chat => "message:send",
+            Capability::WallRead => "wall:read",
+            Capability::Call => "call:initiate",
+        }
+    }
+
+    fn effective_capability(
+        &self,
+        issuer: &str,
+        subject: &str,
+        capability: Capability,
+    ) -> Result<bool> {
+        let decision = PrivateIntroductionsRepository::new(&self.db)
+            .capability_decision(
+                issuer,
+                subject,
+                Self::contact_card_capability(capability),
+                chrono::Utc::now().timestamp(),
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        match decision {
+            Some(value) => Ok(value),
+            None => PermissionsRepository::has_capability(
+                &self.db,
+                issuer,
+                subject,
+                capability.as_str(),
+            )
+            .map_err(|e| AppError::DatabaseString(e.to_string())),
+        }
+    }
     /// Create a new permissions service
     pub fn new(db: Arc<Database>, identity_service: Arc<IdentityService>) -> Self {
         Self {
@@ -441,13 +475,7 @@ impl PermissionsService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        PermissionsRepository::has_capability(
-            &self.db,
-            &identity.peer_id,
-            subject_peer_id,
-            capability.as_str(),
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))
+        self.effective_capability(&identity.peer_id, subject_peer_id, capability)
     }
 
     /// Check if we have a capability from another peer
@@ -457,13 +485,7 @@ impl PermissionsService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        PermissionsRepository::has_capability(
-            &self.db,
-            issuer_peer_id,
-            &identity.peer_id,
-            capability.as_str(),
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))
+        self.effective_capability(issuer_peer_id, &identity.peer_id, capability)
     }
 
     /// Get all permissions we've granted
@@ -523,13 +545,104 @@ impl PermissionsService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::CreateIdentityRequest;
+    use crate::models::{
+        domain, CapabilityGrantRecord, CapabilityRevocationRecord, CreateIdentityRequest,
+    };
 
     fn create_test_service() -> (Arc<Database>, Arc<IdentityService>, PermissionsService) {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let permissions_service = PermissionsService::new(db.clone(), identity_service.clone());
         (db, identity_service, permissions_service)
+    }
+
+    #[test]
+    fn contact_card_revocation_overrides_legacy_permission() {
+        let (db, identity_service, service) = create_test_service();
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test User".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let issuer = identity_service.get_identity().unwrap().unwrap().peer_id;
+        let subject = "12D3KooWContact";
+        service
+            .create_permission_grant(subject, Capability::WallRead, None)
+            .unwrap();
+        assert!(service
+            .peer_has_capability(subject, Capability::WallRead)
+            .unwrap());
+
+        let repo = PrivateIntroductionsRepository::new(&db);
+        let now = chrono::Utc::now().timestamp();
+        let grant = CapabilityGrantRecord {
+            domain: domain::CAPABILITY_GRANT.into(),
+            version: 1,
+            grant_id: "private-wall".into(),
+            issuer_peer_id: issuer.clone(),
+            subject_peer_id: subject.into(),
+            capability: "wall:read".into(),
+            revision: 1,
+            issued_at: now,
+            expires_at: Some(now + 60),
+            revocation_id: "private-wall-revoke".into(),
+        };
+        repo.apply_grant(&grant, now).unwrap();
+        assert!(service
+            .peer_has_capability(subject, Capability::WallRead)
+            .unwrap());
+        repo.apply_revocation(&CapabilityRevocationRecord {
+            domain: domain::CAPABILITY_REVOCATION.into(),
+            version: 1,
+            grant_id: grant.grant_id,
+            issuer_peer_id: issuer,
+            revision: 2,
+            revoked_at: now + 1,
+            revocation_id: grant.revocation_id,
+        })
+        .unwrap();
+        assert!(!service
+            .peer_has_capability(subject, Capability::WallRead)
+            .unwrap());
+    }
+
+    #[test]
+    fn expired_contact_card_capability_denies_access() {
+        let (db, identity_service, service) = create_test_service();
+        identity_service
+            .create_identity(CreateIdentityRequest {
+                display_name: "Test User".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let issuer = identity_service.get_identity().unwrap().unwrap().peer_id;
+        let subject = "12D3KooWExpired";
+        let now = chrono::Utc::now().timestamp();
+        PrivateIntroductionsRepository::new(&db)
+            .apply_grant(
+                &CapabilityGrantRecord {
+                    domain: domain::CAPABILITY_GRANT.into(),
+                    version: 1,
+                    grant_id: "expired-call".into(),
+                    issuer_peer_id: issuer,
+                    subject_peer_id: subject.into(),
+                    capability: "call:initiate".into(),
+                    revision: 1,
+                    issued_at: now - 20,
+                    expires_at: Some(now - 1),
+                    revocation_id: "expired-call-revoke".into(),
+                },
+                now - 20,
+            )
+            .unwrap();
+        assert!(!service
+            .peer_has_capability(subject, Capability::Call)
+            .unwrap());
     }
 
     #[test]

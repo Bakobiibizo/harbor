@@ -3,28 +3,36 @@ import { Button, Input } from '../common';
 import { useIdentityStore, useAccountsStore } from '../../stores';
 import { HarborIcon, UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '../icons';
 import { accountsService } from '../../services';
+import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
 
 interface CreateIdentityProps {
   onBack?: () => void;
 }
 
 export function CreateIdentity({ onBack }: CreateIdentityProps) {
-  const { createIdentity, error, clearError } = useIdentityStore();
+  const { completeOnboarding, error, clearError } = useIdentityStore();
   const { loadAccounts } = useAccountsStore();
 
   const [displayName, setDisplayName] = useState('');
+  const [relayNamespace] = useState(configuredRelayNamespace);
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [passphraseHint, setPassphraseHint] = useState('');
   const [bio, setBio] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resumeAttempt, setResumeAttempt] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
 
   const handleNextStep = () => {
     setLocalError(null);
-    if (!displayName.trim()) {
-      setLocalError('Display name is required');
+    const nameError = validateRelayLocalName(displayName.trim());
+    if (nameError) {
+      setLocalError(nameError);
+      return;
+    }
+    if (!relayNamespace) {
+      setLocalError('Connect to or configure a relay before creating your Harbor name.');
       return;
     }
     setStep(2);
@@ -47,17 +55,23 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
 
     setLoading(true);
     try {
-      const identity = await createIdentity({
-        displayName: displayName.trim(),
-        passphrase,
-        bio: bio.trim() || undefined,
-        passphraseHint: passphraseHint.trim() || undefined,
-      });
+      await completeOnboarding(
+        {
+          displayName: displayName.trim(),
+          relayName: displayName.trim().toLowerCase(),
+          relayNamespace,
+          passphrase,
+          bio: bio.trim() || undefined,
+          passphraseHint: passphraseHint.trim() || undefined,
+        },
+        displayName.trim(),
+        relayNamespace,
+      );
 
       // Ensure the new account is reflected in the accounts store
       try {
         await accountsService.listAccounts().then(async (accounts) => {
-          const exists = accounts.some((a) => a.peerId === identity.peerId);
+          const exists = accounts.length > 0;
 
           // In the normal case, the backend now returns the new account.
           // When it's present, refresh the in-memory accounts store.
@@ -68,8 +82,9 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
       } catch {
         // Non-critical, accounts list may not be set up yet
       }
-    } catch {
-      // Error is handled by store
+    } catch (err) {
+      setResumeAttempt(true);
+      setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -95,8 +110,8 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
     <div
       className="min-h-screen flex"
       style={{
-        background:
-          'linear-gradient(135deg, hsl(var(--harbor-brand-backdrop-start)) 0%, hsl(var(--harbor-brand-backdrop-mid)) 50%, hsl(var(--harbor-brand-backdrop-end)) 100%)',
+        background: 'linear-gradient(145deg, hsl(216 70% 10%), hsl(216 58% 17%))',
+        color: 'white',
       }}
     >
       {/* Left side - Branding */}
@@ -194,8 +209,8 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
           <div
             className="rounded-2xl p-8"
             style={{
-              background: 'hsl(var(--harbor-bg-elevated))',
-              border: '1px solid hsl(var(--harbor-border-subtle))',
+              background: 'hsl(216 52% 16%)',
+              border: '1px solid hsl(210 40% 92% / .22)',
               boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
             }}
           >
@@ -290,7 +305,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
               </h2>
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {step === 1
-                  ? 'Choose how others will see you on the network'
+                  ? 'Choose your relay-unique Harbor address'
                   : 'Your passphrase encrypts your private keys locally'}
               </p>
             </div>
@@ -309,13 +324,24 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
               {step === 1 ? (
                 <div className="space-y-4">
                   <Input
-                    label="Display Name"
+                    label="Harbor name"
                     type="text"
                     value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="How others will see you"
+                    onChange={(e) =>
+                      setDisplayName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))
+                    }
+                    placeholder="your-name"
                     autoFocus
                   />
+
+                  <Input label="Relay namespace" value={relayNamespace} disabled />
+                  <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                    People will know you as{' '}
+                    <strong>
+                      @{displayName || 'your-name'}@{relayNamespace}
+                    </strong>
+                    . Names are unique within each relay and bound to your cryptographic identity.
+                  </p>
 
                   <Input
                     label="Bio (optional)"
@@ -439,7 +465,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                       Back
                     </Button>
                     <Button type="submit" className="flex-1" size="lg" loading={loading}>
-                      Create Identity
+                      {resumeAttempt ? 'Retry name registration' : 'Create Identity'}
                     </Button>
                   </div>
                 </div>

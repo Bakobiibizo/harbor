@@ -7,6 +7,7 @@ import {
   useMessagingStore,
 } from '../../stores';
 import { useKeyboardNavigation } from '../../hooks';
+import { safeIdentityLabel } from '../../utils/relayName';
 import { KeyboardShortcutsModal, CustomizationPanel } from '../common';
 import {
   BoardsIcon,
@@ -211,7 +212,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                         className="w-full h-full rounded-full object-cover"
                       />
                     ) : (
-                      getInitials(identity.displayName)
+                      getInitials(safeIdentityLabel(identity))
                     )}
                   </div>
                   {/* Online indicator - reflects actual network status and user preference */}
@@ -239,7 +240,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                     className="font-semibold text-sm truncate"
                     style={{ color: 'hsl(var(--harbor-text-primary))' }}
                   >
-                    {identity.displayName}
+                    {safeIdentityLabel(identity)}
                   </p>
                   <p
                     className="text-xs truncate"
@@ -410,6 +411,18 @@ export function MainLayout({ children }: MainLayoutProps) {
         className="flex-1 overflow-auto"
         style={{ background: 'hsl(var(--harbor-bg-primary))' }}
       >
+        {identity && !identity.relayNameVerified && (
+          <div
+            className="px-4 py-2 text-sm text-center"
+            style={{
+              background: 'hsl(var(--harbor-warning) / .16)',
+              color: 'hsl(var(--harbor-warning))',
+            }}
+          >
+            Beta compatibility identity · posts and messages are signed, but this peer ID does not
+            yet have a verified relay name.
+          </div>
+        )}
         {children}
       </main>
 

@@ -33,7 +33,8 @@
   "name": "harbor",
   "private": true,
   "scripts": {
-    "build": "tsc && vite build",
+    "build": "node scripts/validate-relay-namespace.mjs && tsc && vite build && node scripts/validate-relay-namespace.mjs --dist",
+    "validate:namespace": "node scripts/validate-relay-namespace.mjs",
     "dev": "vite",
     "preview": "vite preview",
     "tauri": "tauri",

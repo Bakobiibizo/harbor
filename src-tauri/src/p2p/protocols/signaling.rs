@@ -393,31 +393,33 @@ mod tests {
                 tokio::select! {
                     event = sender.select_next_some() => {
                         if let SwarmEvent::Behaviour(ChatBehaviourEvent::Signaling(
-                            request_response::Event::Message { message, .. },
+                            request_response::Event::Message {
+                                message: request_response::Message::Response { request_id: id, response },
+                                ..
+                            },
                         )) = event
                         {
-                            if let request_response::Message::Response { request_id: id, response } = message {
-                                if id == request_id {
-                                    assert!(response.accepted, "signaling response was rejected: {:?}", response.error);
-                                    assert_eq!(response.call_id.as_deref(), Some("call-libp2p-1"));
-                                    return;
-                                }
+                            if id == request_id {
+                                assert!(response.accepted, "signaling response was rejected: {:?}", response.error);
+                                assert_eq!(response.call_id.as_deref(), Some("call-libp2p-1"));
+                                return;
                             }
                         }
                     }
                     event = receiver.select_next_some() => {
                         if let SwarmEvent::Behaviour(ChatBehaviourEvent::Signaling(
-                            request_response::Event::Message { message, .. },
+                            request_response::Event::Message {
+                                message: request_response::Message::Request { request, channel, .. },
+                                ..
+                            },
                         )) = event
                         {
-                            if let request_response::Message::Request { request, channel, .. } = message {
-                                assert_eq!(payload_kind(&request.payload), expected_kind);
-                                receiver
-                                    .behaviour_mut()
-                                    .signaling
-                                    .send_response(channel, SignalingResponse::accepted(request.call_id().to_string()))
-                                    .expect("signaling response should send");
-                            }
+                            assert_eq!(payload_kind(&request.payload), expected_kind);
+                            receiver
+                                .behaviour_mut()
+                                .signaling
+                                .send_response(channel, SignalingResponse::accepted(request.call_id().to_string()))
+                                .expect("signaling response should send");
                         }
                     }
                     _ = &mut deadline => panic!("timed out waiting for signaling {} exchange", expected_kind),

@@ -179,7 +179,7 @@ describe('useSettingsStore', () => {
         '214 81% 47%',
       );
       expect(document.documentElement.style.getPropertyValue('--harbor-accent')).toBe(
-        '50 100% 47%',
+        '214 81% 47%',
       );
 
       useSettingsStore.getState().setAccentColor('purple');

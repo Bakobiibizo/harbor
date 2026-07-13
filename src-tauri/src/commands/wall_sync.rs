@@ -19,6 +19,7 @@ pub async fn sync_wall_to_relay(
     network_state: State<'_, NetworkState>,
     posts_service: State<'_, Arc<PostsService>>,
 ) -> Result<u32, AppError> {
+    posts_service.assert_can_publish()?;
     let handle = network_state.get_handle().await?;
 
     // Get connected peers to find a relay

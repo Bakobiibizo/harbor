@@ -50,6 +50,9 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
     });
   };
 
+  const localAccountLabel = (account: AccountInfo) =>
+    account.displayName.trim() || `Local profile ${account.peerId.slice(0, 8)}…`;
+
   return (
     <div
       className="min-h-screen flex"
@@ -165,7 +168,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                           className="w-full h-full rounded-full object-cover"
                         />
                       ) : (
-                        getInitials(account.displayName)
+                        getInitials(localAccountLabel(account))
                       )}
                     </div>
 
@@ -175,13 +178,23 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         className="font-semibold truncate"
                         style={{ color: 'hsl(var(--harbor-text-primary))' }}
                       >
-                        {account.displayName}
+                        {localAccountLabel(account)}
                       </p>
+                      {account.bio && (
+                        <p
+                          className="text-xs truncate"
+                          style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                        >
+                          {account.bio}
+                        </p>
+                      )}
                       <p
                         className="text-xs truncate font-mono"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                        title={account.peerId}
                       >
-                        {account.peerId.slice(0, 12)}...
+                        {account.peerId.slice(0, 12)}…{account.peerId.slice(-6)} · saved on this
+                        device
                       </p>
                       {account.lastAccessedAt && (
                         <p

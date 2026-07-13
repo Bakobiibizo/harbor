@@ -6,9 +6,12 @@ pub mod contacts_repo;
 pub mod group_calls_repo;
 pub mod identity_repo;
 pub mod likes_repo;
+pub mod mentions_repo;
 pub mod messages_repo;
 pub mod permissions_repo;
 pub mod posts_repo;
+pub mod private_introductions_repo;
+pub mod relay_names_repo;
 pub mod wall_social_repo;
 
 pub use boards_repo::{Board, BoardPost, BoardsRepository, RelayCommunity, UpsertBoardPostParams};
@@ -21,6 +24,7 @@ pub use contacts_repo::{Contact, ContactData, ContactsRepository};
 pub use group_calls_repo::{GroupCallRoom, GroupCallsRepository};
 pub use identity_repo::IdentityRepository;
 pub use likes_repo::{LikeData, LikeSummary, LikesRepository, PostLike};
+pub use mentions_repo::{MentionsRepository, QueuedMentionEnvelope, StoredMention};
 pub use messages_repo::{
     Conversation, Message, MessageData, MessageStatus, MessagesRepository, RecordMessageEventParams,
 };
@@ -32,6 +36,8 @@ pub use posts_repo::{
     Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
     RecordPostEventParams, VisibilityCounts,
 };
+pub use private_introductions_repo::{IntroductionDecision, PrivateIntroductionsRepository};
+pub use relay_names_repo::RelayNamesRepository;
 pub use wall_social_repo::{
     WallSocialEvent, WallSocialEventData, WallSocialEventType, WallSocialEventsRepository,
 };

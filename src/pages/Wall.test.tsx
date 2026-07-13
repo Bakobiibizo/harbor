@@ -121,7 +121,7 @@ describe('WallPage visibility controls', () => {
   it('selects the persisted default visibility before publishing', async () => {
     render(<WallPage />);
 
-    const publicButton = screen.getByText('Public').closest('button')!;
+    const publicButton = screen.getByRole('button', { name: 'Public' });
     expect(publicButton).toHaveAttribute('aria-pressed', 'true');
 
     fireEvent.change(screen.getByPlaceholderText(/share your thoughts/i), {

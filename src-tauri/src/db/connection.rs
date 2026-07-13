@@ -18,6 +18,11 @@ const MIGRATION_012: &str = include_str!("migrations/012_post_media_signature.sq
 const MIGRATION_013: &str = include_str!("migrations/013_call_history_state.sql");
 const MIGRATION_014: &str = include_str!("migrations/014_wall_social_events.sql");
 const MIGRATION_015: &str = include_str!("migrations/015_group_call_rooms.sql");
+const MIGRATION_016: &str = include_str!("migrations/016_relay_name_claims.sql");
+const MIGRATION_017: &str = include_str!("migrations/017_private_introductions.sql");
+const MIGRATION_018: &str = include_str!("migrations/018_private_mentions.sql");
+const MIGRATION_019: &str = include_str!("migrations/019_identity_migration_state.sql");
+const MIGRATION_020: &str = include_str!("migrations/020_relay_key_rotation.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -342,6 +347,28 @@ impl Database {
             info!("Running migration 015...");
             conn.execute_batch(MIGRATION_015)?;
             info!("Migration 015 complete");
+        }
+        if version < 16 {
+            conn.execute_batch(MIGRATION_016)?;
+            info!("Migration 016 complete");
+        }
+        if version < 17 {
+            conn.execute_batch(MIGRATION_017)?;
+            info!("Migration 017 complete");
+        }
+        if version < 18 {
+            conn.execute_batch(MIGRATION_018)?;
+            conn.execute("UPDATE schema_version SET version = 18 WHERE id = 1", [])?;
+            info!("Migration 018 complete");
+        }
+        if version < 19 {
+            conn.execute_batch(MIGRATION_019)?;
+            conn.execute("UPDATE schema_version SET version = 19 WHERE id = 1", [])?;
+            info!("Migration 019 complete");
+        }
+        if version < 20 {
+            conn.execute_batch(MIGRATION_020)?;
+            info!("Migration 020 complete");
         }
 
         Ok(())
@@ -833,7 +860,33 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 15);
+            assert_eq!(version, 20);
+
+            for table in [
+                "relay_trust_keys",
+                "relay_name_claims",
+                "introduction_decisions",
+                "introduction_blocks",
+                "contact_capability_state",
+                "private_mentions",
+                "private_mention_outbox",
+                "private_mention_blocks",
+                "identity_migration_state",
+            ] {
+                let exists: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+                    [table],
+                    |row| row.get(0),
+                )?;
+                assert!(exists, "migration did not create {table}");
+            }
+
+            let migration_states: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM identity_migration_state",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(migration_states, 0, "migration must not invent identity state");
 
             let row: (String, String, Option<String>, Option<String>, String, Option<String>) = conn
                 .query_row(

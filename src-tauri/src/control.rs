@@ -4,8 +4,8 @@ use crate::commands;
 use crate::models::CreateIdentityRequest;
 use crate::services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
-    FeedService, IdentityService, MediaStorageService, MessagingService, PermissionsService,
-    PostsService, WallSocialService,
+    FeedService, IdentityService, MediaStorageService, MentionsService, MessagingService,
+    PermissionsService, PostsService, WallSocialService,
 };
 use crate::{Database, PendingDeepLink};
 use serde::{Deserialize, Serialize};
@@ -246,6 +246,7 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
             app.state::<Arc<WallSocialService>>(),
             app.state::<Arc<BoardService>>(),
             app.state::<Arc<MediaStorageService>>(),
+            app.state::<Arc<MentionsService>>(),
         )
         .await
         .map(|_| json!({}))
@@ -342,6 +343,11 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         == 0
 }
 
+// Keep state types visible to rustdoc and ensure control setup stays aligned
+// with application-managed state.
+#[allow(dead_code)]
+fn managed_state_contract(_db: Arc<Database>, _feed: Arc<FeedService>, _pending: PendingDeepLink) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,8 +382,3 @@ mod tests {
         ));
     }
 }
-
-// Keep state types visible to rustdoc and ensure control setup stays aligned
-// with application-managed state.
-#[allow(dead_code)]
-fn managed_state_contract(_db: Arc<Database>, _feed: Arc<FeedService>, _pending: PendingDeepLink) {}

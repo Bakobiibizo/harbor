@@ -45,6 +45,25 @@ CREATE TABLE IF NOT EXISTS banned_peers (
     banned_by TEXT
 );
 
+CREATE TABLE IF NOT EXISTS relay_signing_keys (
+    key_id TEXT PRIMARY KEY, public_key BLOB NOT NULL, not_before INTEGER NOT NULL,
+    not_after INTEGER, retired_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS relay_name_claims (
+    local_name TEXT NOT NULL, relay TEXT NOT NULL, peer_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK(sequence > 0), claim_cbor BLOB NOT NULL,
+    not_before INTEGER NOT NULL, not_after INTEGER NOT NULL,
+    relay_key_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','retired')),
+    created_at INTEGER NOT NULL, retired_at INTEGER,
+    PRIMARY KEY(relay, local_name, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS relay_name_claims_one_active
+ ON relay_name_claims(relay,local_name) WHERE status='active';
+CREATE TABLE IF NOT EXISTS relay_name_nonces (
+    peer_id TEXT NOT NULL, nonce BLOB NOT NULL, used_at INTEGER NOT NULL,
+    PRIMARY KEY(peer_id,nonce)
+);
+
 CREATE TABLE IF NOT EXISTS author_lamport_clocks (
     author_peer_id TEXT PRIMARY KEY,
     last_seen_clock INTEGER NOT NULL DEFAULT 0,
@@ -146,6 +165,10 @@ pub struct WallSocialEventRow {
 }
 
 impl RelayDatabase {
+    pub fn with_connection<T>(&self, operation: impl FnOnce(&mut Connection) -> T) -> T {
+        let mut connection = self.conn.lock().expect("relay database lock poisoned");
+        operation(&mut connection)
+    }
     /// Open or create the database at the given path
     pub fn open(path: &str) -> SqliteResult<Self> {
         let conn = Connection::open(path)?;
@@ -446,7 +469,9 @@ impl RelayDatabase {
                  lamport_clock = excluded.lamport_clock,
                  issued_at = excluded.issued_at,
                  expires_at = excluded.expires_at,
-                 signature = excluded.signature",
+                 signature = excluded.signature,
+                 revoked_at = NULL
+             WHERE excluded.lamport_clock > wall_read_grants.lamport_clock",
             params![
                 grant_id,
                 issuer_peer_id,
@@ -466,13 +491,22 @@ impl RelayDatabase {
         &self,
         grant_id: &str,
         issuer_peer_id: &str,
+        lamport_clock: u64,
         revoked_at: i64,
     ) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap();
         let rows = conn.execute(
-            "UPDATE wall_read_grants SET revoked_at = ?
-             WHERE grant_id = ? AND issuer_peer_id = ? AND revoked_at IS NULL",
-            params![revoked_at, grant_id, issuer_peer_id],
+            "UPDATE wall_read_grants SET revoked_at = ?, lamport_clock = ?
+             WHERE grant_id = ? AND issuer_peer_id = ? AND lamport_clock < ?
+               AND (revoked_at IS NULL OR revoked_at < ?)",
+            params![
+                revoked_at,
+                lamport_clock as i64,
+                grant_id,
+                issuer_peer_id,
+                lamport_clock as i64,
+                revoked_at
+            ],
         )?;
         Ok(rows > 0)
     }
@@ -488,7 +522,7 @@ impl RelayDatabase {
             "SELECT COUNT(*) FROM wall_read_grants
              WHERE issuer_peer_id = ?
                AND subject_peer_id = ?
-               AND capability = 'wall_read'
+               AND capability IN ('wall_read', 'wall:read')
                AND revoked_at IS NULL
                AND (expires_at IS NULL OR expires_at > ?)",
             params![issuer_peer_id, subject_peer_id, now],

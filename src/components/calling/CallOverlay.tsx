@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { PhoneIcon, XIcon } from '../icons';
 import { useCallingStore, useContactsStore } from '../../stores';
+import { safePeerLabel } from '../../utils/relayName';
 import type {
   AudioCallRuntimeState,
   GroupCallParticipantSnapshot,
@@ -26,11 +27,6 @@ function formatState(state: AudioCallRuntimeState, isVideo: boolean): string {
     default:
       return `${isVideo ? 'Video' : 'Voice'} call`;
   }
-}
-
-function compactPeer(peerId: string): string {
-  if (peerId.length <= 16) return peerId;
-  return `${peerId.slice(0, 8)}…${peerId.slice(-6)}`;
 }
 
 function useVideoElement(stream: MediaStream | null) {
@@ -109,18 +105,19 @@ export function CallOverlay() {
   const peerName = useMemo(() => {
     const peerId = snapshot.peerId;
     if (!peerId) return 'Unknown peer';
-    return (
-      contacts.find((contact) => contact.peerId === peerId)?.displayName ?? compactPeer(peerId)
-    );
+    const contact = contacts.find((item) => item.peerId === peerId);
+    return safePeerLabel(peerId, contact?.verifiedQualifiedName);
   }, [contacts, snapshot.peerId]);
 
   if (groupSnapshot.state !== 'idle') {
     const isTerminalGroup = groupSnapshot.state === 'ended' || groupSnapshot.state === 'failed';
-    const isIncomingGroup = groupSnapshot.state === 'ringing' && groupSnapshot.participants.every(
-      (participant) => participant.state === 'invited',
-    );
-    const contactName = (peerId: string) =>
-      contacts.find((contact) => contact.peerId === peerId)?.displayName ?? compactPeer(peerId);
+    const isIncomingGroup =
+      groupSnapshot.state === 'ringing' &&
+      groupSnapshot.participants.every((participant) => participant.state === 'invited');
+    const contactName = (peerId: string) => {
+      const contact = contacts.find((item) => item.peerId === peerId);
+      return safePeerLabel(peerId, contact?.verifiedQualifiedName);
+    };
     return (
       <div className="fixed inset-x-4 bottom-4 z-[150] sm:left-auto sm:w-[36rem]">
         <div
@@ -226,24 +223,26 @@ export function CallOverlay() {
                 )}
               </>
             )}
-            {!isIncomingGroup && <button
-              onClick={() => {
-                if (isTerminalGroup) dismissCallUi();
-                else void leaveGroupCall('normal');
-              }}
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              style={{
-                background: isTerminalGroup
-                  ? 'hsl(var(--harbor-surface-2))'
-                  : 'hsl(var(--harbor-error) / 0.16)',
-                color: isTerminalGroup
-                  ? 'hsl(var(--harbor-text-secondary))'
-                  : 'hsl(var(--harbor-error))',
-              }}
-            >
-              {isTerminalGroup ? <XIcon className="w-4 h-4" /> : null}
-              {isTerminalGroup ? 'Dismiss' : 'Leave'}
-            </button>}
+            {!isIncomingGroup && (
+              <button
+                onClick={() => {
+                  if (isTerminalGroup) dismissCallUi();
+                  else void leaveGroupCall('normal');
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                style={{
+                  background: isTerminalGroup
+                    ? 'hsl(var(--harbor-surface-2))'
+                    : 'hsl(var(--harbor-error) / 0.16)',
+                  color: isTerminalGroup
+                    ? 'hsl(var(--harbor-text-secondary))'
+                    : 'hsl(var(--harbor-error))',
+                }}
+              >
+                {isTerminalGroup ? <XIcon className="w-4 h-4" /> : null}
+                {isTerminalGroup ? 'Dismiss' : 'Leave'}
+              </button>
+            )}
           </div>
         </div>
       </div>

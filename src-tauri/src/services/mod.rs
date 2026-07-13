@@ -5,11 +5,16 @@ pub mod contacts_service;
 pub mod content_sync_service;
 pub mod crypto_service;
 pub mod feed_service;
+pub mod identity_publishing_policy;
 pub mod identity_service;
 pub mod media_service;
+pub mod mentions_service;
 pub mod messaging_service;
+pub mod name_claim_service;
 pub mod permissions_service;
 pub mod posts_service;
+pub mod private_introduction_service;
+pub mod relay_key_rotation_service;
 pub mod signing;
 pub mod wall_social_service;
 
@@ -24,8 +29,13 @@ pub use content_sync_service::{
 };
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
+pub use identity_publishing_policy::IdentityPublishingPolicy;
 pub use identity_service::IdentityService;
 pub use media_service::MediaStorageService;
+pub use mentions_service::{
+    MentionReceipt, MentionsService, PublishMentionedPostRequest, PublishMentionedPostResult,
+    ResolvedMention,
+};
 pub use messaging_service::{DecryptedMessage, MessagingService, OutgoingMessage};
 pub use permissions_service::{
     PermissionGrantMessage, PermissionRequestMessage, PermissionRevokeMessage, PermissionsService,

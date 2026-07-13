@@ -1288,7 +1288,7 @@ mod tests {
             visibility: "public",
             lamport_clock: 1,
             created_at: 1000,
-            signature: &vec![0u8; 64], // Invalid signature
+            signature: &[0u8; 64], // Invalid signature
             media_hashes: &[],
             media_items: &[],
         });
@@ -1308,7 +1308,7 @@ mod tests {
             visibility: "public",
             lamport_clock: 1,
             created_at: 1000,
-            signature: &vec![0u8; 64],
+            signature: &[0u8; 64],
             media_hashes: &[],
             media_items: &[],
         });

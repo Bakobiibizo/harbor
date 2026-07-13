@@ -817,9 +817,9 @@ impl BoardService {
         if grant.issuer_peer_id != author_peer_id || grant.subject_peer_id != requester_peer_id {
             return Err("WallRead grant does not match requested author/requester".to_string());
         }
-        if grant.capability != "wall_read" {
+        if grant.capability != "wall_read" && grant.capability != "wall:read" {
             return Err(format!(
-                "Invalid grant capability '{}': expected wall_read",
+                "Invalid grant capability '{}': expected wall:read",
                 grant.capability
             ));
         }
@@ -889,7 +889,7 @@ impl BoardService {
         verify_registered_peer_signature(&self.db, issuer_peer_id, &signable, signature)?;
         let revoked = self
             .db
-            .revoke_wall_read_grant(grant_id, issuer_peer_id, revoked_at)
+            .revoke_wall_read_grant(grant_id, issuer_peer_id, lamport_clock, revoked_at)
             .map_err(|db_error| format!("Failed to revoke WallRead grant: {}", db_error))?;
         if !revoked {
             return Err("WallRead grant not found for issuer or already revoked".to_string());
@@ -1233,6 +1233,26 @@ mod tests {
         )
     }
 
+    fn signed_get_social(
+        requester_key: &SigningKey,
+        requester_peer_id: &str,
+        author_peer_id: &str,
+        post_ids: &[String],
+        timestamp: i64,
+    ) -> Vec<u8> {
+        sign(
+            requester_key,
+            &SignableGetWallSocialEvents {
+                requester_peer_id: requester_peer_id.to_string(),
+                author_peer_id: author_peer_id.to_string(),
+                post_ids: post_ids.to_vec(),
+                after_timestamp: 0,
+                limit: 20,
+                timestamp,
+            },
+        )
+    }
+
     fn wall_read_grant(
         author_key: &SigningKey,
         author_peer_id: &str,
@@ -1313,6 +1333,90 @@ mod tests {
 
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].post_id, "public-post");
+    }
+
+    #[test]
+    fn unauthorized_wall_response_excludes_private_posts_media_and_social_events() {
+        let (service, _author_key, requester_key) = service_with_wall_posts();
+        for (post_id, hash, signature) in [
+            ("public-post", "a".repeat(64), vec![10; 64]),
+            ("contacts-post", "b".repeat(64), vec![11; 64]),
+        ] {
+            service
+                .db
+                .insert_wall_post_media(
+                    post_id,
+                    &hash,
+                    "image",
+                    "image/png",
+                    &format!("{post_id}.png"),
+                    128,
+                    Some(10),
+                    Some(10),
+                    None,
+                    0,
+                    &signature,
+                )
+                .unwrap();
+            service
+                .db
+                .insert_wall_social_event(&WallSocialEventRow {
+                    event_id: format!("event-{post_id}"),
+                    event_type: "comment_create".into(),
+                    post_id: post_id.into(),
+                    actor_peer_id: "requester".into(),
+                    author_name: None,
+                    comment_id: Some(format!("comment-{post_id}")),
+                    content: Some(format!("comment on {post_id}")),
+                    reaction_type: None,
+                    timestamp: 2_500,
+                    payload_cbor: vec![1, 2, 3],
+                    signature,
+                })
+                .unwrap();
+        }
+
+        let timestamp = 3_000;
+        let post_signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (posts, _, media) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &post_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            posts
+                .iter()
+                .map(|post| post.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["public-post"]
+        );
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].0, "public-post");
+        assert!(media.iter().all(|(post_id, _)| post_id != "contacts-post"));
+
+        let post_ids = vec!["public-post".into(), "contacts-post".into()];
+        let social_signature =
+            signed_get_social(&requester_key, "requester", "author", &post_ids, timestamp);
+        let (events, _, _) = service
+            .process_get_wall_social_events(
+                "requester",
+                "author",
+                &post_ids,
+                0,
+                20,
+                timestamp,
+                &social_signature,
+            )
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].post_id, "public-post");
+        assert!(events.iter().all(|event| event.post_id != "contacts-post"));
     }
 
     #[test]
@@ -1420,6 +1524,128 @@ mod tests {
         );
 
         assert!(matches!(result, Err(message) if message.contains("Invalid WallRead grant proof")));
+    }
+
+    #[test]
+    fn contact_card_wall_grant_is_enforced_then_revoked_across_profiles() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let mut grant = wall_read_grant(&author_key, "author", "requester");
+        grant.capability = "wall:read".to_string();
+        grant.signature = sign(
+            &author_key,
+            &SignablePermissionGrant {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: grant.issuer_peer_id.clone(),
+                subject_peer_id: grant.subject_peer_id.clone(),
+                capability: grant.capability.clone(),
+                scope: None,
+                lamport_clock: grant.lamport_clock,
+                issued_at: grant.issued_at,
+                expires_at: None,
+            },
+        );
+        service.process_wall_read_grant(&grant).unwrap();
+        let timestamp = 3_000;
+        let request_signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (allowed, _, _) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &request_signature,
+                None,
+            )
+            .unwrap();
+        assert!(allowed.iter().any(|post| post.post_id == "contacts-post"));
+
+        let revision = grant.lamport_clock + 1;
+        let revoked_at = 2_500;
+        let revoke_signature = sign(
+            &author_key,
+            &SignablePermissionRevoke {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: "author".into(),
+                lamport_clock: revision,
+                revoked_at,
+            },
+        );
+        service
+            .process_wall_read_revoke(
+                &grant.grant_id,
+                "author",
+                revision,
+                revoked_at,
+                &revoke_signature,
+            )
+            .unwrap();
+        let (denied, _, _) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &request_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            denied
+                .iter()
+                .map(|post| post.post_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["public-post"]
+        );
+
+        // A delayed copy of the older grant cannot resurrect access.
+        service.process_wall_read_grant(&grant).unwrap();
+        let (still_denied, _, _) = service
+            .process_get_wall_posts(
+                "requester",
+                "author",
+                0,
+                20,
+                timestamp,
+                &request_signature,
+                None,
+            )
+            .unwrap();
+        assert_eq!(still_denied.len(), 1);
+    }
+
+    #[test]
+    fn expired_contact_card_wall_grant_never_serves_private_rows() {
+        let (service, author_key, requester_key) = service_with_wall_posts();
+        let mut grant = wall_read_grant(&author_key, "author", "requester");
+        grant.capability = "wall:read".into();
+        grant.expires_at = Some(2_000);
+        grant.signature = sign(
+            &author_key,
+            &SignablePermissionGrant {
+                grant_id: grant.grant_id.clone(),
+                issuer_peer_id: grant.issuer_peer_id.clone(),
+                subject_peer_id: grant.subject_peer_id.clone(),
+                capability: grant.capability.clone(),
+                scope: None,
+                lamport_clock: grant.lamport_clock,
+                issued_at: grant.issued_at,
+                expires_at: grant.expires_at,
+            },
+        );
+        // Propagation after expiry is rejected rather than persisted as authority.
+        assert!(service
+            .process_wall_read_grant(&grant)
+            .unwrap_err()
+            .contains("expired"));
+        let timestamp = 3_000;
+        let signature = signed_get(&requester_key, "requester", "author", timestamp);
+        let (posts, _, _) = service
+            .process_get_wall_posts("requester", "author", 0, 20, timestamp, &signature, None)
+            .unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, "public-post");
     }
 
     #[test]

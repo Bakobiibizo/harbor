@@ -4,6 +4,85 @@
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayAuthChallenge {
+    pub domain: String,
+    pub version: u8,
+    pub id: String,
+    pub relay: String,
+    pub peer_id: String,
+    pub audience: String,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub nonce: String,
+    pub key_id: String,
+    pub relay_public_key: Vec<u8>,
+    pub relay_signature: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NameClaimRequest {
+    pub domain: String,
+    pub version: u16,
+    pub local_name: String,
+    pub relay: String,
+    pub peer_id: String,
+    pub ed25519_public_key: Vec<u8>,
+    pub x25519_public_key: Vec<u8>,
+    pub sequence: u64,
+    pub issued_at: i64,
+    pub nonce: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedNameClaimRequest {
+    pub request: NameClaimRequest,
+    pub user_signature: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NameClaim {
+    pub request: NameClaimRequest,
+    pub user_signature: Vec<u8>,
+    pub status: String,
+    pub not_before: i64,
+    pub not_after: i64,
+    pub relay_key_id: String,
+    pub relay_signature: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkChallenge {
+    pub id: String,
+    pub relay: String,
+    pub requester: String,
+    pub target: String,
+    pub action: String,
+    pub expires_at: i64,
+    pub difficulty: u8,
+    pub key_id: String,
+    pub relay_signature: Vec<u8>,
+    pub delivery_key: Vec<u8>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntroductionEnvelope {
+    pub version: u8,
+    pub request_id: String,
+    pub target: String,
+    pub requester_peer_id: String,
+    pub requester_ephemeral_x25519_key: Vec<u8>,
+    pub message_ciphertext: Vec<u8>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub work_challenge: WorkChallenge,
+    pub work_nonce: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuedEnvelope {
+    pub request_id: String,
+    pub requester_peer_id: String,
+    pub requester_ephemeral_x25519_key: Vec<u8>,
+    pub message_ciphertext: Vec<u8>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
 /// Media metadata attached to a wall post.
 ///
 /// Synced through the relay so that the receiving client knows which
@@ -42,6 +121,35 @@ pub struct WallSocialEventItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BoardSyncRequest {
+    RelayAuthChallenge {
+        peer_id: String,
+        audience: String,
+    },
+    RelayAuthComplete {
+        challenge: RelayAuthChallenge,
+        public_key: Vec<u8>,
+        signature: Vec<u8>,
+    },
+    RegisterRelayName {
+        session_token: String,
+        signed_request: SignedNameClaimRequest,
+    },
+    SubmitIntroduction {
+        session_token: String,
+        envelope: IntroductionEnvelope,
+    },
+    RequestIntroductionWork {
+        session_token: String,
+        target: String,
+    },
+    FetchIntroductions {
+        session_token: String,
+        limit: u32,
+    },
+    AckIntroductions {
+        session_token: String,
+        request_ids: Vec<String>,
+    },
     /// List all boards on the relay
     ListBoards {
         requester_peer_id: String,
@@ -182,6 +290,28 @@ pub struct WallPostData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BoardSyncResponse {
+    RelayAuthChallenge {
+        challenge: RelayAuthChallenge,
+    },
+    RelaySession {
+        token: String,
+    },
+    RelayNameRegistered {
+        claim: NameClaim,
+    },
+    IntroductionAccepted {
+        request_id: String,
+        retry_after: u32,
+    },
+    IntroductionWork {
+        challenge: WorkChallenge,
+    },
+    Introductions {
+        envelopes: Vec<QueuedEnvelope>,
+    },
+    IntroductionsAcked {
+        count: u32,
+    },
     /// List of boards
     BoardList {
         boards: Vec<BoardInfo>,
@@ -194,22 +324,34 @@ pub enum BoardSyncResponse {
         has_more: bool,
     },
     /// Post was accepted
-    PostAccepted { post_id: String },
+    PostAccepted {
+        post_id: String,
+    },
     /// Peer was registered
-    PeerRegistered { peer_id: String },
+    PeerRegistered {
+        peer_id: String,
+    },
     /// Post was deleted
-    PostDeleted { post_id: String },
+    PostDeleted {
+        post_id: String,
+    },
     /// Wall posts for a specific author
     WallPosts {
         posts: Vec<WallPostData>,
         has_more: bool,
     },
     /// Wall post was stored on the relay
-    WallPostStored { post_id: String },
+    WallPostStored {
+        post_id: String,
+    },
     /// Wall post was deleted from the relay
-    WallPostDeleted { post_id: String },
+    WallPostDeleted {
+        post_id: String,
+    },
     /// Wall social event was stored on the relay
-    WallSocialEventStored { event_id: String },
+    WallSocialEventStored {
+        event_id: String,
+    },
     /// Wall social events visible to the requester
     WallSocialEvents {
         events: Vec<WallSocialEventItem>,
@@ -217,7 +359,9 @@ pub enum BoardSyncResponse {
         next_timestamp: i64,
     },
     /// Error response
-    Error { error: String },
+    Error {
+        error: String,
+    },
 }
 
 #[cfg(test)]

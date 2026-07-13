@@ -105,6 +105,19 @@ pub struct OutgoingWallPostDelete {
 }
 
 impl BoardService {
+    pub fn verified_qualified_name(&self, peer_id: &str) -> Result<Option<String>> {
+        let Some(bytes) = crate::db::repositories::RelayNamesRepository::new(&self.db)
+            .active_for_peer(peer_id, chrono::Utc::now().timestamp())?
+        else {
+            return Ok(None);
+        };
+        let claim: crate::models::NameClaim = ciborium::de::from_reader(bytes.as_slice())
+            .map_err(|e| AppError::Serialization(e.to_string()))?;
+        Ok(Some(format!(
+            "@{}@{}",
+            claim.request.local_name, claim.request.relay
+        )))
+    }
     pub fn new(db: Arc<Database>, identity_service: Arc<IdentityService>) -> Self {
         Self {
             db,
@@ -118,6 +131,7 @@ impl BoardService {
         board_id: &str,
         content_text: &str,
     ) -> Result<OutgoingBoardPost> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let info = self
             .identity_service
             .get_identity_info()?
@@ -235,6 +249,7 @@ impl BoardService {
 
     /// Create a signed board post delete request
     pub fn create_delete_post_request(&self, post_id: &str) -> Result<OutgoingBoardPostDelete> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let info = self
             .identity_service
             .get_identity_info()?
@@ -270,6 +285,7 @@ impl BoardService {
         created_at: i64,
         post_signature: &[u8],
     ) -> Result<OutgoingWallPostSubmit> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         let info = self
             .identity_service
             .get_identity_info()?
@@ -528,6 +544,14 @@ mod tests {
                 passphrase_hint: None,
             })
             .unwrap();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                [&info.peer_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
 
         let board_service = BoardService::new(db.clone(), identity_service.clone());
 

@@ -5,6 +5,7 @@ export interface Contact {
   publicKey: string; // base64 encoded
   x25519Public: string; // base64 encoded
   displayName: string;
+  verifiedQualifiedName?: string | null;
   avatarHash: string | null;
   bio: string | null;
   isBlocked: boolean;

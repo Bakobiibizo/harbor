@@ -5,6 +5,7 @@ A standalone libp2p relay server that enables NAT traversal for Harbor chat app 
 ## What it does
 
 This relay server allows Harbor users behind NAT/firewalls to connect with each other by:
+
 1. Accepting relay reservations from clients
 2. Forwarding libp2p traffic between peers who can't connect directly
 3. Supporting DCUtR (Direct Connection Upgrade through Relay) for hole punching
@@ -24,11 +25,13 @@ The binary will be at `target/release/harbor-relay`.
 ## Running
 
 ### Basic usage (local testing)
+
 ```bash
-./harbor-relay --port 4001
+./harbor-relay --port 4001 --identity-namespace relay.example.com
 ```
 
 ### Community/wall-sync testing
+
 ```bash
 ./harbor-relay \
   --port 4001 \
@@ -38,11 +41,13 @@ The binary will be at `target/release/harbor-relay`.
 ```
 
 ### Production usage (with public IP)
+
 ```bash
-./harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP
+./harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP --identity-namespace relay.example.com
 ```
 
 ### Full options
+
 ```bash
 ./harbor-relay \
   --port 4001 \
@@ -100,18 +105,23 @@ User=ubuntu
 Restart=always
 RestartSec=10
 Environment=RUST_LOG=info
-ExecStart=/home/ubuntu/harbor/relay-server/target/release/harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP
+ExecStart=/home/ubuntu/harbor/relay-server/target/release/harbor-relay --port 4001 --announce-ip YOUR_PUBLIC_IP --identity-namespace relay.example.com
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 Then:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable harbor-relay
 sudo systemctl start harbor-relay
 ```
+
+`--identity-namespace` is required for relay-scoped names such as `@alice@relay.example.com`. Use a lowercase DNS hostname you control, point its DNS record at the stable relay address, and provision HTTPS before exposing HTTP-based discovery endpoints. The relay is authoritative only for its own namespace; it is not a global Harbor user directory.
+
+The identity key is also the relay namespace authority. Do not replace it as an ordinary binary update. Planned rotations and compromise recovery must follow [`../docs/relay-key-rotation-operations.md`](../docs/relay-key-rotation-operations.md).
 
 ### Firewall
 

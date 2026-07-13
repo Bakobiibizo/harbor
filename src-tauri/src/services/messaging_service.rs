@@ -97,6 +97,7 @@ impl MessagingService {
         content_type: &str,
         reply_to: Option<&str>,
     ) -> Result<OutgoingMessage> {
+        crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)?;
         // Get our identity
         let identity = self
             .identity_service
@@ -806,6 +807,14 @@ mod tests {
             })
             .unwrap();
         let our_peer_id = info.peer_id;
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                [&our_peer_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
 
         // Create a fake peer with X25519 keys
         let (_peer_ed25519, peer_verifying) = CryptoService::generate_ed25519_keypair();
@@ -886,7 +895,7 @@ mod tests {
             identity_service.clone(),
         ));
 
-        identity_service
+        let info = identity_service
             .create_identity(CreateIdentityRequest {
                 display_name: "Test".to_string(),
                 passphrase: "pass".to_string(),
@@ -894,6 +903,14 @@ mod tests {
                 passphrase_hint: None,
             })
             .unwrap();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                [&info.peer_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
 
         let service =
             MessagingService::new(db, identity_service, contacts_service, permissions_service);

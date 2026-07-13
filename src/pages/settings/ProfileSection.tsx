@@ -35,9 +35,13 @@ export function ProfileSection() {
       return;
     }
 
-    const url = URL.createObjectURL(file);
-    setAvatarUrl(url);
-    toast.success('Profile photo updated!');
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAvatarUrl(String(reader.result));
+      toast.success('Profile photo updated!');
+    };
+    reader.onerror = () => toast.error('Could not read that image');
+    reader.readAsDataURL(file);
 
     if (avatarInputRef.current) {
       avatarInputRef.current.value = '';
@@ -97,6 +101,12 @@ export function ProfileSection() {
             >
               {avatarUrl ? (
                 <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+              ) : identity.avatarHash ? (
+                <img
+                  src={`/media/${identity.avatarHash}`}
+                  alt="Avatar"
+                  className="w-full h-full object-cover"
+                />
               ) : (
                 getInitials(identity.displayName)
               )}

@@ -9,6 +9,10 @@
 .pi/
 artifacts/
 
+# Relay build and runtime identity artifacts
+relay-server/bin/*
+!relay-server/bin/.gitkeep
+
 # Logs
 logs
 *.log

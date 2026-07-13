@@ -13,6 +13,7 @@ import {
 import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
 import { useAppVersion } from '../hooks';
+import { BugReportForm, MentionInbox } from '../components/identity';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -258,10 +259,13 @@ export function SettingsPage() {
       return;
     }
 
-    // Create object URL for preview
-    const url = URL.createObjectURL(file);
-    setAvatarUrl(url);
-    toast.success('Profile photo updated!');
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAvatarUrl(String(reader.result));
+      toast.success('Profile photo updated!');
+    };
+    reader.onerror = () => toast.error('Could not read that image');
+    reader.readAsDataURL(file);
 
     // Reset file input
     if (avatarInputRef.current) {
@@ -506,9 +510,10 @@ export function SettingsPage() {
     { id: 'profile', label: 'Profile', icon: UserIcon, description: 'Your identity and bio' },
     { id: 'appearance', label: 'Appearance', icon: PaletteIcon, description: 'Theme and display' },
     { id: 'security', label: 'Security', icon: LockIcon, description: 'Passphrase and keys' },
-    { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'ICE, STUN, and TURN' },
+    { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'Connection help for calls' },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
     { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
+    { id: 'support', label: 'Support', icon: ShieldIcon, description: 'Mentions and bug reports' },
   ];
 
   return (
@@ -698,6 +703,12 @@ export function SettingsPage() {
                     >
                       {avatarUrl ? (
                         <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                      ) : identity.avatarHash ? (
+                        <img
+                          src={`/media/${identity.avatarHash}`}
+                          alt="Avatar"
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
                         getInitials(identity.displayName)
                       )}
@@ -759,15 +770,18 @@ export function SettingsPage() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Display Name
+                  {identity?.relayNameVerified
+                    ? 'Verified Harbor name'
+                    : 'Legacy name (unverified)'}
                 </label>
                 <input
                   type="text"
-                  value={displayName}
-                  onChange={(e) => {
-                    setDisplayName(e.target.value);
-                    setHasUnsavedChanges(true);
-                  }}
+                  value={
+                    identity?.relayNameVerified && identity.relayNameClaim
+                      ? `@${identity.relayNameClaim.request.localName}@${identity.relayNameClaim.request.relay}`
+                      : displayName
+                  }
+                  disabled
                   className="w-full px-4 py-3 rounded-lg text-sm"
                   style={{
                     background: 'hsl(var(--harbor-surface-1))',
@@ -775,6 +789,9 @@ export function SettingsPage() {
                     color: 'hsl(var(--harbor-text-primary))',
                   }}
                 />
+                <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                  Relay-verified names cannot be changed as arbitrary profile text.
+                </p>
               </div>
 
               {/* Bio - now 5 lines tall */}
@@ -1136,7 +1153,7 @@ export function SettingsPage() {
                   Calls
                 </h3>
                 <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Configure WebRTC ICE, STUN, and TURN behavior for voice calls
+                  Help Harbor connect calls across different networks
                 </p>
               </div>
 
@@ -1151,12 +1168,11 @@ export function SettingsPage() {
                   className="font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  ICE servers
+                  Call connection servers
                 </h4>
                 <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Harbor does not ship with third-party TURN credentials. Without TURN, WebRTC can
-                  still place LAN/direct calls; strict NAT pairs may need an operator-provided TURN
-                  server.
+                  Most calls work automatically. If calls connect but have no audio, a network
+                  administrator can add a relay service here.
                 </p>
 
                 <div
@@ -1167,9 +1183,9 @@ export function SettingsPage() {
                     color: 'hsl(var(--harbor-text-secondary))',
                   }}
                 >
-                  <strong style={{ color: 'hsl(var(--harbor-warning))' }}>Important:</strong> libp2p
-                  relays help Harbor exchange call signaling. They do not relay WebRTC audio media;
-                  use TURN/TURNS when media relay is required.
+                  <strong style={{ color: 'hsl(var(--harbor-warning))' }}>Advanced setting:</strong>{' '}
+                  You normally do not need to change this. These servers help call audio cross
+                  restrictive workplace, hotel, or mobile networks.
                 </div>
 
                 <div className="space-y-3">
@@ -1705,10 +1721,29 @@ export function SettingsPage() {
                   About Harbor
                 </h4>
                 <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  A decentralized, peer-to-peer social platform built with privacy in mind.
+                  A decentralized, peer-to-peer social platform powered by Hydra-Dynamix. For a
+                  custom deployment or hosted community relay, contact admin@hydra-dynamix.com.
                 </p>
+                <div className="flex flex-wrap gap-4 mb-3">
+                  <a
+                    href="https://www.social-harbor.com/docs"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-semibold"
+                    style={{ color: 'hsl(var(--harbor-primary))' }}
+                  >
+                    Read the Harbor guide
+                  </a>
+                  <a
+                    href="mailto:admin@hydra-dynamix.com"
+                    className="text-sm font-semibold"
+                    style={{ color: 'hsl(var(--harbor-primary))' }}
+                  >
+                    Contact Hydra-Dynamix
+                  </a>
+                </div>
                 <a
-                  href="https://github.com/nicholasoxford/harbor"
+                  href="https://github.com/Bakobiibizo/harbor"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 text-sm transition-colors duration-200"
@@ -1720,6 +1755,19 @@ export function SettingsPage() {
                   View on GitHub
                 </a>
               </div>
+            </div>
+          )}
+
+          {activeSection === 'support' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-semibold mb-1">Support</h3>
+                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Review private mentions and report problems to Harbor.
+                </p>
+              </div>
+              <MentionInbox />
+              <BugReportForm />
             </div>
           )}
         </div>
