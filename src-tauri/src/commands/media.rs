@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::commands::NetworkState;
 use crate::db::Database;
-use crate::services::{IdentityService, MediaStorageService, MediaTransferState};
+use crate::services::{ContactsService, IdentityService, MediaStorageService, MediaTransferState};
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +149,7 @@ pub async fn get_media_transfer(
 pub async fn retry_media_transfer(
     media_hash: String,
     media_service: State<'_, Arc<MediaStorageService>>,
+    contacts_service: State<'_, Arc<ContactsService>>,
     network_state: State<'_, NetworkState>,
 ) -> Result<MediaTransferState, String> {
     let existing = media_service
@@ -162,6 +163,13 @@ pub async fn retry_media_transfer(
         .source_peer_id
         .as_deref()
         .ok_or_else(|| "The attachment source is not currently known".to_string())?;
+    let authorized = contacts_service
+        .get_contact(source)
+        .map_err(|error| error.to_string())?
+        .is_some_and(|contact| !contact.is_blocked);
+    if !authorized {
+        return Err("The attachment source is no longer an active contact".to_string());
+    }
     let peer_id = source
         .parse::<libp2p::PeerId>()
         .map_err(|_| "The attachment source is invalid".to_string())?;
@@ -227,8 +235,15 @@ pub async fn preload_missing_media(
     db: State<'_, Arc<Database>>,
     media_service: State<'_, Arc<MediaStorageService>>,
     identity_service: State<'_, Arc<IdentityService>>,
+    contacts_service: State<'_, Arc<ContactsService>>,
     network_state: State<'_, NetworkState>,
 ) -> Result<u32, String> {
+    // A locked profile cannot authorize or sign transfer requests. Avoid
+    // leaking prior UI/network activity across the lock boundary.
+    if !identity_service.is_unlocked() {
+        return Ok(0);
+    }
+
     // Get local peer ID to exclude own posts (our media is already local)
     let local_peer_id = identity_service
         .get_identity()
@@ -244,7 +259,9 @@ pub async fn preload_missing_media(
                         pm.mime_type, pm.file_name, pm.file_size
                  FROM post_media pm
                  JOIN posts p ON pm.post_id = p.post_id
-                 WHERE pm.media_type IN ('image', 'video', 'audio')",
+                 WHERE pm.media_type IN ('image', 'video', 'audio')
+                 ORDER BY pm.id DESC
+                 LIMIT 2048",
             )?;
 
             let mut results = Vec::new();
@@ -269,33 +286,38 @@ pub async fn preload_missing_media(
         })
         .map_err(|e| format!("Failed to query post_media: {}", e))?;
 
-    // Filter out own posts — our media files should already exist locally
-    let all_media = if let Some(ref local_id) = local_peer_id {
-        all_media
-            .into_iter()
-            .filter(|(_, author, ..)| author != local_id)
-            .collect()
-    } else {
-        all_media
-    };
-
-    // Filter to missing media only
-    for (hash, author, media_type, mime_type, file_name, file_size) in &all_media {
-        let _ = media_service.ensure_transfer(
-            hash,
-            Some(author),
-            media_type,
-            Some(mime_type),
-            Some(file_name),
-            (*file_size).try_into().ok(),
-        );
-    }
-
-    let missing: Vec<(String, String)> = all_media
+    let active_contacts: std::collections::HashSet<String> = contacts_service
+        .get_active_contacts()
+        .map_err(|error| error.to_string())?
         .into_iter()
-        .filter(|(hash, ..)| !media_service.has_media(hash))
-        .map(|(hash, author, ..)| (hash, author))
+        .map(|contact| contact.peer_id)
         .collect();
+
+    // One candidate per content hash. Only accepted legacy/active contacts are
+    // eligible; removed, revoked, blocked, community, and stale-profile rows
+    // must never initiate background network activity.
+    let mut missing_by_hash = HashMap::<String, String>::new();
+    for (hash, author, media_type, mime_type, file_name, file_size) in all_media {
+        if local_peer_id.as_deref() == Some(author.as_str()) || !active_contacts.contains(&author) {
+            continue;
+        }
+        let Ok(state) = media_service.ensure_transfer(
+            &hash,
+            Some(&author),
+            &media_type,
+            Some(&mime_type),
+            Some(&file_name),
+            file_size.try_into().ok(),
+        ) else {
+            continue;
+        };
+        if !media_service.has_media(&hash)
+            && matches!(state.status.as_str(), "queued" | "unavailable" | "failed")
+        {
+            missing_by_hash.entry(hash).or_insert(author);
+        }
+    }
+    let missing: Vec<(String, String)> = missing_by_hash.into_iter().collect();
 
     if missing.is_empty() {
         return Ok(0);

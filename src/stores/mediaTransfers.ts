@@ -4,6 +4,8 @@ import type { EnsureMediaTransferInput, MediaTransferState } from '../types';
 
 const MAX_TRACKED_TRANSFERS = 512;
 const pendingEnsures = new Map<string, Promise<MediaTransferState>>();
+const pendingRetries = new Map<string, Promise<void>>();
+let lifecycleGeneration = 0;
 
 interface MediaTransfersStore {
   transfers: Record<string, MediaTransferState>;
@@ -32,8 +34,9 @@ export const useMediaTransfersStore = create<MediaTransfersStore>((set, get) => 
     if (existing) return existing;
     const inFlight = pendingEnsures.get(input.mediaHash);
     if (inFlight) return inFlight;
+    const generation = lifecycleGeneration;
     const request = mediaService.ensureTransfer(input).then((state) => {
-      get().apply(state);
+      if (generation === lifecycleGeneration) get().apply(state);
       return state;
     });
     pendingEnsures.set(input.mediaHash, request);
@@ -45,19 +48,32 @@ export const useMediaTransfersStore = create<MediaTransfersStore>((set, get) => 
   },
 
   retry: async (mediaHash) => {
+    const inFlight = pendingRetries.get(mediaHash);
+    if (inFlight) return inFlight;
+    const generation = lifecycleGeneration;
+    const request = (async () => {
+      try {
+        const state = await mediaService.retryTransfer(mediaHash);
+        if (generation === lifecycleGeneration) get().apply(state);
+      } catch (error) {
+        const state = await mediaService.getTransfer(mediaHash).catch(() => null);
+        if (state && generation === lifecycleGeneration) get().apply(state);
+        throw error;
+      }
+    })();
+    pendingRetries.set(mediaHash, request);
     try {
-      const state = await mediaService.retryTransfer(mediaHash);
-      get().apply(state);
-    } catch (error) {
-      const state = await mediaService.getTransfer(mediaHash).catch(() => null);
-      if (state) get().apply(state);
-      throw error;
+      return await request;
+    } finally {
+      pendingRetries.delete(mediaHash);
     }
   },
 
   apply: (state) => set((current) => ({ transfers: bounded(current.transfers, state) })),
   reset: () => {
+    lifecycleGeneration += 1;
     pendingEnsures.clear();
+    pendingRetries.clear();
     set({ transfers: {} });
   },
 }));

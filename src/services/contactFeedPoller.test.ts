@@ -141,6 +141,22 @@ describe('ContactFeedPoller', () => {
     poller.stop();
   });
 
+  it('re-arms existing schedules when the persisted interval changes', async () => {
+    vi.useFakeTimers();
+    const fetchContact = vi.fn().mockResolvedValue(undefined);
+    const poller = new ContactFeedPoller({ fetchContact, publishRefresh: vi.fn() }, options());
+    poller.update({ ...context([contact('alice')]), intervalMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchContact).toHaveBeenCalledTimes(1);
+
+    poller.update({ ...context([contact('alice')]), intervalMs: 50 });
+    await vi.advanceTimersByTimeAsync(49);
+    expect(fetchContact).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchContact).toHaveBeenCalledTimes(2);
+    poller.stop();
+  });
+
   it('cancels stale publication across lock and profile changes', async () => {
     vi.useFakeTimers();
     const releases = new Map<string, () => void>();

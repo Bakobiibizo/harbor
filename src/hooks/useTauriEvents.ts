@@ -19,6 +19,7 @@ import { feedService } from '../services/feed';
 import { ReactiveRefreshCoordinator } from '../services/reactiveRefresh';
 import { ContactFeedPoller } from '../services/contactFeedPoller';
 import { notifyHarborEvent } from '../services/harborNotifications';
+import { isMediaTransferEventForIdentity } from '../services/mediaTransferEvents';
 import { safePeerLabel } from '../utils/relayName';
 
 /**
@@ -60,13 +61,19 @@ export function useTauriEvents() {
       fetchContact: (peerId) => feedService.fetchContactWall(peerId),
       publishRefresh: (peerId) => coordinator.enqueue({ domains: ['posts'], peerId }),
     });
+    let activeMediaProfileId: string | null = null;
     const reconcileContactFeedPoller = () => {
       const identity = useIdentityStore.getState().state;
       const network = useNetworkStore.getState();
       const contacts = useContactsStore.getState();
       const settings = useSettingsStore.getState();
+      const profileId = identity.status === 'unlocked' ? identity.identity.peerId : null;
+      if (profileId !== activeMediaProfileId) {
+        activeMediaProfileId = profileId;
+        useMediaTransfersStore.getState().reset();
+      }
       contactFeedPoller.update({
-        profileId: identity.status === 'unlocked' ? identity.identity.peerId : null,
+        profileId,
         online:
           network.isRunning &&
           network.status === 'connected' &&
@@ -383,7 +390,11 @@ export function useTauriEvents() {
           break;
 
         case 'media_transfer_changed':
-          useMediaTransfersStore.getState().apply(event.state);
+          if (
+            isMediaTransferEventForIdentity(event.profile_id, useIdentityStore.getState().state)
+          ) {
+            useMediaTransfersStore.getState().apply(event.state);
+          }
           break;
 
         case 'wall_post_deleted_on_relay':

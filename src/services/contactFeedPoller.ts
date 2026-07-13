@@ -76,11 +76,13 @@ export class ContactFeedPoller {
 
   update(context: ContactFeedPollContext): void {
     const contacts = eligibleContactIds(context.contacts, context.requests);
+    const intervalMs = Math.max(this.minIntervalMs, context.intervalMs);
     const lifecycleKey = `${context.profileId ?? ''}:${context.online}:${context.enabled}`;
     const authorizationKey = contacts.join('\u0000');
     const previousLifecycle = this.lifecycleKey;
     const previousAuthorization = this.authorizationKey;
-    this.context = { ...context, intervalMs: Math.max(this.minIntervalMs, context.intervalMs) };
+    const intervalChanged = this.context !== null && this.context.intervalMs !== intervalMs;
+    this.context = { ...context, intervalMs };
     this.lifecycleKey = lifecycleKey;
     this.authorizationKey = authorizationKey;
 
@@ -102,6 +104,13 @@ export class ContactFeedPoller {
         if (!authorized.has(peerId)) this.schedules.delete(peerId);
       }
       this.seedSchedules(contacts, this.now() + this.random() * this.startupJitterMs);
+      this.scheduleNext(true);
+      return;
+    }
+
+    if (intervalChanged) {
+      const dueAt = this.now() + this.jittered(intervalMs);
+      for (const schedule of this.schedules.values()) schedule.dueAt = dueAt;
       this.scheduleNext(true);
       return;
     }

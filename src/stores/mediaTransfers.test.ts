@@ -56,11 +56,39 @@ describe('media transfer store', () => {
     expect(useMediaTransfersStore.getState().transfers[input.mediaHash].status).toBe('ready');
   });
 
+  it('deduplicates concurrent retries for the same attachment', async () => {
+    let release!: (value: MediaTransferState) => void;
+    vi.mocked(mediaService.retryTransfer).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const first = useMediaTransfersStore.getState().retry(input.mediaHash);
+    const second = useMediaTransfersStore.getState().retry(input.mediaHash);
+    expect(mediaService.retryTransfer).toHaveBeenCalledTimes(1);
+    release(state({ status: 'retrying' }));
+    await Promise.all([first, second]);
+  });
+
+  it('does not repopulate transfer state from a promise completed after reset', async () => {
+    let release!: (value: MediaTransferState) => void;
+    vi.mocked(mediaService.ensureTransfer).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const pending = useMediaTransfersStore.getState().ensure(input);
+    useMediaTransfersStore.getState().reset();
+    release(state());
+    await pending;
+    expect(useMediaTransfersStore.getState().transfers).toEqual({});
+  });
+
   it('bounds lifecycle memory to the most recent 512 attachments', () => {
     for (let index = 0; index < 520; index += 1) {
-      useMediaTransfersStore.getState().apply(
-        state({ mediaHash: index.toString(16).padStart(64, '0'), updatedAt: index }),
-      );
+      useMediaTransfersStore
+        .getState()
+        .apply(state({ mediaHash: index.toString(16).padStart(64, '0'), updatedAt: index }));
     }
     const transfers = useMediaTransfersStore.getState().transfers;
     expect(Object.keys(transfers)).toHaveLength(512);

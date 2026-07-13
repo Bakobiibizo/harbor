@@ -179,7 +179,10 @@ pub enum NetworkEvent {
     /// Media was fetched from a peer and stored locally
     MediaFetched { peer_id: String, media_hash: String },
     /// Canonical per-hash attachment lifecycle update for internal UI state.
-    MediaTransferChanged { state: MediaTransferState },
+    MediaTransferChanged {
+        profile_id: String,
+        state: MediaTransferState,
+    },
     /// A verified call signaling message was received from a peer
     CallSignalingReceived {
         peer_id: String,
@@ -433,5 +436,29 @@ mod tests {
         assert_eq!(json["status"], "review");
         assert!(json.get("public_key").is_none());
         assert!(json.get("x25519_public").is_none());
+    }
+
+    #[test]
+    fn media_transfer_event_is_correlated_to_its_profile() {
+        let event = NetworkEvent::MediaTransferChanged {
+            profile_id: "peer-a".into(),
+            state: crate::services::MediaTransferState {
+                media_hash: "a".repeat(64),
+                source_peer_id: Some("peer-b".into()),
+                media_type: "image".into(),
+                mime_type: Some("image/png".into()),
+                file_name: None,
+                total_bytes: Some(10),
+                bytes_received: 5,
+                status: "transferring".into(),
+                attempt_count: 1,
+                error_code: None,
+                error_message: None,
+                updated_at: 1,
+            },
+        };
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["type"], "media_transfer_changed");
+        assert_eq!(json["profile_id"], "peer-a");
     }
 }

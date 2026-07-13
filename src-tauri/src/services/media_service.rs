@@ -195,15 +195,18 @@ impl MediaStorageService {
                         total_bytes = COALESCE(excluded.total_bytes, total_bytes),
                         status = CASE
                             WHEN excluded.status = 'ready' THEN 'ready'
-                            ELSE status
+                            WHEN media_transfers.status = 'ready' THEN 'queued'
+                            ELSE media_transfers.status
                         END,
                         bytes_received = CASE
                             WHEN excluded.status = 'ready' THEN COALESCE(excluded.total_bytes, bytes_received)
-                            ELSE bytes_received
+                            WHEN media_transfers.status = 'ready' THEN 0
+                            ELSE media_transfers.bytes_received
                         END,
                         updated_at = CASE
-                            WHEN excluded.status = 'ready' THEN excluded.updated_at
-                            ELSE updated_at
+                            WHEN excluded.status = 'ready' OR media_transfers.status = 'ready'
+                                THEN excluded.updated_at
+                            ELSE media_transfers.updated_at
                         END",
                     rusqlite::params![
                         hash,
@@ -708,5 +711,28 @@ mod tests {
         assert_eq!(state.status, "queued");
         assert_eq!(state.bytes_received, 0);
         assert_eq!(state.error_code.as_deref(), Some("restart"));
+    }
+
+    #[test]
+    fn missing_file_downgrades_stale_ready_lifecycle_for_refetch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db).unwrap();
+        let hash = service.store_media(b"attachment", "image/png").unwrap();
+        let path = service.get_media_path(&hash).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        let state = service
+            .ensure_transfer(
+                &hash,
+                Some("remote-peer"),
+                "image",
+                Some("image/png"),
+                Some("attachment.png"),
+                Some(10),
+            )
+            .unwrap();
+        assert_eq!(state.status, "queued");
+        assert_eq!(state.bytes_received, 0);
     }
 }
