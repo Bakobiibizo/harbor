@@ -14,6 +14,7 @@ use super::protocols::{
     BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL,
     SIGNALING_PROTOCOL,
 };
+use crate::services::PermissionGrantMessage;
 
 // Duration is used in ping configuration
 
@@ -63,6 +64,9 @@ pub struct IdentityExchangeRequest {
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
     pub timestamp: i64,
+    /// Signed grants issued to the recipient as part of mutual contact acceptance.
+    #[serde(default)]
+    pub permission_grants: Vec<PermissionGrantMessage>,
     pub signature: Vec<u8>,
 }
 
@@ -79,6 +83,9 @@ pub struct IdentityExchangeResponse {
     pub avatar_hash: Option<String>,
     pub bio: Option<String>,
     pub timestamp: i64,
+    /// Signed grants issued to the recipient as part of mutual contact acceptance.
+    #[serde(default)]
+    pub permission_grants: Vec<PermissionGrantMessage>,
     pub signature: Vec<u8>,
 }
 

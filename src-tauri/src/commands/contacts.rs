@@ -8,9 +8,8 @@ use tauri::State;
 use tracing::info;
 
 use crate::commands::network::NetworkState;
-use crate::db::Capability;
 use crate::error::AppError;
-use crate::services::{ContactsService, PermissionsService};
+use crate::services::ContactsService;
 
 /// Contact info for the frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,7 +274,6 @@ pub async fn request_peer_identity(
 pub async fn respond_contact_request(
     network: State<'_, NetworkState>,
     contacts_service: State<'_, Arc<ContactsService>>,
-    permissions_service: State<'_, Arc<PermissionsService>>,
     request_id: String,
     decision: String,
 ) -> Result<(), AppError> {
@@ -295,7 +293,6 @@ pub async fn respond_contact_request(
 
     if decision == "accepted" {
         contacts_service.promote_contact_request(&request_id)?;
-        permissions_service.create_permission_grant(&request.peer_id, Capability::Chat, None)?;
     }
     contacts_service.update_contact_request(
         &request_id,

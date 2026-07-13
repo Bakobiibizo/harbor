@@ -1,6 +1,7 @@
 //! Permissions service for managing capability grants
 
 use ed25519_dalek::VerifyingKey;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -33,7 +34,7 @@ pub struct PermissionRequestMessage {
 }
 
 /// A permission grant message
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionGrantMessage {
     pub grant_id: String,
     pub issuer_peer_id: String,
@@ -329,6 +330,35 @@ impl PermissionsService {
         )
         .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
+        let issuer_peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)?;
+        if issuer_peer_id != grant.issuer_peer_id {
+            return Err(AppError::Unauthorized(
+                "Permission grant issuer does not match its signing key".to_string(),
+            ));
+        }
+        let local_peer_id = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?
+            .peer_id;
+        if grant.subject_peer_id != local_peer_id {
+            return Err(AppError::Unauthorized(
+                "Permission grant is addressed to another peer".to_string(),
+            ));
+        }
+        if Capability::from_str(&grant.capability).is_none() {
+            return Err(AppError::Validation(format!(
+                "Unknown permission capability: {}",
+                grant.capability
+            )));
+        }
+        if grant.payload_cbor != signable.signable_bytes()? {
+            return Err(AppError::Crypto(
+                "Permission grant payload does not match signed fields".to_string(),
+            ));
+        }
+
         if !verify(&verifying_key, &signable, &grant.signature)? {
             return Err(AppError::Crypto("Invalid grant signature".to_string()));
         }
@@ -548,6 +578,7 @@ mod tests {
     use crate::models::{
         domain, CapabilityGrantRecord, CapabilityRevocationRecord, CreateIdentityRequest,
     };
+    use base64::Engine;
 
     fn create_test_service() -> (Arc<Database>, Arc<IdentityService>, PermissionsService) {
         let db = Arc::new(Database::in_memory().unwrap());
@@ -706,5 +737,92 @@ mod tests {
         assert!(!permissions_service
             .peer_has_capability("12D3KooWSubject", Capability::Chat)
             .unwrap());
+    }
+
+    #[test]
+    fn signed_wall_read_grant_survives_recipient_restart() {
+        let (_, issuer_identity, issuer_permissions) = create_test_service();
+        let temp = tempfile::tempdir().unwrap();
+        let recipient_path = temp.path().join("recipient.db");
+
+        issuer_identity
+            .create_identity(CreateIdentityRequest {
+                display_name: "Issuer".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let issuer_info = issuer_identity.get_identity_info().unwrap().unwrap();
+
+        let recipient_peer_id = {
+            let recipient_db = Arc::new(Database::new(recipient_path.clone()).unwrap());
+            let recipient_identity = Arc::new(IdentityService::new(recipient_db.clone()));
+            let recipient_permissions =
+                PermissionsService::new(recipient_db, recipient_identity.clone());
+            let recipient_info = recipient_identity
+                .create_identity(CreateIdentityRequest {
+                    display_name: "Recipient".into(),
+                    passphrase: "password123".into(),
+                    bio: None,
+                    passphrase_hint: None,
+                })
+                .unwrap();
+            let grant = issuer_permissions
+                .create_permission_grant(&recipient_info.peer_id, Capability::WallRead, None)
+                .unwrap();
+            let issuer_public_key = base64::engine::general_purpose::STANDARD
+                .decode(&issuer_info.public_key)
+                .unwrap();
+            recipient_permissions
+                .process_incoming_grant(&grant, &issuer_public_key)
+                .unwrap();
+            assert!(recipient_permissions
+                .we_have_capability(&issuer_info.peer_id, Capability::WallRead)
+                .unwrap());
+            recipient_info.peer_id
+        };
+
+        let reopened_db = Arc::new(Database::new(recipient_path).unwrap());
+        let reopened_identity = Arc::new(IdentityService::new(reopened_db.clone()));
+        let reopened_permissions = PermissionsService::new(reopened_db, reopened_identity);
+        assert!(reopened_permissions
+            .we_have_capability(&issuer_info.peer_id, Capability::WallRead)
+            .unwrap());
+        assert!(!recipient_peer_id.is_empty());
+    }
+
+    #[test]
+    fn incoming_grant_for_another_recipient_is_rejected() {
+        let (_, issuer_identity, issuer_permissions) = create_test_service();
+        let (_, recipient_identity, recipient_permissions) = create_test_service();
+        issuer_identity
+            .create_identity(CreateIdentityRequest {
+                display_name: "Issuer".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        recipient_identity
+            .create_identity(CreateIdentityRequest {
+                display_name: "Recipient".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let grant = issuer_permissions
+            .create_permission_grant("12D3KooWSomeoneElse", Capability::WallRead, None)
+            .unwrap();
+        let issuer_info = issuer_identity.get_identity_info().unwrap().unwrap();
+        let issuer_public_key = base64::engine::general_purpose::STANDARD
+            .decode(issuer_info.public_key)
+            .unwrap();
+
+        assert!(matches!(
+            recipient_permissions.process_incoming_grant(&grant, &issuer_public_key),
+            Err(AppError::Unauthorized(message)) if message.contains("another peer")
+        ));
     }
 }

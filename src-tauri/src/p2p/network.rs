@@ -88,6 +88,15 @@ fn identity_request_signing_bytes(request: &IdentityExchangeRequest) -> Result<V
     Ok(bytes)
 }
 
+fn identity_response_signing_bytes(response: &IdentityExchangeResponse) -> Result<Vec<u8>> {
+    let mut unsigned = response.clone();
+    unsigned.signature.clear();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&unsigned, &mut bytes)
+        .map_err(|error| AppError::Serialization(error.to_string()))?;
+    Ok(bytes)
+}
+
 fn verify_identity_request(peer: PeerId, request: &IdentityExchangeRequest, now: i64) -> bool {
     if request.requester_peer_id != peer.to_string()
         || uuid::Uuid::parse_str(&request.request_id).is_err()
@@ -1093,6 +1102,7 @@ impl NetworkService {
         &self,
         request_id: String,
         action: String,
+        subject_peer_id: &str,
     ) -> Result<IdentityExchangeRequest> {
         let info = self
             .identity_service
@@ -1101,6 +1111,11 @@ impl NetworkService {
 
         let timestamp = chrono::Utc::now().timestamp();
         let engine = base64::engine::general_purpose::STANDARD;
+        let permission_grants = if action == "accepted" {
+            self.create_contact_acceptance_grants(subject_peer_id)?
+        } else {
+            Vec::new()
+        };
         let mut request = IdentityExchangeRequest {
             request_id,
             action,
@@ -1115,6 +1130,7 @@ impl NetworkService {
             avatar_hash: info.avatar_hash,
             bio: info.bio,
             timestamp,
+            permission_grants,
             signature: Vec::new(),
         };
         let bytes = identity_request_signing_bytes(&request)?;
@@ -1126,17 +1142,20 @@ impl NetworkService {
         &self,
         request_id: String,
         status: String,
+        subject_peer_id: &str,
     ) -> Result<IdentityExchangeResponse> {
         let info = self
             .identity_service
             .get_identity_info()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
         let timestamp = chrono::Utc::now().timestamp();
-        let signature = self
-            .identity_service
-            .sign_raw(format!("{}:{}:{}", info.peer_id, info.display_name, timestamp).as_bytes())?;
         let engine = base64::engine::general_purpose::STANDARD;
-        Ok(IdentityExchangeResponse {
+        let permission_grants = if status == "accepted" {
+            self.create_contact_acceptance_grants(subject_peer_id)?
+        } else {
+            Vec::new()
+        };
+        let mut response = IdentityExchangeResponse {
             request_id,
             status,
             peer_id: info.peer_id,
@@ -1150,8 +1169,60 @@ impl NetworkService {
             avatar_hash: info.avatar_hash,
             bio: info.bio,
             timestamp,
-            signature,
-        })
+            permission_grants,
+            signature: Vec::new(),
+        };
+        response.signature = self
+            .identity_service
+            .sign_raw(&identity_response_signing_bytes(&response)?)?;
+        Ok(response)
+    }
+
+    fn create_contact_acceptance_grants(
+        &self,
+        subject_peer_id: &str,
+    ) -> Result<Vec<crate::services::PermissionGrantMessage>> {
+        let Some(permissions) = self.permissions_service.as_ref() else {
+            return Err(AppError::Internal(
+                "Permissions service unavailable during contact acceptance".into(),
+            ));
+        };
+        [Capability::Chat, Capability::WallRead]
+            .into_iter()
+            .map(|capability| {
+                permissions.create_permission_grant(subject_peer_id, capability, None)
+            })
+            .collect()
+    }
+
+    fn process_contact_acceptance_grants(
+        &self,
+        expected_issuer: &str,
+        issuer_public_key: &[u8],
+        grants: &[crate::services::PermissionGrantMessage],
+    ) -> Result<()> {
+        let Some(permissions) = self.permissions_service.as_ref() else {
+            return Err(AppError::Internal(
+                "Permissions service unavailable during contact acceptance".into(),
+            ));
+        };
+        for grant in grants {
+            if grant.issuer_peer_id != expected_issuer {
+                return Err(AppError::Unauthorized(
+                    "Contact acceptance contained a grant from another issuer".into(),
+                ));
+            }
+            permissions.process_incoming_grant(grant, issuer_public_key)?;
+        }
+        for capability in [Capability::Chat, Capability::WallRead] {
+            if !permissions.we_have_capability(expected_issuer, capability)? {
+                return Err(AppError::PermissionDenied(format!(
+                    "Contact acceptance is missing signed {} capability",
+                    capability.as_str()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Start listening on configured addresses
@@ -3510,6 +3581,14 @@ impl NetworkService {
                 "review"
             }
             "accepted" => {
+                if let Err(error) = self.process_contact_acceptance_grants(
+                    &request.requester_peer_id,
+                    &request.public_key,
+                    &request.permission_grants,
+                ) {
+                    warn!("Rejected contact acceptance grants from {peer}: {error}");
+                    return;
+                }
                 if let Ok(Some(existing)) =
                     service.contact_request_for_peer(&request.requester_peer_id, "outgoing")
                 {
@@ -3536,13 +3615,6 @@ impl NetworkService {
                             now,
                         );
                         let _ = service.promote_contact_request(&existing.request_id);
-                        if let Some(ref permissions_service) = self.permissions_service {
-                            let _ = permissions_service.create_permission_grant(
-                                &request.requester_peer_id,
-                                Capability::Chat,
-                                None,
-                            );
-                        }
                         let _ = self
                             .event_tx
                             .send(NetworkEvent::ContactAdded {
@@ -3598,7 +3670,11 @@ impl NetworkService {
                 .await;
         }
 
-        match self.create_identity_response(request.request_id, status.into()) {
+        match self.create_identity_response(
+            request.request_id,
+            status.into(),
+            &request.requester_peer_id,
+        ) {
             Ok(response) => {
                 if let Err(error) = self
                     .swarm
@@ -3704,16 +3780,9 @@ impl NetworkService {
                 return;
             }
 
-            // Step 3: Verify the Ed25519 signature on the identity response.
-            // The sender signs the string "{peer_id}:{display_name}:{timestamp}"
-            // using their Ed25519 signing key. We reconstruct that payload and
-            // verify against the public key included in the response.
+            // Step 3: Verify the entire identity response, including its status
+            // and any capability grants, against the bound Ed25519 public key.
             let signature_is_valid = {
-                let signed_payload = format!(
-                    "{}:{}:{}",
-                    response.peer_id, response.display_name, response.timestamp
-                );
-
                 let signature = match ed25519_dalek::Signature::from_slice(&response.signature) {
                     Ok(sig) => sig,
                     Err(error) => {
@@ -3727,7 +3796,16 @@ impl NetworkService {
 
                 use ed25519_dalek::Verifier;
                 verifying_key
-                    .verify(signed_payload.as_bytes(), &signature)
+                    .verify(
+                        &match identity_response_signing_bytes(&response) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                warn!("Could not encode identity response from {peer}: {error}");
+                                return;
+                            }
+                        },
+                        &signature,
+                    )
                     .is_ok()
             };
 
@@ -3762,6 +3840,14 @@ impl NetworkService {
                     );
                 }
                 "accepted" => {
+                    if let Err(error) = self.process_contact_acceptance_grants(
+                        &response.peer_id,
+                        &response.public_key,
+                        &response.permission_grants,
+                    ) {
+                        warn!("Rejected contact acceptance grants from {peer}: {error}");
+                        return;
+                    }
                     let _ = contacts_service.update_contact_request(
                         &request_id,
                         "accepted",
@@ -3772,13 +3858,6 @@ impl NetworkService {
                     // The incoming request was already promoted when the user accepted it.
                     // Promotion here is idempotent and covers an accepted replay after restart.
                     let _ = contacts_service.promote_contact_request(&request_id);
-                    if let Some(ref permissions_service) = self.permissions_service {
-                        let _ = permissions_service.create_permission_grant(
-                            &response.peer_id,
-                            Capability::Chat,
-                            None,
-                        );
-                    }
                     let _ = self
                         .event_tx
                         .send(NetworkEvent::ContactAdded {
@@ -4202,7 +4281,11 @@ impl NetworkService {
                 action,
             } => {
                 // Create identity request
-                match self.create_identity_request(request_id.clone(), action.clone()) {
+                match self.create_identity_request(
+                    request_id.clone(),
+                    action.clone(),
+                    &peer_id.to_string(),
+                ) {
                     Ok(request) => {
                         let outbound_id = self
                             .swarm
@@ -5078,7 +5161,7 @@ mod introduction_ack_tests {
 #[cfg(test)]
 mod contact_request_protocol_tests {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::{Signer, SigningKey, Verifier};
 
     fn signed_request(action: &str, now: i64) -> (PeerId, IdentityExchangeRequest) {
         let key = SigningKey::from_bytes(&[42; 32]);
@@ -5096,6 +5179,7 @@ mod contact_request_protocol_tests {
             avatar_hash: None,
             bio: None,
             timestamp: now,
+            permission_grants: Vec::new(),
             signature: Vec::new(),
         };
         request.signature = key
@@ -5116,5 +5200,47 @@ mod contact_request_protocol_tests {
         let mut stale = request;
         stale.timestamp = now - 301;
         assert!(!verify_identity_request(peer, &stale, now));
+    }
+
+    #[test]
+    fn signed_response_status_is_bound_and_tamper_evident() {
+        let key = SigningKey::from_bytes(&[43; 32]);
+        let peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&key.verifying_key())
+                .unwrap();
+        let mut response = IdentityExchangeResponse {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            status: "review".into(),
+            peer_id,
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            x25519_public: vec![8; 32],
+            display_name: "Bob".into(),
+            avatar_hash: None,
+            bio: None,
+            timestamp: 10_000,
+            permission_grants: Vec::new(),
+            signature: Vec::new(),
+        };
+        response.signature = key
+            .sign(&identity_response_signing_bytes(&response).unwrap())
+            .to_bytes()
+            .to_vec();
+        let signature = ed25519_dalek::Signature::from_slice(&response.signature).unwrap();
+        assert!(key
+            .verifying_key()
+            .verify(
+                &identity_response_signing_bytes(&response).unwrap(),
+                &signature
+            )
+            .is_ok());
+
+        response.status = "accepted".into();
+        assert!(key
+            .verifying_key()
+            .verify(
+                &identity_response_signing_bytes(&response).unwrap(),
+                &signature
+            )
+            .is_err());
     }
 }
