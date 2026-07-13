@@ -2,8 +2,11 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { mentionsService } from '../../services';
 import type { MentionReceipt } from '../../types';
+import { useContactsStore } from '../../stores';
+import { safePeerLabel } from '../../utils/relayName';
 
 export function MentionInbox() {
+  const contacts = useContactsStore((state) => state.contacts);
   const [items, setItems] = useState<MentionReceipt[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
@@ -44,7 +47,13 @@ export function MentionInbox() {
           className="rounded-lg p-4"
           style={{ border: '1px solid hsl(var(--harbor-border-subtle))' }}
         >
-          <strong>{item.qualifiedName}</strong>
+          <strong>
+            {safePeerLabel(
+              item.senderPeerId,
+              contacts.find((contact) => contact.peerId === item.senderPeerId)
+                ?.verifiedQualifiedName,
+            )}
+          </strong>
           <p className="text-sm my-2">{item.preview}</p>
           <div className="flex flex-wrap gap-2">
             <button

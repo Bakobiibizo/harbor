@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mentionsService } from '../../services';
+import { useContactsStore } from '../../stores';
 import { MentionInbox } from './MentionInbox';
 vi.mock('../../services', () => ({ mentionsService: { listPending: vi.fn(), review: vi.fn() } }));
 const receipt = {
@@ -16,6 +17,27 @@ const receipt = {
 describe('MentionInbox', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useContactsStore.setState({
+      contacts: [
+        {
+          id: 1,
+          peerId: 'peer',
+          publicKey: 'public-key',
+          x25519Public: 'x25519-public',
+          displayName: 'Saved alias that must not be trusted',
+          verifiedQualifiedName: '@alice@relay.test',
+          avatarHash: null,
+          bio: null,
+          isBlocked: false,
+          trustLevel: 1,
+          lastSeenAt: null,
+          addedAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
     vi.mocked(mentionsService.listPending).mockResolvedValue([receipt]);
     vi.mocked(mentionsService.review).mockResolvedValue();
   });
@@ -40,5 +62,21 @@ describe('MentionInbox', () => {
     render(<MentionInbox />);
     fireEvent.click(await screen.findByRole('button', { name: 'Decline' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('review failed');
+  });
+
+  it('does not expose a sender key or saved alias when their name is unverified', async () => {
+    useContactsStore.setState({
+      contacts: [
+        {
+          ...useContactsStore.getState().contacts[0],
+          verifiedQualifiedName: null,
+        },
+      ],
+    });
+    render(<MentionInbox />);
+
+    expect(await screen.findByText('Unverified Harbor user')).toBeInTheDocument();
+    expect(screen.queryByText('Saved alias that must not be trusted')).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('peer');
   });
 });

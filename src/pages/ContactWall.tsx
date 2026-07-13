@@ -25,13 +25,11 @@ export function publicOnlyText(canReadContactsOnly: boolean | null): string {
 interface ContactWallPageProps {
   peerIdOverride?: string;
   verifiedQualifiedNameOverride?: string;
-  hidePeerId?: boolean;
 }
 
 export function ContactWallPage({
   peerIdOverride,
   verifiedQualifiedNameOverride,
-  hidePeerId = false,
 }: ContactWallPageProps = {}) {
   const { peerId: routePeerId } = useParams<{ peerId: string }>();
   const peerId = peerIdOverride || routePeerId;
@@ -198,15 +196,6 @@ export function ContactWallPage({
               >
                 {displayName}'s Wall
               </h1>
-              {!hidePeerId && (
-                <p
-                  className="text-xs font-mono truncate mt-1"
-                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                  title={authorPeerId}
-                >
-                  {authorPeerId}
-                </p>
-              )}
               <p className="text-sm mt-2" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {publicOnlyText(canReadContactsOnly)}
               </p>
@@ -308,7 +297,7 @@ export function ContactWallPage({
                         className="font-semibold text-sm truncate"
                         style={{ color: 'hsl(var(--harbor-text-primary))' }}
                       >
-                        {item.authorDisplayName || displayName}
+                        {safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName)}
                       </p>
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                         {formatDate(new Date(item.createdAt * 1000))} ·{' '}
@@ -403,7 +392,7 @@ export function ContactWallPage({
                                 className="text-xs font-medium"
                                 style={{ color: 'hsl(var(--harbor-text-secondary))' }}
                               >
-                                {comment.authorName}
+                                {safePeerLabel(comment.authorPeerId, comment.authorName)}
                               </p>
                               <p
                                 className="text-sm mt-1"

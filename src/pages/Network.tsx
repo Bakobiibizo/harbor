@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
-import { safePeerLabel } from '../utils/relayName';
+import { isVerifiedQualifiedName, safePeerLabel } from '../utils/relayName';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
 import { contactsService } from '../services/contacts';
 import * as networkService from '../services/network';
@@ -26,89 +26,6 @@ import {
 
 // Change to 'https://social-harbor.com' for production
 const HARBOR_SITE_URL = 'https://social-harbor.com';
-
-// Adjectives and animals for generating human-friendly peer names
-const ADJECTIVES = [
-  'Swift',
-  'Brave',
-  'Calm',
-  'Clever',
-  'Eager',
-  'Gentle',
-  'Happy',
-  'Jolly',
-  'Kind',
-  'Lively',
-  'Merry',
-  'Noble',
-  'Proud',
-  'Quick',
-  'Quiet',
-  'Sleek',
-  'Smart',
-  'Sunny',
-  'Warm',
-  'Wise',
-  'Bold',
-  'Bright',
-  'Cool',
-  'Crisp',
-  'Dapper',
-  'Fresh',
-  'Grand',
-  'Lucky',
-  'Neat',
-  'Sharp',
-  'Vivid',
-  'Witty',
-];
-
-const ANIMALS = [
-  'Falcon',
-  'Wolf',
-  'Bear',
-  'Eagle',
-  'Hawk',
-  'Lion',
-  'Tiger',
-  'Otter',
-  'Fox',
-  'Deer',
-  'Owl',
-  'Raven',
-  'Swan',
-  'Crane',
-  'Heron',
-  'Panda',
-  'Koala',
-  'Dolphin',
-  'Whale',
-  'Seal',
-  'Lynx',
-  'Badger',
-  'Hare',
-  'Finch',
-  'Robin',
-  'Sparrow',
-  'Jay',
-  'Wren',
-  'Lark',
-  'Dove',
-  'Elk',
-  'Moose',
-];
-
-function getPeerFriendlyName(peerId: string): string {
-  let hash = 0;
-  for (let characterIndex = 0; characterIndex < peerId.length; characterIndex++) {
-    const charCode = peerId.charCodeAt(characterIndex);
-    hash = (hash << 5) - hash + charCode;
-    hash = hash & hash;
-  }
-  const adjIndex = Math.abs(hash) % ADJECTIVES.length;
-  const animalIndex = Math.abs(hash >> 8) % ANIMALS.length;
-  return `${ADJECTIVES[adjIndex]} ${ANIMALS[animalIndex]}`;
-}
 
 function getPeerColor(peerId: string): string {
   const colors = [
@@ -403,12 +320,11 @@ export function NetworkPage() {
   const filteredPeers = connectedPeers.filter((peer) => {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
-    const friendlyName = getPeerFriendlyName(peer.peerId).toLowerCase();
-    const contactName = contacts.find((contact) => contact.peerId === peer.peerId)
-      ? safePeerLabel(peer.peerId).toLowerCase()
+    const contact = contacts.find((item) => item.peerId === peer.peerId);
+    const contactName = contact
+      ? safePeerLabel(contact.peerId, contact.verifiedQualifiedName).toLowerCase()
       : '';
     return (
-      friendlyName.includes(query) ||
       contactName.includes(query) ||
       peer.peerId.toLowerCase().includes(query) ||
       peer.addresses.some((addr) => addr.toLowerCase().includes(query))
@@ -662,12 +578,12 @@ export function NetworkPage() {
                     >
                       Connected to Harbor Relay
                     </p>
-                    <code
-                      className="text-xs break-all font-mono block mt-1"
+                    <span
+                      className="text-xs block mt-1"
                       style={{ color: 'hsl(var(--harbor-success) / 0.8)' }}
                     >
-                      {stats.relayAddresses[0]}
-                    </code>
+                      Secure relay route active
+                    </span>
                   </div>
                   <CopyButton text={stats.relayAddresses[0]} label="Relay address copied!" />
                 </div>
@@ -820,12 +736,12 @@ export function NetworkPage() {
                       className="w-2 h-2 rounded-full animate-pulse flex-shrink-0"
                       style={{ background: 'hsl(var(--harbor-success))' }}
                     />
-                    <code
-                      className="text-xs flex-1 break-all font-mono"
+                    <span
+                      className="text-xs flex-1"
                       style={{ color: 'hsl(var(--harbor-success))' }}
                     >
-                      {shareableContactString}
-                    </code>
+                      Private contact invitation ready
+                    </span>
                     <CopyButton
                       text={shareableContactString}
                       label="Contact link copied! Share this with your contact."
@@ -873,13 +789,12 @@ export function NetworkPage() {
                       className="w-2 h-2 rounded-full flex-shrink-0"
                       style={{ background: 'hsl(var(--harbor-warning))' }}
                     />
-                    <code
-                      className="text-xs flex-1 break-all font-mono"
+                    <span
+                      className="text-xs flex-1"
                       style={{ color: 'hsl(var(--harbor-warning))' }}
                     >
-                      {circuitAddress}
-                    </code>
-                    <CopyButton text={circuitAddress} label="Address copied (legacy format)" />
+                      Preparing secure contact invitation
+                    </span>
                   </div>
                   <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     Generating shareable contact link...
@@ -1296,7 +1211,7 @@ export function NetworkPage() {
                   <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     {searchQuery
                       ? 'Try a different search term'
-                      : 'Add contacts by connecting to peers or using their Peer ID'}
+                      : 'Add contacts using a Harbor link or a verified Harbor name'}
                   </p>
                 </div>
               ) : (
@@ -1326,11 +1241,10 @@ export function NetworkPage() {
                           {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
                         </p>
                         <p
-                          className="text-xs font-mono truncate"
+                          className="text-xs"
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                          title={contact.peerId}
                         >
-                          {contact.peerId.slice(0, 12)}...{contact.peerId.slice(-6)}
+                          {contact.verifiedQualifiedName ? 'Verified name' : 'Name not verified'}
                         </p>
                       </div>
                       {contact.bio && (
@@ -1428,7 +1342,7 @@ function PeerRow({
   onAction: () => Promise<void>;
   actionDisabled?: boolean;
 }) {
-  const friendlyName = displayName ?? getPeerFriendlyName(peerId);
+  const friendlyName = displayName ?? safePeerLabel(peerId);
   const avatarColor = getPeerColor(peerId);
   const initials = friendlyName
     .split(' ')
@@ -1452,12 +1366,8 @@ function PeerRow({
         <p className="font-medium text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
           {friendlyName}
         </p>
-        <p
-          className="text-xs font-mono truncate"
-          style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          title={peerId}
-        >
-          {peerId.slice(0, 12)}...{peerId.slice(-6)}
+        <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+          {isVerifiedQualifiedName(displayName) ? 'Verified name' : 'Identity not verified'}
         </p>
       </div>
 

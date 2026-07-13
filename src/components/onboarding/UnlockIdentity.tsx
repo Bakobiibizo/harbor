@@ -149,10 +149,10 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
                     {safeIdentityLabel(identity)}
                   </p>
                   <p
-                    className="text-xs truncate font-mono"
+                    className="text-xs truncate"
                     style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                   >
-                    {identity.peerId.slice(0, 12)}...{identity.peerId.slice(-8)}
+                    Saved securely on this device
                   </p>
                 </div>
               </div>

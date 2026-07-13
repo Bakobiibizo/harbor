@@ -19,6 +19,7 @@ import {
   type MediaPermissionResult,
   type MediaPermissionState,
 } from '../services/mediaPermissions';
+import { safeIdentityLabel } from '../utils/relayName';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -170,7 +171,7 @@ function PasswordInput({
 
 export function SettingsPage() {
   const installedVersion = useAppVersion();
-  const { state, updateDisplayName, updateBio } = useIdentityStore();
+  const { state, updateBio } = useIdentityStore();
   const {
     showReadReceipts,
     showOnlineStatus,
@@ -191,7 +192,6 @@ export function SettingsPage() {
   const [activeSection, setActiveSection] = useState<string>('profile');
 
   // Profile edit state
-  const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -239,7 +239,6 @@ export function SettingsPage() {
   // Initialize form values when identity changes
   useEffect(() => {
     if (identity) {
-      setDisplayName(identity.displayName);
       setBio(identity.bio || '');
     }
   }, [identity]);
@@ -281,10 +280,12 @@ export function SettingsPage() {
     }
   };
 
-  const handleCopyPeerId = () => {
-    if (identity) {
-      navigator.clipboard.writeText(identity.peerId);
-      toast.success('Peer ID copied to clipboard!');
+  const handleCopyHarborName = () => {
+    if (identity?.relayNameVerified && identity.relayNameClaim) {
+      navigator.clipboard.writeText(safeIdentityLabel(identity));
+      toast.success('Harbor name copied to clipboard!');
+    } else {
+      toast.error('Claim a verified Harbor name before sharing this account.');
     }
   };
 
@@ -292,12 +293,7 @@ export function SettingsPage() {
     if (!identity) return;
 
     try {
-      const trimmedName = displayName.trim() || identity.displayName;
       const trimmedBio = bio.trim() || null;
-
-      if (trimmedName !== identity.displayName) {
-        await updateDisplayName(trimmedName);
-      }
 
       if (trimmedBio !== identity.bio) {
         await updateBio(trimmedBio);
@@ -742,7 +738,7 @@ export function SettingsPage() {
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        getInitials(identity.displayName)
+                        getInitials(safeIdentityLabel(identity))
                       )}
                     </div>
                   )}
@@ -802,17 +798,11 @@ export function SettingsPage() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  {identity?.relayNameVerified
-                    ? 'Verified Harbor name'
-                    : 'Legacy name (unverified)'}
+                  Verified Harbor name
                 </label>
                 <input
                   type="text"
-                  value={
-                    identity?.relayNameVerified && identity.relayNameClaim
-                      ? `@${identity.relayNameClaim.request.localName}@${identity.relayNameClaim.request.relay}`
-                      : displayName
-                  }
+                  value={identity ? safeIdentityLabel(identity) : ''}
                   disabled
                   className="w-full px-4 py-3 rounded-lg text-sm"
                   style={{
@@ -872,7 +862,7 @@ export function SettingsPage() {
                   className="block text-sm font-medium mb-2"
                   style={{ color: 'hsl(var(--harbor-text-primary))' }}
                 >
-                  Your Unique ID
+                  Your Harbor name
                 </label>
                 <div className="flex gap-2">
                   <div
@@ -883,10 +873,11 @@ export function SettingsPage() {
                       color: 'hsl(var(--harbor-text-secondary))',
                     }}
                   >
-                    {identity?.peerId || 'No identity'}
+                    {identity ? safeIdentityLabel(identity) : 'No identity'}
                   </div>
                   <button
-                    onClick={handleCopyPeerId}
+                    onClick={handleCopyHarborName}
+                    disabled={!identity?.relayNameVerified}
                     className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
                     style={{
                       background: 'hsl(var(--harbor-surface-1))',
@@ -898,7 +889,7 @@ export function SettingsPage() {
                   </button>
                 </div>
                 <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                  Share this ID with others so they can add you as a contact
+                  This relay-qualified name is the public address people use to identify you.
                 </p>
               </div>
 

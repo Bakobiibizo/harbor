@@ -3,12 +3,12 @@ import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore } from '../../stores';
 import { getInitials } from '../../utils/formatting';
 import { SectionHeader, SettingsCard } from './shared';
+import { safeIdentityLabel } from '../../utils/relayName';
 
 export function ProfileSection() {
-  const { state, updateDisplayName, updateBio } = useIdentityStore();
+  const { state, updateBio } = useIdentityStore();
   const { avatarUrl, setAvatarUrl } = useSettingsStore();
 
-  const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -17,7 +17,6 @@ export function ProfileSection() {
 
   useEffect(() => {
     if (identity) {
-      setDisplayName(identity.displayName);
       setBio(identity.bio || '');
     }
   }, [identity]);
@@ -48,10 +47,12 @@ export function ProfileSection() {
     }
   };
 
-  const handleCopyPeerId = () => {
-    if (identity) {
-      navigator.clipboard.writeText(identity.peerId);
-      toast.success('Peer ID copied to clipboard!');
+  const handleCopyHarborName = () => {
+    if (identity?.relayNameVerified && identity.relayNameClaim) {
+      navigator.clipboard.writeText(safeIdentityLabel(identity));
+      toast.success('Harbor name copied to clipboard!');
+    } else {
+      toast.error('Claim a verified Harbor name before sharing this account.');
     }
   };
 
@@ -59,12 +60,7 @@ export function ProfileSection() {
     if (!identity) return;
 
     try {
-      const trimmedName = displayName.trim() || identity.displayName;
       const trimmedBio = bio.trim() || null;
-
-      if (trimmedName !== identity.displayName) {
-        await updateDisplayName(trimmedName);
-      }
 
       if (trimmedBio !== identity.bio) {
         await updateBio(trimmedBio);
@@ -108,7 +104,7 @@ export function ProfileSection() {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                getInitials(identity.displayName)
+                getInitials(safeIdentityLabel(identity))
               )}
             </div>
           )}
@@ -156,15 +152,12 @@ export function ProfileSection() {
           className="block text-sm font-medium mb-2"
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
         >
-          Display Name
+          Verified Harbor name
         </label>
         <input
           type="text"
-          value={displayName}
-          onChange={(e) => {
-            setDisplayName(e.target.value);
-            setHasUnsavedChanges(true);
-          }}
+          value={identity ? safeIdentityLabel(identity) : ''}
+          disabled
           className="w-full px-4 py-3 rounded-lg text-sm"
           style={{
             background: 'hsl(var(--harbor-surface-1))',
@@ -208,7 +201,7 @@ export function ProfileSection() {
           className="block text-sm font-medium mb-2"
           style={{ color: 'hsl(var(--harbor-text-primary))' }}
         >
-          Your Unique ID
+          Your Harbor name
         </label>
         <div className="flex gap-2">
           <div
@@ -219,10 +212,11 @@ export function ProfileSection() {
               color: 'hsl(var(--harbor-text-secondary))',
             }}
           >
-            {identity?.peerId || 'No identity'}
+            {identity ? safeIdentityLabel(identity) : 'No identity'}
           </div>
           <button
-            onClick={handleCopyPeerId}
+            onClick={handleCopyHarborName}
+            disabled={!identity?.relayNameVerified}
             className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
             style={{
               background: 'hsl(var(--harbor-surface-1))',
@@ -234,7 +228,7 @@ export function ProfileSection() {
           </button>
         </div>
         <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-          Share this ID with others so they can add you as a contact
+          This relay-qualified name is the public address people use to identify you.
         </p>
       </SettingsCard>
 

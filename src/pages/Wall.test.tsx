@@ -47,6 +47,27 @@ const identity = {
   publicKey: 'pub',
   x25519Public: 'xpub',
   displayName: 'Test User',
+  relayNameVerified: true,
+  relayNameClaim: {
+    request: {
+      domain: 'harbor.relay-name',
+      version: 1,
+      localName: 'tester',
+      relay: 'relay.test',
+      peerId: 'peer-me',
+      ed25519PublicKey: [],
+      x25519PublicKey: [],
+      sequence: 1,
+      issuedAt: 1,
+      nonce: [],
+    },
+    userSignature: [],
+    status: 'active',
+    notBefore: 1,
+    notAfter: 4102444800,
+    relayKeyId: 'relay-key',
+    relaySignature: [],
+  },
   avatarHash: null,
   bio: null,
   passphraseHint: null,
@@ -190,7 +211,7 @@ describe('WallPage visibility controls', () => {
     await waitFor(() => {
       expect(feedService.generateRssFeed).toHaveBeenCalledWith({
         base_url: 'harbor://peer/peer-me',
-        title: "Test User's Public Harbor Wall",
+        title: "@tester@relay.test's Public Harbor Wall",
         description:
           'Locally generated RSS XML containing only posts marked Public on this Harbor wall.',
         max_items: 50,

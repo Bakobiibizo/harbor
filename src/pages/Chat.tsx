@@ -523,7 +523,7 @@ function ContactPicker({
                           className="text-xs truncate"
                           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                         >
-                          {contact.peerId.slice(0, 16)}...
+                          {contact.verifiedQualifiedName ? 'Verified contact' : 'Name not verified'}
                         </p>
                       </div>
                       <span
@@ -578,7 +578,9 @@ function ContactPicker({
                             className="text-xs truncate"
                             style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                           >
-                            {contact.peerId.slice(0, 16)}...
+                            {contact.verifiedQualifiedName
+                              ? 'Verified contact'
+                              : 'Name not verified'}
                           </p>
                         </div>
                       </button>

@@ -192,7 +192,7 @@ export function useTauriEvents() {
         case 'contact_added':
           console.log(`[Network] Contact added: ${event.display_name} (${event.peer_id})`);
           refreshContacts();
-          toast.success(`Added ${event.display_name} to contacts!`);
+          toast.success('Contact added. Harbor is verifying their relay name.');
           break;
 
         case 'contact_request_changed':

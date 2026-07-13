@@ -13,6 +13,9 @@ pub struct AccountInfo {
     pub id: String,
     /// User's display name
     pub display_name: String,
+    /// Relay-qualified name after cryptographic verification.
+    #[serde(default)]
+    pub verified_qualified_name: Option<String>,
     /// Avatar hash if set
     pub avatar_hash: Option<String>,
     /// Short bio
@@ -146,6 +149,7 @@ impl AccountsService {
         let account = AccountInfo {
             id: account_id.clone(),
             display_name,
+            verified_qualified_name: None,
             avatar_hash,
             bio,
             peer_id,
@@ -194,6 +198,21 @@ impl AccountsService {
         self.save_registry(&registry)?;
 
         Ok(updated)
+    }
+
+    /// Persist the public relay-qualified name used by the locked account chooser.
+    /// Missing registry entries are valid for legacy/single-profile installations.
+    pub fn update_verified_qualified_name(
+        &self,
+        peer_id: &str,
+        qualified_name: &str,
+    ) -> Result<()> {
+        let mut registry = self.load_registry()?;
+        let Some(account) = registry.accounts.get_mut(peer_id) else {
+            return Ok(());
+        };
+        account.verified_qualified_name = Some(qualified_name.to_string());
+        self.save_registry(&registry)
     }
 
     /// Set the active account and update last_accessed_at
@@ -311,6 +330,7 @@ impl AccountsService {
                 let account = AccountInfo {
                     id: account_id.clone(),
                     display_name,
+                    verified_qualified_name: None,
                     avatar_hash,
                     bio,
                     peer_id,
@@ -427,6 +447,50 @@ mod tests {
         assert_eq!(active.unwrap().id, account.id);
 
         cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn verified_qualified_name_is_persisted_for_locked_account_selection() {
+        let temp = create_temp_dir();
+        let service = AccountsService::new(temp.clone());
+        let account = service
+            .register_account(
+                "12D3KooWTestPeer1".to_string(),
+                "Untrusted legacy alias".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+
+        service
+            .update_verified_qualified_name(&account.peer_id, "@alice@relay.test")
+            .unwrap();
+
+        assert_eq!(
+            service
+                .get_account(&account.id)
+                .unwrap()
+                .unwrap()
+                .verified_qualified_name,
+            Some("@alice@relay.test".to_string())
+        );
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn legacy_account_registry_without_verified_name_still_loads() {
+        let account: AccountInfo = serde_json::from_value(serde_json::json!({
+            "id": "peer-old",
+            "displayName": "Old alias",
+            "avatarHash": null,
+            "bio": null,
+            "peerId": "peer-old",
+            "createdAt": 1,
+            "lastAccessedAt": 1,
+            "dataPath": "default"
+        }))
+        .unwrap();
+        assert_eq!(account.verified_qualified_name, None);
     }
 
     #[test]

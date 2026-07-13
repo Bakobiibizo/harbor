@@ -63,6 +63,10 @@ impl WallSocialService {
         }
         self.ensure_current_user_can_read_post(post_id)?;
         let identity = self.current_identity()?;
+        let author_name = self
+            .contacts_service
+            .verified_qualified_name(&identity.peer_id)?
+            .unwrap_or_default();
         let event_id = Uuid::new_v4().to_string();
         let comment_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();
@@ -71,7 +75,7 @@ impl WallSocialService {
             post_id: post_id.to_string(),
             comment_id: comment_id.clone(),
             actor_peer_id: identity.peer_id.clone(),
-            author_name: identity.display_name.clone(),
+            author_name: author_name.clone(),
             content: content.to_string(),
             timestamp,
         };
@@ -84,7 +88,7 @@ impl WallSocialService {
                 event_type: WallSocialEventType::CommentCreate,
                 post_id,
                 actor_peer_id: &identity.peer_id,
-                author_name: Some(&identity.display_name),
+                author_name: Some(&author_name),
                 comment_id: Some(&comment_id),
                 content: Some(content),
                 reaction_type: None,
@@ -100,7 +104,7 @@ impl WallSocialService {
                 comment_id: comment_id.clone(),
                 post_id: post_id.to_string(),
                 author_peer_id: identity.peer_id,
-                author_name: identity.display_name,
+                author_name,
                 content: content.to_string(),
                 created_at: timestamp,
             },
@@ -242,6 +246,17 @@ impl WallSocialService {
     ) -> Result<bool> {
         self.ensure_actor_can_read_post(params.post_id, params.actor_peer_id)?;
         self.verify_incoming_signature(params)?;
+        if params.event_type == WallSocialEventType::CommentCreate {
+            let verified_name = self
+                .contacts_service
+                .verified_qualified_name(params.actor_peer_id)?;
+            let supplied_name = params.author_name.unwrap_or_default();
+            if verified_name.as_deref().unwrap_or_default() != supplied_name {
+                return Err(AppError::Validation(
+                    "Comment author name does not match the verified relay claim".into(),
+                ));
+            }
+        }
         if WallSocialEventsRepository::get_by_event_id(&self.db, params.event_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))?
             .is_some()
@@ -443,10 +458,7 @@ impl WallSocialService {
                         comment_id: params.comment_id.unwrap_or_default().to_string(),
                         post_id: params.post_id.to_string(),
                         author_peer_id: params.actor_peer_id.to_string(),
-                        author_name: params
-                            .author_name
-                            .unwrap_or(params.actor_peer_id)
-                            .to_string(),
+                        author_name: params.author_name.unwrap_or_default().to_string(),
                         content: params.content.unwrap_or_default().to_string(),
                         created_at: params.timestamp,
                     },

@@ -8,7 +8,7 @@ use crate::{
     models::{NameClaim, SignedRelayKeyRotation},
     services::{
         name_claim_service::verify_and_cache, relay_key_rotation_service::apply_signed_rotation,
-        IdentityService,
+        AccountsService, IdentityService,
     },
 };
 use serde::Deserialize;
@@ -128,6 +128,7 @@ pub async fn register_relay_name(
     request: RegisterRelayNameRequest,
     network: State<'_, NetworkState>,
     db: State<'_, Arc<Database>>,
+    accounts: State<'_, Arc<AccountsService>>,
 ) -> Result<NameClaimDto> {
     let peer = network.get_handle().await?.active_relay().await?;
     let (wire, key) = network
@@ -159,6 +160,10 @@ pub async fn register_relay_name(
         chrono::Utc::now().timestamp(),
     )
     .map_err(|e| AppError::Crypto(e.to_string()))?;
+    accounts.update_verified_qualified_name(
+        &claim.request.peer_id,
+        &format!("@{}@{}", claim.request.local_name, claim.request.relay),
+    )?;
     Ok(claim.into())
 }
 #[tauri::command]
@@ -241,6 +246,7 @@ fn migration_mode(db: &Database, peer: &str) -> Result<String> {
 pub fn get_identity_entry_state(
     db: State<'_, Arc<Database>>,
     identity: State<'_, Arc<IdentityService>>,
+    accounts: State<'_, Arc<AccountsService>>,
 ) -> Result<IdentityEntryState> {
     let peer = identity.get_peer_id()?;
     let mode = migration_mode(&db, &peer)?;
@@ -255,6 +261,13 @@ pub fn get_identity_entry_state(
             Ok::<NameClaimDto, AppError>(claim.into())
         })
         .transpose()?;
+
+    if let Some(ref claim) = claim {
+        accounts.update_verified_qualified_name(
+            &peer,
+            &format!("@{}@{}", claim.request.local_name, claim.request.relay),
+        )?;
+    }
 
     Ok(IdentityEntryState { mode, claim })
 }

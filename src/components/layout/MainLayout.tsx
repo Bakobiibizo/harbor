@@ -269,7 +269,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                     className="text-xs truncate"
                     style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                   >
-                    {identity.peerId.slice(0, 8)}...{identity.peerId.slice(-6)}
+                    Your Harbor account
                   </p>
                 </div>
               </div>

@@ -105,7 +105,7 @@ export function CallOverlay() {
 
   const peerName = useMemo(() => {
     const peerId = snapshot.peerId;
-    if (!peerId) return 'Unknown peer';
+    if (!peerId) return 'Unverified Harbor user';
     const contact = contacts.find((item) => item.peerId === peerId);
     return safePeerLabel(peerId, contact?.verifiedQualifiedName);
   }, [contacts, snapshot.peerId]);

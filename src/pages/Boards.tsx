@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useBoardsStore, useIdentityStore, useSettingsStore } from '../stores';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
+import { safePeerLabel } from '../utils/relayName';
+import { getInitials } from '../utils/formatting';
 
 function formatTimeAgo(unixSeconds: number): string {
   const now = Date.now();
@@ -21,11 +23,6 @@ function formatTimeAgo(unixSeconds: number): string {
   return date.toLocaleDateString();
 }
 
-function shortPeerId(peerId: string): string {
-  if (peerId.length <= 16) return peerId;
-  return `${peerId.slice(0, 8)}...${peerId.slice(-6)}`;
-}
-
 // Post card component
 function PostCard({
   post,
@@ -36,6 +33,7 @@ function PostCard({
   isOwnPost: boolean;
   onDelete: (postId: string) => void;
 }) {
+  const authorName = safePeerLabel(post.authorPeerId, post.authorVerifiedQualifiedName);
   return (
     <div
       className="p-4 rounded-xl"
@@ -54,11 +52,11 @@ function PostCard({
                 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
             }}
           >
-            {post.authorPeerId.slice(0, 2).toUpperCase()}
+            {getInitials(authorName)}
           </div>
           <div>
             <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-              {post.authorVerifiedQualifiedName || `${shortPeerId(post.authorPeerId)} (unverified)`}
+              {authorName}
             </p>
             <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               {formatTimeAgo(post.createdAt)}
@@ -255,7 +253,7 @@ function CommunityItem({
           {community.communityName || 'Harbor Community'}
         </p>
         <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-          {shortPeerId(community.relayPeerId)}
+          Community relay
         </p>
       </div>
       <button

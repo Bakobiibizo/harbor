@@ -51,7 +51,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
   };
 
   const localAccountLabel = (account: AccountInfo) =>
-    account.displayName.trim() || `Local profile ${account.peerId.slice(0, 8)}…`;
+    account.verifiedQualifiedName || 'Local Harbor account';
 
   return (
     <div
@@ -189,12 +189,10 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         </p>
                       )}
                       <p
-                        className="text-xs truncate font-mono"
+                        className="text-xs truncate"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                        title={account.peerId}
                       >
-                        {account.peerId.slice(0, 12)}…{account.peerId.slice(-6)} · saved on this
-                        device
+                        Saved on this device
                       </p>
                       {account.lastAccessedAt && (
                         <p

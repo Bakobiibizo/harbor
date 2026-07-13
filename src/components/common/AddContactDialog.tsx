@@ -110,11 +110,8 @@ export function AddContactDialog({ contactString, onClose }: Props) {
                 {preview.bio}
               </p>
             )}
-            <p
-              className="text-xs font-mono break-all"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
-              {preview?.peerId ?? '—'}
+            <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+              Harbor will verify this person’s relay-qualified name before displaying it.
             </p>
           </div>
         </div>

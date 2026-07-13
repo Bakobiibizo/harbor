@@ -1,13 +1,19 @@
 import type { IdentityInfo, RelayNameClaim, RelayNamePresentation } from '../types';
 import { qualifiedRelayName } from '../types';
 
+export const UNVERIFIED_HARBOR_USER = 'Unverified Harbor user';
+
+export function isVerifiedQualifiedName(value: string | null | undefined): value is string {
+  return !!value && /^@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?@[a-z0-9.-]+$/.test(value);
+}
+
 export function presentRelayName(
   claim: RelayNameClaim | null | undefined,
-  legacyName: string,
+  _legacyName: string,
   verified: boolean,
-  now = Date.now(),
+  now = Math.floor(Date.now() / 1000),
 ): RelayNamePresentation {
-  if (!claim) return { label: legacyName, qualifiedName: null, trust: 'unverified' };
+  if (!claim) return { label: UNVERIFIED_HARBOR_USER, qualifiedName: null, trust: 'unverified' };
   const label = qualifiedRelayName(claim);
   if (claim.notAfter <= now) return { label, qualifiedName: label, trust: 'expired' };
   return { label, qualifiedName: label, trust: verified ? 'verified' : 'untrusted' };
@@ -21,13 +27,13 @@ export function presentIdentityName(identity: IdentityInfo): RelayNamePresentati
   );
 }
 export function safeIdentityLabel(identity: IdentityInfo): string {
-  return identity.relayNameVerified && identity.relayNameClaim
-    ? qualifiedRelayName(identity.relayNameClaim)
-    : `Peer ${identity.peerId.slice(0, 8)}… (unverified)`;
+  const presentation = presentIdentityName(identity);
+  return presentation.trust === 'verified' && isVerifiedQualifiedName(presentation.qualifiedName)
+    ? presentation.qualifiedName
+    : UNVERIFIED_HARBOR_USER;
 }
-export function safePeerLabel(peerId: string, verifiedQualifiedName?: string | null): string {
-  return verifiedQualifiedName &&
-    /^@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?@[a-z0-9.-]+$/.test(verifiedQualifiedName)
+export function safePeerLabel(_peerId: string, verifiedQualifiedName?: string | null): string {
+  return isVerifiedQualifiedName(verifiedQualifiedName)
     ? verifiedQualifiedName
-    : `Peer ${peerId.slice(0, 8)}… (unverified)`;
+    : UNVERIFIED_HARBOR_USER;
 }

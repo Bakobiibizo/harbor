@@ -93,7 +93,8 @@ describe('CallOverlay group call UI', () => {
     expect(screen.getByText('Group video call')).toBeInTheDocument();
     expect(screen.getByText('3/4 participants · degraded')).toBeInTheDocument();
     expect(screen.getByText('@alice@relay.test')).toBeInTheDocument();
-    expect(screen.getByText('Peer peer-b… (unverified)')).toBeInTheDocument();
+    expect(screen.getByText('Unverified Harbor user')).toBeInTheDocument();
+    expect(screen.queryByText(/peer-b/)).not.toBeInTheDocument();
     expect(screen.queryByText('Alice')).not.toBeInTheDocument();
     expect(screen.queryByText('Bob')).not.toBeInTheDocument();
     expect(

@@ -373,7 +373,7 @@ function CommentsSection({
                     background: getContactColor(comment.authorPeerId),
                   }}
                 >
-                  {getInitials(comment.authorName)}
+                  {getInitials(safePeerLabel(comment.authorPeerId, comment.authorName))}
                 </div>
 
                 {/* Comment content */}
@@ -386,7 +386,7 @@ function CommentsSection({
                       className="font-semibold text-xs"
                       style={{ color: 'hsl(var(--harbor-text-primary))' }}
                     >
-                      {comment.authorName}
+                      {safePeerLabel(comment.authorPeerId, comment.authorName)}
                     </span>
                     <p
                       className="text-sm leading-relaxed whitespace-pre-wrap mt-0.5"

@@ -7,6 +7,7 @@ import { AccountSelection } from './AccountSelection';
 const account = (overrides: Partial<AccountInfo> = {}): AccountInfo => ({
   id: 'account-1',
   displayName: 'Bakobiibizo',
+  verifiedQualifiedName: '@bakobiibizo@harbor.social',
   avatarHash: null,
   bio: "Hi, I'm bako",
   peerId: '12D3KooWMEo4jDyz9hGAVEcZhiGkjRH4A73FXRpk8MwJkhnSqy7z',
@@ -27,20 +28,25 @@ describe('AccountSelection', () => {
     });
   });
 
-  it('identifies a local account by its saved name, bio, and peer fingerprint', () => {
+  it('identifies a local account by its verified relay-qualified name without exposing its key', () => {
     render(<AccountSelection onSelectAccount={vi.fn()} onCreateAccount={vi.fn()} />);
 
-    expect(screen.getByText('Bakobiibizo')).toBeInTheDocument();
+    expect(screen.getByText('@bakobiibizo@harbor.social')).toBeInTheDocument();
     expect(screen.getByText("Hi, I'm bako")).toBeInTheDocument();
-    expect(screen.getByText(/12D3KooWMEo4…nSqy7z · saved on this device/)).toBeInTheDocument();
-    expect(screen.queryByText(/Peer 12D3KooW… \(unverified\)/)).not.toBeInTheDocument();
+    expect(screen.getByText('Saved on this device')).toBeInTheDocument();
+    expect(screen.queryByText(/12D3KooW/)).not.toBeInTheDocument();
   });
 
-  it('uses a peer-based fallback when the saved name is blank', () => {
-    useAccountsStore.setState({ accounts: [account({ displayName: '   ', bio: null })] });
+  it('uses a neutral local fallback instead of an unverified alias', () => {
+    useAccountsStore.setState({
+      accounts: [
+        account({ displayName: 'Possible scammer alias', verifiedQualifiedName: null, bio: null }),
+      ],
+    });
 
     render(<AccountSelection onSelectAccount={vi.fn()} onCreateAccount={vi.fn()} />);
 
-    expect(screen.getByText('Local profile 12D3KooW…')).toBeInTheDocument();
+    expect(screen.getByText('Local Harbor account')).toBeInTheDocument();
+    expect(screen.queryByText('Possible scammer alias')).not.toBeInTheDocument();
   });
 });

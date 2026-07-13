@@ -76,7 +76,6 @@ export function NamedContactWallPage() {
       <ContactWallPage
         peerIdOverride={resolution.peerId}
         verifiedQualifiedNameOverride={qualifiedName}
-        hidePeerId
       />
     );
   }

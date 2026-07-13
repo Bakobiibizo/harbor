@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
-import type { FeedItem, PostVisibility, ResolvedMention } from '../types';
+import type { FeedItem, IdentityInfo, PostVisibility, ResolvedMention } from '../types';
 import { mentionsService } from '../services';
 import { MentionResolution } from '../components/identity';
 import {
@@ -17,7 +17,7 @@ import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
 import { PostMedia } from '../components/common/PostMedia';
 import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
-import { safeIdentityLabel } from '../utils/relayName';
+import { safeIdentityLabel, safePeerLabel } from '../utils/relayName';
 import type { Comment } from '../services/comments';
 import { HARBOR_SHORTCUT_EVENTS } from '../hooks/useKeyboardNavigation';
 
@@ -214,10 +214,10 @@ function VisibilityBadge({
   );
 }
 
-function buildRssConfig(identity: { peerId: string; displayName: string }) {
+function buildRssConfig(identity: IdentityInfo) {
   return {
     base_url: `harbor://peer/${identity.peerId}`,
-    title: `${identity.displayName}'s Public Harbor Wall`,
+    title: `${safeIdentityLabel(identity)}'s Public Harbor Wall`,
     description:
       'Locally generated RSS XML containing only posts marked Public on this Harbor wall.',
     max_items: 50,
@@ -346,7 +346,7 @@ function WallCommentsSection({
                     'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                 }}
               >
-                {comment.authorName
+                {safePeerLabel(comment.authorPeerId, comment.authorName)
                   .split(' ')
                   .map((part) => part[0])
                   .join('')
@@ -359,7 +359,7 @@ function WallCommentsSection({
                     className="text-sm font-medium"
                     style={{ color: 'hsl(var(--harbor-text-primary))' }}
                   >
-                    {comment.authorName}
+                    {safePeerLabel(comment.authorPeerId, comment.authorName)}
                   </span>
                   <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     {formatCommentDate(comment.createdAt)}
@@ -698,7 +698,7 @@ export function WallPage() {
     setShareAction('rss-export');
     try {
       const rssXml = await generatePublicRssXml();
-      const filename = buildRssFilename(identity.displayName);
+      const filename = buildRssFilename(safeIdentityLabel(identity));
       try {
         const savedPath = await invoke<string>('save_to_downloads', {
           filename,
@@ -1657,7 +1657,7 @@ export function WallPage() {
                     >
                       Shared from{' '}
                       <span style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                        {post.sharedFrom.authorName}
+                        {safePeerLabel(post.sharedFrom.authorPeerId, post.sharedFrom.authorName)}
                       </span>
                     </span>
                   </div>
@@ -1839,7 +1839,10 @@ export function WallPage() {
                               className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0"
                               style={{ background: post.sharedFrom.avatarGradient }}
                             >
-                              {post.sharedFrom.authorName
+                              {safePeerLabel(
+                                post.sharedFrom.authorPeerId,
+                                post.sharedFrom.authorName,
+                              )
                                 .split(' ')
                                 .map((n) => n[0])
                                 .join('')
@@ -1851,7 +1854,10 @@ export function WallPage() {
                                 className="font-medium text-sm"
                                 style={{ color: 'hsl(var(--harbor-text-primary))' }}
                               >
-                                {post.sharedFrom.authorName}
+                                {safePeerLabel(
+                                  post.sharedFrom.authorPeerId,
+                                  post.sharedFrom.authorName,
+                                )}
                               </p>
                               <p
                                 className="text-xs"
