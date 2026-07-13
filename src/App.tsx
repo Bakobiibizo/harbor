@@ -4,7 +4,7 @@ import toast, { Toaster } from 'react-hot-toast';
 import { isTauri } from '@tauri-apps/api/core';
 import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore } from './stores';
 import { useTauriEvents } from './hooks';
-import { MainLayout } from './components/layout';
+import { MainLayout, WindowsTitleBar } from './components/layout';
 import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/onboarding';
 import { LegacyIdentityMigration } from './components/identity';
 import { AddContactDialog, ErrorBoundary } from './components/common';
@@ -236,10 +236,17 @@ function AppContent() {
 }
 
 export default function App() {
+  const showWindowsTitleBar = isTauri() && /Windows/i.test(navigator.userAgent);
+
   return (
     <ErrorBoundary>
       <HashRouter>
-        <AppContent />
+        <div className="flex h-screen flex-col overflow-hidden">
+          {showWindowsTitleBar && <WindowsTitleBar />}
+          <div className="harbor-app-content min-h-0 flex-1 overflow-hidden">
+            <AppContent />
+          </div>
+        </div>
         <Toaster
           position="bottom-right"
           toastOptions={{

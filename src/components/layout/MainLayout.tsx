@@ -124,7 +124,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   };
 
   return (
-    <div className="flex h-screen" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
+    <div className="flex h-full min-h-0" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       {/* Sidebar */}
       <aside
         className="w-72 flex flex-col border-r"
