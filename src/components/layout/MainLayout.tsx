@@ -15,7 +15,7 @@ import {
   useKeyboardNavigation,
 } from '../../hooks';
 import { safeIdentityLabel } from '../../utils/relayName';
-import { KeyboardShortcutsModal, CustomizationPanel } from '../common';
+import { ComposePostModal, KeyboardShortcutsModal, CustomizationPanel } from '../common';
 import { LockAccountDialog } from './LockAccountDialog';
 import { OnboardingHero } from '../onboarding';
 import {
@@ -50,12 +50,6 @@ const navItems: NavItem[] = [
     description: 'Direct conversations',
   },
   {
-    to: '/wall',
-    label: 'My Wall',
-    icon: WallIcon,
-    description: 'Your posts & content',
-  },
-  {
     to: '/feed',
     label: 'Feed',
     icon: FeedIcon,
@@ -87,6 +81,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   const [isLocking, setIsLocking] = useState(false);
   const [showLockWarning, setShowLockWarning] = useState(false);
   const [isCustomizationOpen, setIsCustomizationOpen] = useState(false);
+  const [isComposerOpen, setIsComposerOpen] = useState(false);
 
   // Enable keyboard navigation
   useKeyboardNavigation();
@@ -101,6 +96,12 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   const identity = state.status === 'unlocked' ? state.identity : null;
   const shortcutReference = KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === 'shortcuts');
+
+  useEffect(() => {
+    const openComposer = () => setIsComposerOpen(true);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newPost, openComposer);
+    return () => window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newPost, openComposer);
+  }, []);
 
   // Get indicator color based on network status
   const getStatusColor = () => {
@@ -200,11 +201,11 @@ export function MainLayout({ children }: MainLayoutProps) {
           />
         </div>
 
-        {/* User Profile Card - clickable to go to profile settings */}
+        {/* User profile opens the personal post history. */}
         {identity && (
           <div className="p-4">
             <button
-              onClick={() => navigate('/settings')}
+              onClick={() => navigate('/wall')}
               className="harbor-interactive card-interactive w-full p-3 rounded-xl text-left transition-all duration-200 hover:opacity-90"
               style={{
                 background: 'hsl(var(--harbor-surface-1))',
@@ -273,6 +274,20 @@ export function MainLayout({ children }: MainLayoutProps) {
                   </p>
                 </div>
               </div>
+            </button>
+          </div>
+        )}
+
+        {identity && (
+          <div className="px-4 pb-2">
+            <button
+              type="button"
+              onClick={() => setIsComposerOpen(true)}
+              className="harbor-interactive flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white"
+              style={{ background: 'hsl(var(--harbor-primary))' }}
+            >
+              <WallIcon className="h-5 w-5" />
+              Create post
             </button>
           </div>
         )}
@@ -514,6 +529,8 @@ export function MainLayout({ children }: MainLayoutProps) {
       )}
 
       {identity && <OnboardingHero key={identity.peerId} identityId={identity.peerId} />}
+
+      <ComposePostModal isOpen={isComposerOpen} onClose={() => setIsComposerOpen(false)} />
 
       {/* Keyboard shortcuts modal */}
       <KeyboardShortcutsModal />

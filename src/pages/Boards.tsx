@@ -4,6 +4,8 @@ import { useBoardsStore, useIdentityStore, useSettingsStore } from '../stores';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
 import { safePeerLabel } from '../utils/relayName';
 import { getInitials } from '../utils/formatting';
+import { ModalityFilter } from '../components/common/ModalityFilter';
+import { matchesModalityFilter } from '../utils/postModality';
 
 function formatTimeAgo(unixSeconds: number): string {
   const now = Date.now();
@@ -381,10 +383,7 @@ export function BoardsPage() {
     }
   };
   const visibleBoardPosts = boardPosts.filter((post) => {
-    if (communityView === 'posts') return true;
-    const type =
-      communityView === 'images' ? 'image' : communityView === 'videos' ? 'video' : 'audio';
-    return post.contentType === type;
+    return matchesModalityFilter(communityView, post.contentType);
   });
 
   // Empty state - no communities joined
@@ -521,30 +520,11 @@ export function BoardsPage() {
             <div className="max-w-2xl mx-auto p-6 space-y-4">
               {/* Board tabs */}
               <BoardTabs boards={boards} activeBoard={activeBoard} onSelect={selectBoard} />
-              <div
-                className="grid grid-cols-4 border-b"
-                style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-              >
-                {(['posts', 'images', 'videos', 'audio'] as const).map((view) => (
-                  <button
-                    key={view}
-                    onClick={() => setCommunityView(view)}
-                    className="px-3 py-3 text-sm font-semibold capitalize"
-                    style={{
-                      color:
-                        communityView === view
-                          ? 'hsl(var(--harbor-primary))'
-                          : 'hsl(var(--harbor-text-secondary))',
-                      borderBottom:
-                        communityView === view
-                          ? '3px solid hsl(var(--harbor-primary))'
-                          : '3px solid transparent',
-                    }}
-                  >
-                    {view}
-                  </button>
-                ))}
-              </div>
+              <ModalityFilter
+                value={communityView}
+                onChange={setCommunityView}
+                label="Filter community posts"
+              />
 
               {/* Error display */}
               {error && (

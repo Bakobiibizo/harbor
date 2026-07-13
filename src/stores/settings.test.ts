@@ -14,6 +14,8 @@ describe('useSettingsStore', () => {
       showReadReceipts: true,
       showOnlineStatus: true,
       defaultVisibility: 'contacts',
+      socialView: 'all',
+      communityView: 'all',
       avatarUrl: null,
       theme: 'system',
       accentColor: 'harbor',
@@ -128,6 +130,16 @@ describe('useSettingsStore', () => {
   });
 
   describe('privacy settings', () => {
+    it('links the feed and personal wall filter while keeping communities independent', () => {
+      useSettingsStore.getState().setSocialView('videos');
+      expect(useSettingsStore.getState().socialView).toBe('videos');
+      expect(useSettingsStore.getState().communityView).toBe('all');
+
+      useSettingsStore.getState().setCommunityView('audio');
+      expect(useSettingsStore.getState().socialView).toBe('videos');
+      expect(useSettingsStore.getState().communityView).toBe('audio');
+    });
+
     it('should toggle showReadReceipts', () => {
       useSettingsStore.getState().setShowReadReceipts(false);
       expect(useSettingsStore.getState().showReadReceipts).toBe(false);
@@ -208,6 +220,8 @@ describe('useSettingsStore', () => {
       expect(state.showReadReceipts).toBe(true);
       expect(state.showOnlineStatus).toBe(true);
       expect(state.defaultVisibility).toBe('contacts');
+      expect(state.socialView).toBe('all');
+      expect(state.communityView).toBe('all');
       expect(state.avatarUrl).toBeNull();
       expect(state.theme).toBe('system');
       expect(state.accentColor).toBe('harbor');

@@ -1,11 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
-import type { FeedItem, IdentityInfo, PostVisibility, ResolvedMention } from '../types';
-import { mentionsService } from '../services';
-import { MentionResolution } from '../components/identity';
+import type { FeedItem, IdentityInfo, PostVisibility } from '../types';
 import {
   feedService,
   type WallPreviewPerspective,
@@ -14,12 +12,13 @@ import {
 import { getShareableContactString } from '../services/network';
 import { WallIcon, EllipsisIcon } from '../components/icons';
 import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
+import { ModalityFilter } from '../components/common/ModalityFilter';
 import { PostMedia } from '../components/common/PostMedia';
 import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
 import { safeIdentityLabel, safePeerLabel } from '../utils/relayName';
 import type { Comment } from '../services/comments';
-import { HARBOR_SHORTCUT_EVENTS } from '../hooks/useKeyboardNavigation';
+import { matchesModalityFilter } from '../utils/postModality';
 
 const log = createLogger('Wall');
 
@@ -108,27 +107,6 @@ const CONTENT_TYPES: {
     placeholder: 'Add a caption for your audio...',
   },
 ];
-
-/** Per-post visibility options */
-const VISIBILITY_OPTIONS: { visibility: PostVisibility; label: string; description: string }[] = [
-  {
-    visibility: 'contacts',
-    label: 'Contacts only',
-    description: 'Visible to contacts with wall access',
-  },
-  {
-    visibility: 'public',
-    label: 'Public',
-    description: 'Visible in public previews and RSS',
-  },
-];
-
-const FILTER_OPTIONS: { type: 'posts' | 'images' | 'videos' | 'audio'; label: string }[] = [
-  { type: 'posts', label: 'Posts' },
-  { type: 'images', label: 'Images' },
-  { type: 'videos', label: 'Videos' },
-  { type: 'audio', label: 'Audio' },
-] as const;
 
 const PREVIEW_OPTIONS: {
   perspective: WallPreviewPerspective;
@@ -400,7 +378,6 @@ export function WallPage() {
     syncError,
     syncStatus,
     loadPosts,
-    createPost,
     updatePost,
     deletePost,
     likePost,
@@ -413,12 +390,7 @@ export function WallPage() {
     editingPostId,
     setEditingPost,
   } = useWallStore();
-  const { defaultVisibility, socialView, setSocialView } = useSettingsStore();
-  const [newPost, setNewPost] = useState('');
-  const [resolvedMentions, setResolvedMentions] = useState<ResolvedMention[]>([]);
-  const [isComposing, setIsComposing] = useState(false);
-  const [selectedContentType, setSelectedContentType] = useState<WallContentType>('post');
-  const [selectedVisibility, setSelectedVisibility] = useState<PostVisibility>(defaultVisibility);
+  const { socialView, setSocialView } = useSettingsStore();
   const [previewPerspective, setPreviewPerspective] = useState<WallPreviewPerspective>('guest');
   const [previewPosts, setPreviewPosts] = useState<FeedItem[]>([]);
   const [visibilityStats, setVisibilityStats] = useState<WallVisibilityStats | null>(null);
@@ -426,41 +398,16 @@ export function WallPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [shareAction, setShareAction] = useState<ShareAction | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [pendingMedia, setPendingMedia] = useState<
-    { type: 'image' | 'video' | 'audio'; url: string; name: string; file: File }[]
-  >([]);
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [submittingComments, setSubmittingComments] = useState<Set<string>>(new Set());
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaTypeRef = useRef<'image' | 'video' | 'audio'>('image');
-  const composerInputRef = useRef<HTMLTextAreaElement>(null);
 
   const identity = state.status === 'unlocked' ? state.identity : null;
 
-  useEffect(() => {
-    const startNewPost = () => {
-      setIsComposing(true);
-      window.requestAnimationFrame(() => {
-        composerInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        composerInputRef.current?.focus();
-      });
-    };
-
-    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newPost, startNewPost);
-    return () => window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newPost, startNewPost);
-  }, []);
-
-  // Get content type config
-  const currentTypeConfig = CONTENT_TYPES.find((c) => c.type === selectedContentType)!;
-  const charLimit = currentTypeConfig.charLimit;
-
-  // Filter posts by selected content type
+  // Feed and personal wall intentionally share the persisted modality filter.
   const filteredPosts = useMemo(() => {
-    if (socialView === 'posts') return posts;
-    const type = socialView === 'images' ? 'image' : socialView === 'videos' ? 'video' : 'audio';
-    return posts.filter((post) => post.contentType === type);
+    return posts.filter((post) => matchesModalityFilter(socialView, post.contentType, post.media));
   }, [posts, socialView]);
 
   // Load posts from SQLite on mount
@@ -507,13 +454,6 @@ export function WallPage() {
     };
   }, [identity, previewPerspective, posts]);
 
-  // Keep the composer aligned to the persisted default until the author starts a draft.
-  useEffect(() => {
-    if (!isComposing && !newPost && pendingMedia.length === 0) {
-      setSelectedVisibility(defaultVisibility);
-    }
-  }, [defaultVisibility, isComposing, newPost, pendingMedia.length]);
-
   const formatDate = (date: Date) => {
     const now = new Date();
     const diff = now.getTime() - date.getTime();
@@ -539,57 +479,6 @@ export function WallPage() {
       .slice(0, 2);
   };
 
-  const handlePost = async () => {
-    if (!newPost.trim() && pendingMedia.length === 0) return;
-
-    // Enforce character limit for thoughts
-    if (charLimit && newPost.length > charLimit) {
-      toast.error(`Thoughts must be ${charLimit} characters or less`);
-      return;
-    }
-
-    try {
-      if (resolvedMentions.some((mention) => mention.status === 'blocked')) {
-        toast.error('Remove blocked mentions before publishing');
-        return;
-      }
-      if (resolvedMentions.length > 0) {
-        if (pendingMedia.length > 0) {
-          toast.error('Mentioned posts cannot include attachments yet');
-          return;
-        }
-        await mentionsService.publish({
-          contentType: selectedContentType === 'post' ? 'text' : selectedContentType,
-          contentText: newPost.trim(),
-          visibility: selectedVisibility,
-          mentions: resolvedMentions.map((mention) => ({
-            qualifiedName: mention.qualifiedName,
-            intent: 'notify',
-            authorizedPeerId: mention.status === 'known' ? mention.peerId : undefined,
-            claimDigest: mention.claimDigest,
-          })),
-        });
-        await loadPosts();
-      } else {
-        await createPost(
-          newPost.trim(),
-          selectedContentType,
-          pendingMedia.length > 0 ? pendingMedia : undefined,
-          selectedVisibility,
-        );
-      }
-      setNewPost('');
-      setPendingMedia([]);
-      setIsComposing(false);
-      setSelectedContentType('post');
-      setSelectedVisibility(defaultVisibility);
-      toast.success(`${getContentTypeLabel(selectedContentType)} published!`);
-    } catch (err) {
-      log.error('Failed to create post', err);
-      toast.error('Failed to publish post');
-    }
-  };
-
   const handleLike = async (postId: string) => {
     try {
       await likePost(postId);
@@ -597,61 +486,6 @@ export function WallPage() {
       log.error('Failed to update reaction', err);
       toast.error('Could not update reaction');
     }
-  };
-
-  const handleAddMedia = (type: 'image' | 'video' | 'audio') => {
-    mediaTypeRef.current = type;
-    if (fileInputRef.current) {
-      fileInputRef.current.accept =
-        type === 'image' ? 'image/*' : type === 'video' ? 'video/*' : 'audio/*';
-      fileInputRef.current.click();
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Check file size (max 10MB)
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File size must be less than 10MB');
-      return;
-    }
-
-    // Create object URL for preview
-    const url = URL.createObjectURL(file);
-    setPendingMedia([
-      ...pendingMedia,
-      {
-        type: mediaTypeRef.current,
-        url,
-        name: file.name,
-        file,
-      },
-    ]);
-    toast.success(
-      `${mediaTypeRef.current === 'image' ? 'Image' : mediaTypeRef.current === 'video' ? 'Video' : 'Audio'} added!`,
-    );
-
-    // Auto-select the matching content type if adding media
-    if (mediaTypeRef.current === 'image' && selectedContentType !== 'image') {
-      setSelectedContentType('image');
-    } else if (mediaTypeRef.current === 'video' && selectedContentType !== 'video') {
-      setSelectedContentType('video');
-    } else if (mediaTypeRef.current === 'audio' && selectedContentType !== 'audio') {
-      setSelectedContentType('audio');
-    }
-
-    // Reset file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const handleRemoveMedia = (index: number) => {
-    const media = pendingMedia[index];
-    URL.revokeObjectURL(media.url);
-    setPendingMedia(pendingMedia.filter((_, i) => i !== index));
   };
 
   const handleShare = async (postId: string) => {
@@ -816,14 +650,6 @@ export function WallPage() {
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        onChange={handleFileChange}
-        className="hidden"
-      />
-
       {/* Header */}
       <header
         className="px-6 py-4 border-b flex-shrink-0"
@@ -873,333 +699,6 @@ export function WallPage() {
 
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-3xl mx-auto space-y-6">
-          {/* Composer - blog style */}
-          <div
-            className="rounded-lg overflow-hidden"
-            style={{
-              background: 'hsl(var(--harbor-bg-elevated))',
-              border: '1px solid hsl(var(--harbor-border-subtle))',
-            }}
-          >
-            {/* Composer header */}
-            <div
-              className="px-5 py-3 border-b"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
-              <div className="flex items-center gap-3">
-                {identity && (
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white"
-                    style={{
-                      background:
-                        'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                    }}
-                  >
-                    {getInitials(safeIdentityLabel(identity))}
-                  </div>
-                )}
-                <div>
-                  <p
-                    className="font-medium text-sm"
-                    style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                  >
-                    {identity ? safeIdentityLabel(identity) : 'You'}
-                  </p>
-                  <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                    Creating a new {currentTypeConfig.label.toLowerCase()}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Content type selector pills */}
-            <div
-              className="px-5 py-3 border-b flex items-center gap-2 overflow-x-auto"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
-              <span
-                className="text-xs font-medium flex-shrink-0"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
-                Type:
-              </span>
-              {CONTENT_TYPES.map((ct) => {
-                const isSelected = selectedContentType === ct.type;
-                return (
-                  <button
-                    key={ct.type}
-                    onClick={() => setSelectedContentType(ct.type)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 flex-shrink-0"
-                    style={{
-                      background: isSelected
-                        ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                        : 'hsl(var(--harbor-surface-1))',
-                      color: isSelected ? 'white' : 'hsl(var(--harbor-text-secondary))',
-                      boxShadow: isSelected ? '0 2px 8px hsl(var(--harbor-primary) / 0.3)' : 'none',
-                    }}
-                  >
-                    {ct.icon}
-                    {ct.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Visibility is a compact publish control in the composer footer. */}
-            <div className="hidden" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
-              <span
-                className="text-xs font-medium flex-shrink-0"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
-                Visibility:
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {VISIBILITY_OPTIONS.map((option) => {
-                  const isSelected = selectedVisibility === option.visibility;
-                  return (
-                    <button
-                      key={option.visibility}
-                      type="button"
-                      aria-pressed={isSelected}
-                      onClick={() => {
-                        setSelectedVisibility(option.visibility);
-                        setIsComposing(true);
-                      }}
-                      className="px-3 py-2 rounded-lg text-left transition-all duration-200"
-                      style={{
-                        background: isSelected
-                          ? 'hsl(var(--harbor-primary) / 0.15)'
-                          : 'hsl(var(--harbor-surface-1))',
-                        border: isSelected
-                          ? '1px solid hsl(var(--harbor-primary) / 0.45)'
-                          : '1px solid hsl(var(--harbor-border-subtle))',
-                        color: isSelected
-                          ? 'hsl(var(--harbor-primary))'
-                          : 'hsl(var(--harbor-text-secondary))',
-                      }}
-                    >
-                      <span className="block text-xs font-semibold">{option.label}</span>
-                      <span
-                        className="block text-[11px] mt-0.5"
-                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                      >
-                        {option.description}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Composer body */}
-            <div className="p-5">
-              <textarea
-                ref={composerInputRef}
-                placeholder={currentTypeConfig.placeholder}
-                value={newPost}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  // Enforce char limit for thought type
-                  if (charLimit && val.length > charLimit) {
-                    return;
-                  }
-                  setNewPost(val);
-                  setIsComposing(true);
-                }}
-                onFocus={() => setIsComposing(true)}
-                rows={selectedContentType === 'thought' ? 2 : isComposing ? 6 : 3}
-                className="w-full resize-none leading-relaxed"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  color: 'hsl(var(--harbor-text-primary))',
-                  fontSize: selectedContentType === 'thought' ? '1.125rem' : '1rem',
-                }}
-              />
-              <MentionResolution text={newPost} onResolved={setResolvedMentions} />
-
-              {/* Character counter for thoughts */}
-              {selectedContentType === 'thought' && (
-                <div
-                  className="text-right mt-1 text-xs"
-                  style={{
-                    color:
-                      newPost.length > (charLimit ?? 280) * 0.9
-                        ? 'hsl(var(--harbor-warning))'
-                        : 'hsl(var(--harbor-text-tertiary))',
-                  }}
-                >
-                  {newPost.length}/{charLimit}
-                </div>
-              )}
-
-              {/* Pending media preview */}
-              {pendingMedia.length > 0 && (
-                <div className="mt-4 flex flex-wrap gap-3">
-                  {pendingMedia.map((media, index) => (
-                    <div
-                      key={index}
-                      className="relative rounded-lg overflow-hidden"
-                      style={{ background: 'hsl(var(--harbor-surface-1))' }}
-                    >
-                      {media.type === 'image' ? (
-                        <img src={media.url} alt={media.name} className="w-32 h-32 object-cover" />
-                      ) : media.type === 'video' ? (
-                        <video src={media.url} className="w-32 h-32 object-cover" />
-                      ) : (
-                        <div className="w-48 h-32 flex items-center justify-center p-3">
-                          <audio src={media.url} controls className="w-full" />
-                        </div>
-                      )}
-                      <button
-                        onClick={() => handleRemoveMedia(index)}
-                        className="absolute top-1 right-1 w-6 h-6 rounded-full flex items-center justify-center"
-                        style={{
-                          background: 'hsl(var(--harbor-error))',
-                          color: 'white',
-                        }}
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                      <div
-                        className="absolute bottom-0 left-0 right-0 px-2 py-1 text-xs truncate"
-                        style={{
-                          background: 'rgba(0,0,0,0.6)',
-                          color: 'white',
-                        }}
-                      >
-                        {media.name}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Composer footer */}
-            <div
-              className="px-5 py-3 border-t flex items-center justify-between"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handleAddMedia('image')}
-                  className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/5"
-                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                  title="Add image"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => handleAddMedia('video')}
-                  className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/5"
-                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                  title="Add video"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => handleAddMedia('audio')}
-                  className="p-2 rounded-lg transition-colors duration-200 hover:bg-white/5"
-                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                  title="Add audio"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M9 19V6l12-2v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-2c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={selectedVisibility === 'public'}
-                  onClick={() =>
-                    setSelectedVisibility(selectedVisibility === 'public' ? 'contacts' : 'public')
-                  }
-                  className="ml-2 px-3 py-2 rounded-lg text-xs font-semibold"
-                  title="Public posts appear in public wall previews and exported RSS. Contacts posts are shared only with contacts who have wall access."
-                  style={{
-                    background: 'hsl(var(--harbor-surface-2))',
-                    color: 'hsl(var(--harbor-text-primary))',
-                    border: '1px solid hsl(var(--harbor-border-subtle))',
-                  }}
-                >
-                  {selectedVisibility === 'public' ? 'Public' : 'Contacts'}
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {isComposing && (
-                  <button
-                    onClick={() => {
-                      setIsComposing(false);
-                      setNewPost('');
-                      setSelectedContentType('post');
-                      setSelectedVisibility(defaultVisibility);
-                      pendingMedia.forEach((m) => URL.revokeObjectURL(m.url));
-                      setPendingMedia([]);
-                    }}
-                    className="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
-                    style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button
-                  onClick={handlePost}
-                  disabled={!newPost.trim() && pendingMedia.length === 0}
-                  className="px-5 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{
-                    background:
-                      newPost.trim() || pendingMedia.length > 0
-                        ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                        : 'hsl(var(--harbor-surface-2))',
-                    color:
-                      newPost.trim() || pendingMedia.length > 0
-                        ? 'white'
-                        : 'hsl(var(--harbor-text-tertiary))',
-                    boxShadow:
-                      newPost.trim() || pendingMedia.length > 0
-                        ? '0 4px 12px hsl(var(--harbor-primary) / 0.3)'
-                        : 'none',
-                  }}
-                >
-                  Publish
-                </button>
-              </div>
-            </div>
-          </div>
-
           <button
             type="button"
             onClick={() => setShowPreview((value) => !value)}
@@ -1550,33 +1049,7 @@ export function WallPage() {
             </div>
           </section>
 
-          {/* Distinct wall views */}
-          <div
-            className="grid grid-cols-4 border-b"
-            style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-          >
-            {FILTER_OPTIONS.map((opt) => {
-              const isActive = socialView === `${opt.type}`;
-              return (
-                <button
-                  key={opt.type}
-                  onClick={() => setSocialView(opt.type)}
-                  className="px-3 py-3 text-sm font-semibold transition-all duration-200"
-                  style={{
-                    background: isActive ? 'hsl(var(--harbor-primary) / 0.15)' : 'transparent',
-                    color: isActive
-                      ? 'hsl(var(--harbor-primary))'
-                      : 'hsl(var(--harbor-text-secondary))',
-                    borderBottom: isActive
-                      ? '3px solid hsl(var(--harbor-primary))'
-                      : '3px solid transparent',
-                  }}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
+          <ModalityFilter value={socialView} onChange={setSocialView} label="Filter your posts" />
 
           {/* Posts */}
           {isLoading ? (
@@ -1602,17 +1075,15 @@ export function WallPage() {
                 className="text-lg font-semibold mb-2"
                 style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
-                {socialView === 'posts'
-                  ? 'No posts yet'
-                  : `No ${FILTER_OPTIONS.find((f) => f.type === socialView)?.label.toLowerCase() || 'posts'} yet`}
+                {socialView === 'all' ? 'No posts yet' : `No ${socialView} yet`}
               </h3>
               <p
                 className="text-sm max-w-xs mx-auto"
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               >
-                {socialView === 'posts'
+                {socialView === 'all'
                   ? 'Share your first post with your contacts. Your posts are stored locally and shared peer-to-peer.'
-                  : 'Try creating one using the composer above, or switch to a different filter.'}
+                  : 'Use Create post in the sidebar, or switch to a different filter.'}
               </p>
             </div>
           ) : (

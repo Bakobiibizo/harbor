@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FeedIcon, EllipsisIcon } from '../components/icons';
 import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
+import { ModalityFilter } from '../components/common/ModalityFilter';
 import { useFeedStore, useContactsStore, useWallStore, useSettingsStore } from '../stores';
 import { postsService } from '../services/posts';
 import { createLogger } from '../utils/logger';
@@ -10,6 +11,7 @@ import { safePeerLabel } from '../utils/relayName';
 import type { FeedItem } from '../types';
 import type { SharedFrom, Comment } from '../stores';
 import { useIdentityStore } from '../stores';
+import { matchesModalityFilter } from '../utils/postModality';
 
 const log = createLogger('Feed');
 import { getInitials, getContactColor, formatDate } from '../utils/formatting';
@@ -470,6 +472,7 @@ interface UnifiedPost {
   id: string;
   postId: string; // The actual post ID (used for comments backend)
   content: string;
+  contentType: string;
   timestamp: Date;
   likes: number;
   comments: number;
@@ -592,6 +595,7 @@ export function FeedPage() {
         id: `real-${item.postId}`,
         postId: item.postId,
         content: item.contentText || '',
+        contentType: item.contentType,
         timestamp: new Date(item.createdAt * 1000),
         likes: item.likes ?? 0,
         comments: commentCounts[item.postId] || 0,
@@ -616,6 +620,7 @@ export function FeedPage() {
           id: `real-${item.postId}`,
           postId: item.postId,
           content: item.contentText || '',
+          contentType: item.contentType,
           timestamp: new Date(item.createdAt * 1000),
           likes: item.likes ?? 0,
           comments: commentCounts[item.postId] || 0,
@@ -641,10 +646,7 @@ export function FeedPage() {
   // Select posts based on active tab
   const selectedPosts: UnifiedPost[] = activeTab === 'saved' ? savedPosts : allPosts;
   const posts = selectedPosts.filter((post) => {
-    if (socialView === 'posts') return true;
-    const mediaType =
-      socialView === 'images' ? 'image' : socialView === 'videos' ? 'video' : 'audio';
-    return post.media?.some((media) => media.type === mediaType);
+    return matchesModalityFilter(socialView, post.contentType, post.media);
   });
 
   const handleRefresh = useCallback(async () => {
@@ -806,29 +808,8 @@ export function FeedPage() {
             </div>
           </div>
 
-          <div
-            className="grid grid-cols-4 border-b mb-3"
-            style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-          >
-            {(['posts', 'images', 'videos', 'audio'] as const).map((view) => (
-              <button
-                key={view}
-                onClick={() => setSocialView(view)}
-                className="px-3 py-3 text-sm font-semibold capitalize"
-                style={{
-                  color:
-                    socialView === view
-                      ? 'hsl(var(--harbor-primary))'
-                      : 'hsl(var(--harbor-text-secondary))',
-                  borderBottom:
-                    socialView === view
-                      ? '3px solid hsl(var(--harbor-primary))'
-                      : '3px solid transparent',
-                }}
-              >
-                {view}
-              </button>
-            ))}
+          <div className="mb-3">
+            <ModalityFilter value={socialView} onChange={setSocialView} label="Filter your feed" />
           </div>
           {/* Saved-state tabs */}
           <div

@@ -8,7 +8,7 @@ import type { IceServerConfig, IceServerInput, RedactedIceServerConfig } from '.
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSize = 'small' | 'medium' | 'large';
-export type SocialView = 'posts' | 'images' | 'videos' | 'audio';
+export type SocialView = 'all' | 'images' | 'videos' | 'audio';
 export type AccentColor =
   'harbor' | 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'teal' | 'amber';
 
@@ -173,8 +173,8 @@ export const useSettingsStore = create<SettingsState>()(
       showReadReceipts: true,
       showOnlineStatus: true,
       defaultVisibility: 'contacts',
-      socialView: 'posts',
-      communityView: 'posts',
+      socialView: 'all',
+      communityView: 'all',
       avatarUrl: null,
       theme: 'system',
       accentColor: 'harbor',
@@ -236,6 +236,17 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'harbor-settings',
+      version: 1,
+      migrate: (persistedState) => {
+        const state = persistedState as Record<string, unknown>;
+        const normalizeView = (value: unknown): SocialView =>
+          value === 'images' || value === 'videos' || value === 'audio' ? value : 'all';
+        return {
+          ...state,
+          socialView: normalizeView(state.socialView),
+          communityView: normalizeView(state.communityView),
+        } as SettingsState;
+      },
       partialize: (state) => ({
         soundEnabled: state.soundEnabled,
         autoStartNetwork: state.autoStartNetwork,

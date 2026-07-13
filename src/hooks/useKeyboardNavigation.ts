@@ -160,7 +160,7 @@ export function useKeyboardNavigation() {
       // Cmd/Ctrl+Shift+N: open the post composer.
       if (modKey && event.shiftKey && !event.altKey && (event.key === 'n' || event.key === 'N')) {
         event.preventDefault();
-        dispatchAfterNavigation('/wall', HARBOR_SHORTCUT_EVENTS.newPost);
+        window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.newPost));
         return;
       }
 

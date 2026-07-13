@@ -6,3 +6,5 @@ export { ErrorBoundary } from './ErrorBoundary';
 export { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 export { CustomizationPanel } from './CustomizationPanel';
 export { EmojiPicker } from './EmojiPicker';
+export { ModalityFilter } from './ModalityFilter';
+export { ComposePostModal } from './ComposePostModal';

@@ -5,6 +5,7 @@ import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import { postsService } from '../services/posts';
 import { feedService } from '../services/feed';
 import { getShareableContactString } from '../services/network';
+import { ComposePostModal } from '../components/common/ComposePostModal';
 
 vi.mock('../services/posts', () => ({
   postsService: {
@@ -140,7 +141,7 @@ describe('WallPage visibility controls', () => {
   });
 
   it('selects the persisted default visibility before publishing', async () => {
-    render(<WallPage />);
+    render(<ComposePostModal isOpen onClose={vi.fn()} />);
 
     const publicButton = screen.getByRole('button', { name: 'Public' });
     expect(publicButton).toHaveAttribute('aria-pressed', 'true');
@@ -161,9 +162,9 @@ describe('WallPage visibility controls', () => {
   });
 
   it('lets the author override visibility per post', async () => {
-    render(<WallPage />);
+    render(<ComposePostModal isOpen onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByText('Contacts only').closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Public' }));
     fireEvent.change(screen.getByPlaceholderText(/share your thoughts/i), {
       target: { value: 'Private to contacts' },
     });
@@ -177,6 +178,20 @@ describe('WallPage visibility controls', () => {
         undefined,
       );
     });
+  });
+
+  it('opens with focus in the accessible dialog and closes with Escape', async () => {
+    const onClose = vi.fn();
+    render(<ComposePostModal isOpen onClose={onClose} />);
+
+    expect(screen.getByRole('dialog', { name: 'Create a post' })).toHaveAttribute(
+      'aria-modal',
+      'true',
+    );
+    await waitFor(() => expect(screen.getByPlaceholderText(/share your thoughts/i)).toHaveFocus());
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('loads backend guest preview and switches to contact preview without showing contacts-only posts to guests', async () => {

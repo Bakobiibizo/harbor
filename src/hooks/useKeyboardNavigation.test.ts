@@ -90,8 +90,7 @@ describe('useKeyboardNavigation', () => {
     expect(onMessage).toHaveBeenCalledOnce();
 
     fireEvent.keyDown(window, { key: 'N', ctrlKey: true, shiftKey: true });
-    expect(router.navigate).toHaveBeenCalledWith('/wall');
-    vi.runOnlyPendingTimers();
+    expect(router.navigate).not.toHaveBeenCalledWith('/wall');
     expect(onPost).toHaveBeenCalledOnce();
 
     fireEvent.keyDown(window, { key: ',', ctrlKey: true });
