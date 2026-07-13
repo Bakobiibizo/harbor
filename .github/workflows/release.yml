@@ -213,7 +213,6 @@ jobs:
         with:
           client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true
 
       - name: Build Windows executable
