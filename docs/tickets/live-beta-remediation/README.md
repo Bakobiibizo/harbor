@@ -63,8 +63,22 @@ two-profile packaged-app scenario.
 | 27 | P1 | `live-0726-interaction-motion` | Define themeable hover, pressed, focus, selected, disabled, and loading feedback for interactive controls/cards, honor reduced-motion, avoid layout shift, and apply it consistently through shared primitives. | None |
 | 28 | P1 | `live-0727-keyboard-shortcuts` | Add documented platform-standard shortcuts for navigation, compose, search, send/submit, close/cancel, refresh, settings, and relevant call controls without overriding text editing, screen-reader, or OS conventions. Include a discoverable shortcut reference. | 0723 |
 | 29 | P1 | `live-0728-bug-report-tracking-link` | Make the post-submit bug-account reference an actual internal Harbor navigation action to that named account/wall, with browser-safe fallback and no raw key exposure. | 0705, 0707 |
-| 30 | P2 | `live-0729-community-identity-spec` | Research and user-test a distinct community-board model (forum/topic structure, relay identity and naming, discovery, membership, moderation without assumed central ownership, posting/filtering, and why it is valuable). Produce an approved ADR/wireflow and decompose implementation only after approval. | 0705, 0724 |
+| 30 | P2 | `live-0729-community-identity-spec` | Review the [proposed community forum ADR](../../architecture/adr-0002-community-forum-identity.md), run the [text wireflow](../../architecture/community-forum-wireflow.md) with representative users, resolve its four acceptance questions, and approve or replace it. The [atomic implementation program](community-forum/README.md) remains unscheduled until approval. | 0705, 0724 |
 | 31 | P0 | `live-0730-cross-platform-acceptance` | Run a clean packaged Windows/macOS acceptance session with two users and an additional group-call profile. Record sanitized evidence for entry, invites, requests, names, content/privacy, refresh, media, notifications, calls, links, and restart; block broad beta publication on any P0 failure. | All P0 tickets |
+
+## Community program gate
+
+`live-0729-community-identity-spec` has produced a concrete proposal and decomposition:
+
+- [ADR-0002: Relay-scoped communities as portable signed forums](../../architecture/adr-0002-community-forum-identity.md)
+- [Low-fidelity community forum wireflow](../../architecture/community-forum-wireflow.md)
+- [Atomic MVP and later ticket program](community-forum/README.md)
+
+ADR-0002 is still **Proposed**. The first allowable follow-up is
+`live-0800-community-contract-approval`. Do not schedule `live-0801` through `live-0811` or any
+`live-090x` work until that approval ticket records the address syntax, public/open MVP boundary,
+governance timing, and legacy-board treatment and changes the ADR status to Accepted. Community work
+is P2 product discovery and does not silently become a blocker for the P0 cross-platform beta gate.
 
 ## Clarified assumption
 
