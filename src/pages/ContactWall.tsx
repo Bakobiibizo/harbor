@@ -22,8 +22,19 @@ export function publicOnlyText(canReadContactsOnly: boolean | null): string {
   return 'Checking WallRead access. Public posts remain available while Harbor verifies the current grant.';
 }
 
-export function ContactWallPage() {
-  const { peerId } = useParams<{ peerId: string }>();
+interface ContactWallPageProps {
+  peerIdOverride?: string;
+  verifiedQualifiedNameOverride?: string;
+  hidePeerId?: boolean;
+}
+
+export function ContactWallPage({
+  peerIdOverride,
+  verifiedQualifiedNameOverride,
+  hidePeerId = false,
+}: ContactWallPageProps = {}) {
+  const { peerId: routePeerId } = useParams<{ peerId: string }>();
+  const peerId = peerIdOverride || routePeerId;
   const navigate = useNavigate();
   const identityState = useIdentityStore((state) => state.state);
   const currentPeerId =
@@ -101,7 +112,10 @@ export function ContactWallPage() {
     };
   }, [wallItems]);
 
-  const displayName = safePeerLabel(peerId || 'unknown', wallItems[0]?.authorVerifiedQualifiedName);
+  const displayName = safePeerLabel(
+    peerId || 'unknown',
+    verifiedQualifiedNameOverride || wallItems[0]?.authorVerifiedQualifiedName,
+  );
   const authorPeerId = peerId || '';
 
   const handleRefresh = useCallback(async () => {
@@ -184,13 +198,15 @@ export function ContactWallPage() {
               >
                 {displayName}'s Wall
               </h1>
-              <p
-                className="text-xs font-mono truncate mt-1"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                title={authorPeerId}
-              >
-                {authorPeerId}
-              </p>
+              {!hidePeerId && (
+                <p
+                  className="text-xs font-mono truncate mt-1"
+                  style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                  title={authorPeerId}
+                >
+                  {authorPeerId}
+                </p>
+              )}
               <p className="text-sm mt-2" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {publicOnlyText(canReadContactsOnly)}
               </p>

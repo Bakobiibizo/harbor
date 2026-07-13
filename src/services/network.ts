@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PeerInfo, NetworkStats } from '../types';
+import { normalizeContactInvite } from '../utils/contactInvite';
 
 /** Start the P2P network (requires unlocked identity) */
 export async function startNetwork(): Promise<void> {
@@ -71,9 +72,11 @@ export async function getShareableContactString(): Promise<string> {
   return invoke<string>('get_shareable_contact_string');
 }
 
-/** Add a contact from a shareable contact string (harbor://...) */
+/** Add a contact from an official HTTPS invite or harbor:// invite. */
 export async function addContactFromString(contactString: string): Promise<string> {
-  return invoke<string>('add_contact_from_string', { contactString });
+  return invoke<string>('add_contact_from_string', {
+    contactString: normalizeContactInvite(contactString),
+  });
 }
 
 export async function syncFeed(limit?: number): Promise<void> {

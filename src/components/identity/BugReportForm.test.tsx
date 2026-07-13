@@ -22,6 +22,12 @@ describe('BugReportForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit signed bug report' }));
     await waitFor(() => expect(mentionsService.publish).toHaveBeenCalled());
     expect(screen.getByText('Bug report submitted')).toBeInTheDocument();
+    const trackingLink = screen.getByRole('link', {
+      name: 'Track this report on @bugs@harbor.social’s wall',
+    });
+    expect(trackingLink).toHaveAttribute('href', '#/name/%40bugs%40harbor.social/wall');
+    expect(trackingLink.getAttribute('href')).not.toContain('peer');
+    expect(trackingLink.getAttribute('href')).not.toContain('harbor://');
     expect(vi.mocked(mentionsService.publish).mock.calls[0][0].mentions[0].intent).toBe(
       'repost-request',
     );

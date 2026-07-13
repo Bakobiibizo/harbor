@@ -115,15 +115,35 @@ describe('networkService', () => {
   });
 
   describe('addContactFromString', () => {
-    it('should invoke add_contact_from_string', async () => {
+    const bundle = {
+      multiaddr: '/ip4/1.2.3.4/tcp/9000/p2p/peer-alice',
+      display_name: 'Alice',
+      public_key: 'QUJDRA==',
+      x25519_public: 'RUZHSA==',
+    };
+    const encoded = btoa(JSON.stringify(bundle))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    it('normalizes an official web invite before invoking add_contact_from_string', async () => {
       vi.mocked(invoke).mockResolvedValue('peer-alice');
 
-      const result = await networkService.addContactFromString('harbor://contact/abc');
+      const result = await networkService.addContactFromString(
+        `https://social-harbor.com/add-friend/${encoded}`,
+      );
 
       expect(invoke).toHaveBeenCalledWith('add_contact_from_string', {
-        contactString: 'harbor://contact/abc',
+        contactString: `harbor://${encoded}`,
       });
       expect(result).toBe('peer-alice');
+    });
+
+    it('rejects malformed and oversized invites without invoking the backend', async () => {
+      await expect(
+        networkService.addContactFromString('https://evil.test/add-friend/x'),
+      ).rejects.toThrow(/official social-harbor.com/);
+      expect(invoke).not.toHaveBeenCalled();
     });
   });
 

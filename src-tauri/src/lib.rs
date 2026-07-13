@@ -88,10 +88,12 @@ fn allow_headless_webkit_media_capture(_window: &tauri::WebviewWindow) -> tauri:
 /// Normalize, validate, and route a harbor:// URL to the frontend.
 /// Called from both the deep-link on_open_url handler and the single-instance callback.
 fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
-    let contact_string = if let Some(rest) = url.strip_prefix("harbor://add-friend/") {
-        format!("harbor://{}", rest)
-    } else {
-        url.to_string()
+    let contact_string = match commands::network::normalize_contact_invite(url) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, "Ignoring invalid or unsupported Harbor deep link");
+            return;
+        }
     };
     let identity_service = app.state::<Arc<IdentityService>>();
     if identity_service.is_unlocked() {

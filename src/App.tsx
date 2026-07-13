@@ -19,6 +19,7 @@ import {
   NetworkPage,
   SettingsPage,
 } from './pages';
+import { NamedContactWallPage } from './pages/NamedContactWall';
 import type { AccountInfo } from './types';
 import { checkForUpdate } from './services/updater';
 
@@ -216,6 +217,7 @@ function AppContent() {
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/wall" element={<WallPage />} />
             <Route path="/contacts/:peerId/wall" element={<ContactWallPage />} />
+            <Route path="/name/:qualifiedName/wall" element={<NamedContactWallPage />} />
             <Route path="/feed" element={<FeedPage />} />
             <Route path="/boards" element={<BoardsPage />} />
             <Route path="/network" element={<NetworkPage />} />

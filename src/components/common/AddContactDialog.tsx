@@ -4,6 +4,7 @@ import { XIcon } from '../icons';
 import { Button } from './Button';
 import { addContactFromString } from '../../services/network';
 import { safePeerLabel } from '../../utils/relayName';
+import { parseContactInvite } from '../../utils/contactInvite';
 
 interface Props {
   contactString: string;
@@ -18,18 +19,10 @@ interface ContactPreview {
 
 function parseContactString(contactString: string): ContactPreview | null {
   try {
-    const base64 = contactString.replace('harbor://', '');
-    // URL-safe base64 uses - and _ instead of + and /; atob needs standard base64 with padding
-    const b64 = base64.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-    const json = atob(padded);
-    const bundle = JSON.parse(json);
-    // Peer ID is the last segment of the multiaddr: /ip4/.../p2p/<peer_id>
-    const parts: string[] = bundle.multiaddr.split('/');
-    const peerId = parts[parts.length - 1];
+    const bundle = parseContactInvite(contactString);
     return {
       displayName: bundle.displayName,
-      peerId,
+      peerId: bundle.peerId,
       bio: bundle.bio ?? undefined,
     };
   } catch {
@@ -91,7 +84,9 @@ export function AddContactDialog({ contactString, onClose }: Props) {
         {/* Content */}
         <div className="px-6 py-5 space-y-4">
           <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Do you want to add this person to your contacts?
+            {preview
+              ? 'Do you want to add this person to your contacts?'
+              : 'This contact invite is malformed or no longer supported.'}
           </p>
 
           <div
@@ -126,7 +121,13 @@ export function AddContactDialog({ contactString, onClose }: Props) {
           <Button variant="secondary" size="sm" onClick={onClose} disabled={isLoading}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" loading={isLoading} onClick={handleConfirm}>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={isLoading}
+            disabled={isLoading || !preview}
+            onClick={handleConfirm}
+          >
             Add Contact
           </Button>
         </div>

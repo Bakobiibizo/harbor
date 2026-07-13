@@ -350,8 +350,8 @@ export function NetworkPage() {
 
     setIsConnectingPeer(true);
     try {
-      // Check if it's a harbor:// contact string (new simplified flow)
-      if (input.startsWith('harbor://')) {
+      // Official web links and native deep links normalize to the same bounded invite.
+      if (input.startsWith('harbor://') || /^https:\/\//i.test(input)) {
         await networkService.addContactFromString(input);
         toast.success('Contact added successfully!');
         refreshContacts();
@@ -362,7 +362,7 @@ export function NetworkPage() {
         toast.success('Connection initiated!');
         setPeerAddress('');
       } else {
-        toast.error('Invalid address format. Use a harbor:// link or multiaddress with /p2p/');
+        toast.error('Invalid address format. Paste a Harbor contact link or a /p2p/ address.');
       }
     } catch (err) {
       toast.error(`Failed: ${err}`);
@@ -913,7 +913,7 @@ export function NetworkPage() {
                   type="text"
                   value={peerAddress}
                   onChange={(event) => setPeerAddress(event.target.value)}
-                  placeholder="Paste a harbor:// link here"
+                  placeholder="Paste a social-harbor.com or harbor:// contact link"
                   className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
                   style={{
                     background: 'hsl(var(--harbor-surface-1))',
@@ -965,9 +965,7 @@ export function NetworkPage() {
                     link from above and send it to your contact
                   </li>
                   <li>Ask your contact to send you their link</li>
-                  <li>
-                    Paste their link here and click Add - they'll be instantly added as a contact!
-                  </li>
+                  <li>Paste their web or Harbor link here and click Add Contact</li>
                 </ol>
               </div>
             </div>

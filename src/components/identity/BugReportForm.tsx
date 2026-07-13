@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { mentionsService } from '../../services';
 import { Button } from '../common';
+import { namedWallPath } from '../../utils/namedWall';
 
 export const HARBOR_BUGS_NAME = import.meta.env.VITE_HARBOR_BUGS_NAME || '@bugs@harbor.social';
 
@@ -8,7 +9,7 @@ export function BugReportForm() {
   const [summary, setSummary] = useState('');
   const [details, setDetails] = useState('');
   const [busy, setBusy] = useState(false);
-  const [trackingWall, setTrackingWall] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
@@ -18,7 +19,7 @@ export function BugReportForm() {
       const target = await mentionsService.resolve(HARBOR_BUGS_NAME);
       if (target.status === 'blocked')
         throw new Error('Bug reports are currently unavailable from this relay.');
-      const result = await mentionsService.publish({
+      await mentionsService.publish({
         contentType: 'text',
         visibility: 'public',
         contentText: `Bug report: ${summary}\n\n${details}\n\n${HARBOR_BUGS_NAME}`,
@@ -31,7 +32,9 @@ export function BugReportForm() {
           },
         ],
       });
-      setTrackingWall(result.trackingWall || `harbor://name/${HARBOR_BUGS_NAME.slice(1)}`);
+      // Navigation is name-based. Never expose the resolved peer ID or accept an
+      // arbitrary tracking URI returned across the command boundary.
+      setSubmitted(true);
       setSummary('');
       setDetails('');
     } catch (err) {
@@ -41,7 +44,8 @@ export function BugReportForm() {
     }
   }
 
-  if (trackingWall)
+  if (submitted) {
+    const trackingPath = namedWallPath(HARBOR_BUGS_NAME);
     return (
       <div className="rounded-lg p-6" style={{ background: 'hsl(var(--harbor-success) / .1)' }}>
         <h4 className="font-semibold">Bug report submitted</h4>
@@ -49,14 +53,15 @@ export function BugReportForm() {
           The Harbor Bugs account can review and repost it without gaining access to your contacts
           or private content.
         </p>
-        <a className="underline" href={trackingWall}>
+        <a className="underline" href={`#${trackingPath}`}>
           Track this report on {HARBOR_BUGS_NAME}’s wall
         </a>
-        <button className="block mt-4 text-sm underline" onClick={() => setTrackingWall(null)}>
+        <button className="block mt-4 text-sm underline" onClick={() => setSubmitted(false)}>
           Report another bug
         </button>
       </div>
     );
+  }
   return (
     <div
       className="rounded-lg p-6 space-y-4"

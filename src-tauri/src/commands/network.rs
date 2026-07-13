@@ -410,6 +410,54 @@ pub struct ContactBundle {
     pub avatar_hash: Option<String>,
 }
 
+const MAX_CONTACT_INVITE_INPUT_LENGTH: usize = 16_384;
+const MAX_CONTACT_INVITE_PAYLOAD_LENGTH: usize = 12_288;
+const MAX_CONTACT_INVITE_DECODED_BYTES: usize = 8_192;
+
+/// Normalize all supported first-party invite forms at the command boundary.
+/// The frontend performs the same checks for immediate feedback, but the
+/// backend remains authoritative because invoke callers are untrusted.
+pub(crate) fn normalize_contact_invite(input: &str) -> Result<String, AppError> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(AppError::Validation(
+            "Invalid contact invite: the payload is missing".to_string(),
+        ));
+    }
+    if input.len() > MAX_CONTACT_INVITE_INPUT_LENGTH {
+        return Err(AppError::Validation(
+            "Invalid contact invite: the link is too large".to_string(),
+        ));
+    }
+
+    let payload = if let Some(value) = input.strip_prefix("harbor://add-friend/") {
+        value
+    } else if let Some(value) = input.strip_prefix("harbor://") {
+        value
+    } else if let Some(value) = input.strip_prefix("https://social-harbor.com/add-friend/") {
+        value
+    } else if let Some(value) = input.strip_prefix("https://www.social-harbor.com/add-friend/") {
+        value
+    } else {
+        return Err(AppError::Validation(
+            "Invalid contact invite: use an official social-harbor.com link".to_string(),
+        ));
+    };
+
+    let payload = payload.strip_suffix('/').unwrap_or(payload);
+    if payload.is_empty()
+        || payload.len() > MAX_CONTACT_INVITE_PAYLOAD_LENGTH
+        || !payload
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(AppError::Validation(
+            "Invalid contact invite: malformed or oversized payload".to_string(),
+        ));
+    }
+    Ok(format!("harbor://{payload}"))
+}
+
 /// Generate a shareable contact string that includes all info needed to add as contact
 /// Format: harbor://<base64_encoded_json>
 #[tauri::command]
@@ -478,17 +526,45 @@ pub async fn add_contact_from_string(
     use crate::db::Capability;
     use base64::Engine;
 
+    let normalized = normalize_contact_invite(&contact_string)?;
     // Parse the contact string
-    let encoded = contact_string
+    let encoded = normalized
         .strip_prefix("harbor://")
         .ok_or_else(|| AppError::Validation("Invalid contact string format".to_string()))?;
 
     let json_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(encoded)
         .map_err(|e| AppError::Validation(format!("Invalid contact encoding: {}", e)))?;
+    if json_bytes.len() > MAX_CONTACT_INVITE_DECODED_BYTES {
+        return Err(AppError::Validation(
+            "Invalid contact invite: decoded payload is too large".to_string(),
+        ));
+    }
 
     let bundle: ContactBundle = serde_json::from_slice(&json_bytes)
         .map_err(|e| AppError::Validation(format!("Invalid contact data: {}", e)))?;
+
+    if bundle.multiaddr.is_empty()
+        || bundle.multiaddr.len() > 2_048
+        || bundle.display_name.is_empty()
+        || bundle.display_name.chars().count() > 128
+        || bundle.public_key.is_empty()
+        || bundle.public_key.len() > 512
+        || bundle.x25519_public.is_empty()
+        || bundle.x25519_public.len() > 512
+        || bundle
+            .bio
+            .as_ref()
+            .is_some_and(|value| value.chars().count() > 2_048)
+        || bundle
+            .avatar_hash
+            .as_ref()
+            .is_some_and(|value| value.len() > 512)
+    {
+        return Err(AppError::Validation(
+            "Invalid contact invite: contact data is malformed or oversized".to_string(),
+        ));
+    }
 
     // Decode the keys — contact strings have double-base64-encoded keys:
     // base64(base64(32 raw bytes)). Decode both layers, fall back to single decode
@@ -510,8 +586,9 @@ pub async fn add_contact_from_string(
     // Extract peer ID from multiaddr
     let peer_id = bundle
         .multiaddr
-        .split("/p2p/")
-        .last()
+        .rsplit_once("/p2p/")
+        .map(|(_, peer_id)| peer_id)
+        .filter(|peer_id| !peer_id.is_empty() && !peer_id.contains('/') && peer_id.len() <= 256)
         .ok_or_else(|| AppError::Validation("No peer ID in multiaddr".to_string()))?
         .to_string();
 
@@ -545,4 +622,32 @@ pub async fn add_contact_from_string(
     );
 
     Ok(peer_id)
+}
+
+#[cfg(test)]
+mod contact_invite_tests {
+    use super::normalize_contact_invite;
+
+    #[test]
+    fn normalizes_native_and_official_web_invites() {
+        let payload = "Abc_123-def";
+        assert_eq!(
+            normalize_contact_invite(&format!("harbor://add-friend/{payload}")).unwrap(),
+            format!("harbor://{payload}")
+        );
+        assert_eq!(
+            normalize_contact_invite(&format!("https://social-harbor.com/add-friend/{payload}"))
+                .unwrap(),
+            format!("harbor://{payload}")
+        );
+    }
+
+    #[test]
+    fn rejects_untrusted_hosts_suffixes_and_oversized_invites() {
+        assert!(
+            normalize_contact_invite("https://social-harbor.com.evil.example/add-friend/Abc")
+                .is_err()
+        );
+        assert!(normalize_contact_invite(&format!("harbor://{}", "A".repeat(12_289))).is_err());
+    }
 }
