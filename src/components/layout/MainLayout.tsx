@@ -6,7 +6,13 @@ import {
   useNetworkStore,
   useMessagingStore,
 } from '../../stores';
-import { useKeyboardNavigation } from '../../hooks';
+import {
+  formatShortcut,
+  getShortcutPlatform,
+  HARBOR_SHORTCUT_EVENTS,
+  KEYBOARD_SHORTCUTS,
+  useKeyboardNavigation,
+} from '../../hooks';
 import { safeIdentityLabel } from '../../utils/relayName';
 import { KeyboardShortcutsModal, CustomizationPanel } from '../common';
 import { LockAccountDialog } from './LockAccountDialog';
@@ -21,6 +27,7 @@ import {
   LockIcon,
   HarborIcon,
   ChevronRightIcon,
+  InfoIcon,
 } from '../icons';
 
 interface MainLayoutProps {
@@ -82,6 +89,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   useKeyboardNavigation();
 
   const identity = state.status === 'unlocked' ? state.identity : null;
+  const shortcutReference = KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === 'shortcuts');
 
   // Get indicator color based on network status
   const getStatusColor = () => {
@@ -338,6 +346,41 @@ export function MainLayout({ children }: MainLayoutProps) {
           className="p-3 border-t space-y-1"
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
+          <button
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.showShortcuts))
+            }
+            className="harbor-interactive flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left"
+          >
+            <div
+              className="flex h-9 w-9 items-center justify-center rounded-lg"
+              style={{ background: 'hsl(var(--harbor-surface-2))' }}
+            >
+              <InfoIcon
+                className="h-5 w-5"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              />
+            </div>
+            <span
+              className="flex-1 text-sm font-medium"
+              style={{ color: 'hsl(var(--harbor-text-primary))' }}
+            >
+              Keyboard shortcuts
+            </span>
+            {shortcutReference && (
+              <kbd
+                className="rounded px-1.5 py-0.5 text-[11px]"
+                style={{
+                  background: 'hsl(var(--harbor-surface-1))',
+                  color: 'hsl(var(--harbor-text-tertiary))',
+                }}
+              >
+                {formatShortcut(shortcutReference, getShortcutPlatform())}
+              </kbd>
+            )}
+          </button>
+
           {/* Settings */}
           <NavLink to="/settings" className="harbor-interactive group block rounded-xl">
             {({ isActive }) => (

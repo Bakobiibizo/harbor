@@ -21,6 +21,11 @@ import {
 import { useCallingStore, useContactsStore, useMessagingStore } from '../stores';
 import { getInitials, getContactColor, formatRelativeTime } from '../utils/formatting';
 import { EmojiPicker } from '../components/common/EmojiPicker';
+import {
+  HARBOR_SHORTCUT_EVENTS,
+  isEditableShortcutTarget,
+  shouldSendMessageFromKey,
+} from '../hooks/useKeyboardNavigation';
 
 const log = createLogger('Chat');
 
@@ -691,6 +696,7 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const conversationSearchInputRef = useRef<HTMLInputElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -712,10 +718,52 @@ export function ChatPage() {
     setCurrentSearchIndex(0);
   }, [messageSearchQuery]);
 
-  // Global Ctrl+F keyboard shortcut to toggle message search
+  useEffect(() => {
+    const focusSearch = () => {
+      if (selectedConversation) {
+        setShowMessageSearch(true);
+        window.requestAnimationFrame(() => {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        });
+      } else {
+        conversationSearchInputRef.current?.focus();
+        conversationSearchInputRef.current?.select();
+      }
+    };
+    const startNewMessage = () => {
+      setSelectedConversation(null);
+      setShowContactPicker(true);
+    };
+    const dismissTransientUi = () => {
+      setShowContactPicker(false);
+      setShowEmojiPicker(false);
+      setOpenMenuId(null);
+      setHeaderMenuOpen(false);
+      setConfirmDialog((current) => ({ ...current, isOpen: false }));
+      setShowMessageSearch(false);
+      setMessageSearchQuery('');
+    };
+
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.focusSearch, focusSearch);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newMessage, startNewMessage);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.escape, dismissTransientUi);
+    return () => {
+      window.removeEventListener(HARBOR_SHORTCUT_EVENTS.focusSearch, focusSearch);
+      window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newMessage, startNewMessage);
+      window.removeEventListener(HARBOR_SHORTCUT_EVENTS.escape, dismissTransientUi);
+    };
+  }, [selectedConversation, setSelectedConversation]);
+
+  // Standard find remains available outside text fields; Cmd/Ctrl+K uses the shared shortcut path.
   useEffect(() => {
     const handleGlobalKeyDown = (e: globalThis.KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f' && selectedConversation) {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key === 'f' &&
+        selectedConversation &&
+        !isEditableShortcutTarget(e.target)
+      ) {
         e.preventDefault();
         if (!showMessageSearch) {
           setShowMessageSearch(true);
@@ -962,8 +1010,8 @@ export function ChatPage() {
   }, []);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter to send, Shift+Enter for new line
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter or Cmd/Ctrl+Enter sends. Shift+Enter always preserves multiline editing.
+    if (shouldSendMessageFromKey(e)) {
       e.preventDefault();
       handleSendMessage();
     }
@@ -1164,6 +1212,7 @@ export function ChatPage() {
               style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
             />
             <input
+              ref={conversationSearchInputRef}
               type="text"
               placeholder="Search conversations..."
               value={searchQuery}
@@ -1958,6 +2007,8 @@ export function ChatPage() {
               value={messageInput}
               onChange={(e) => setMessageInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              aria-keyshortcuts="Enter Control+Enter Meta+Enter"
+              aria-describedby="message-composer-shortcut-hint"
               rows={1}
               className="flex-1 px-4 py-3 rounded-lg text-sm resize-none max-h-32"
               style={{
@@ -1966,6 +2017,9 @@ export function ChatPage() {
                 color: 'hsl(var(--harbor-text-primary))',
               }}
             />
+            <span id="message-composer-shortcut-hint" className="sr-only">
+              Press Enter to send. Press Shift and Enter for a new line.
+            </span>
             {/* Emoji picker button */}
             <div className="relative flex-shrink-0">
               <button

@@ -19,6 +19,7 @@ import { extractFirstUrl } from '../utils/urlDetection';
 import { createLogger } from '../utils/logger';
 import { safeIdentityLabel } from '../utils/relayName';
 import type { Comment } from '../services/comments';
+import { HARBOR_SHORTCUT_EVENTS } from '../hooks/useKeyboardNavigation';
 
 const log = createLogger('Wall');
 
@@ -434,8 +435,22 @@ export function WallPage() {
   const [submittingComments, setSubmittingComments] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaTypeRef = useRef<'image' | 'video' | 'audio'>('image');
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
 
   const identity = state.status === 'unlocked' ? state.identity : null;
+
+  useEffect(() => {
+    const startNewPost = () => {
+      setIsComposing(true);
+      window.requestAnimationFrame(() => {
+        composerInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        composerInputRef.current?.focus();
+      });
+    };
+
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newPost, startNewPost);
+    return () => window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newPost, startNewPost);
+  }, []);
 
   // Get content type config
   const currentTypeConfig = CONTENT_TYPES.find((c) => c.type === selectedContentType)!;
@@ -979,6 +994,7 @@ export function WallPage() {
             {/* Composer body */}
             <div className="p-5">
               <textarea
+                ref={composerInputRef}
                 placeholder={currentTypeConfig.placeholder}
                 value={newPost}
                 onChange={(e) => {

@@ -1,16 +1,63 @@
 import { useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
-interface KeyboardShortcut {
+export type ShortcutPlatform = 'mac' | 'windows-linux';
+export type ShortcutCategory = 'Navigation' | 'Actions' | 'Editing';
+
+export interface KeyboardShortcut {
+  id: string;
   key: string;
-  ctrlKey?: boolean;
+  modifier?: 'mod' | 'alt';
   altKey?: boolean;
   shiftKey?: boolean;
-  action: () => void;
   description: string;
+  category: ShortcutCategory;
 }
 
-const PAGE_ROUTES = ['/chat', '/wall', '/feed', '/network', '/settings'] as const;
+export const HARBOR_SHORTCUT_EVENTS = {
+  focusSearch: 'harbor:focus-search',
+  newMessage: 'harbor:new-message',
+  newPost: 'harbor:new-post',
+  escape: 'harbor:escape',
+  showShortcuts: 'harbor:show-shortcuts',
+} as const;
+
+const PAGE_ROUTES = ['/chat', '/wall', '/feed', '/boards', '/network', '/settings'] as const;
+
+export function getShortcutPlatform(platform = navigator.platform): ShortcutPlatform {
+  return /Mac|iPhone|iPad|iPod/i.test(platform) ? 'mac' : 'windows-linux';
+}
+
+export function formatShortcut(
+  shortcut: KeyboardShortcut,
+  platform: ShortcutPlatform = getShortcutPlatform(),
+): string {
+  const parts: string[] = [];
+  if (shortcut.modifier === 'mod') parts.push(platform === 'mac' ? '⌘' : 'Ctrl');
+  if (shortcut.modifier === 'alt' || shortcut.altKey) parts.push(platform === 'mac' ? '⌥' : 'Alt');
+  if (shortcut.shiftKey) parts.push(platform === 'mac' ? '⇧' : 'Shift');
+  parts.push(shortcut.key);
+  return parts.join(platform === 'mac' ? ' ' : ' + ');
+}
+
+export function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT' ||
+    target.isContentEditable ||
+    Boolean(target.closest('[contenteditable="true"], [role="textbox"]'))
+  );
+}
+
+export function shouldSendMessageFromKey(event: {
+  key: string;
+  shiftKey: boolean;
+  altKey: boolean;
+}): boolean {
+  return event.key === 'Enter' && !event.shiftKey && !event.altKey;
+}
 
 export function useKeyboardNavigation() {
   const navigate = useNavigate();
@@ -50,45 +97,75 @@ export function useKeyboardNavigation() {
   );
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't trigger shortcuts when typing in input fields
-      const target = event.target as HTMLElement;
-      const isInputField =
-        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+    const dispatchAfterNavigation = (route: string, eventName: string) => {
+      if (!location.pathname.startsWith(route)) {
+        navigate(route);
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent(eventName)), 0);
+        return;
+      }
+      window.dispatchEvent(new CustomEvent(eventName));
+    };
 
-      // Ctrl+1-5: Navigate to pages
-      if (event.ctrlKey && !event.altKey && !event.shiftKey) {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isEditing = isEditableShortcutTarget(event.target);
+
+      // Escape is intentional while typing: it dismisses the top-level overlay without editing text.
+      if (event.key === 'Escape') {
+        window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.escape));
+        return;
+      }
+
+      // All remaining global shortcuts yield to text editing and assistive technology inputs.
+      if (isEditing) return;
+
+      const modKey = event.ctrlKey || event.metaKey;
+
+      // Cmd/Ctrl+1-6: Navigate to primary pages.
+      if (modKey && !event.altKey && !event.shiftKey) {
         const keyNum = parseInt(event.key);
-        if (keyNum >= 1 && keyNum <= 5) {
+        if (keyNum >= 1 && keyNum <= PAGE_ROUTES.length) {
           event.preventDefault();
           navigateToPage(keyNum - 1);
           return;
         }
 
-        // Ctrl+N: New action (depends on current page)
+        // Cmd/Ctrl+N: begin a new direct message.
         if (event.key === 'n' || event.key === 'N') {
           event.preventDefault();
-          // Dispatch custom event for page-specific handling
-          window.dispatchEvent(new CustomEvent('harbor:new-action'));
+          dispatchAfterNavigation('/chat', HARBOR_SHORTCUT_EVENTS.newMessage);
           return;
         }
 
-        // Ctrl+K: Quick search (future feature)
+        // Cmd/Ctrl+K: focus Harbor search rather than browser chrome.
         if (event.key === 'k' || event.key === 'K') {
           event.preventDefault();
-          window.dispatchEvent(new CustomEvent('harbor:quick-search'));
+          dispatchAfterNavigation('/chat', HARBOR_SHORTCUT_EVENTS.focusSearch);
+          return;
+        }
+
+        // Cmd/Ctrl+,: standard application settings shortcut.
+        if (event.key === ',') {
+          event.preventDefault();
+          navigate('/settings');
+          return;
+        }
+
+        if (event.key === '/') {
+          event.preventDefault();
+          window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.showShortcuts));
           return;
         }
       }
 
-      // Escape: Close modals/dialogs
-      if (event.key === 'Escape') {
-        window.dispatchEvent(new CustomEvent('harbor:escape'));
+      // Cmd/Ctrl+Shift+N: open the post composer.
+      if (modKey && event.shiftKey && !event.altKey && (event.key === 'n' || event.key === 'N')) {
+        event.preventDefault();
+        dispatchAfterNavigation('/wall', HARBOR_SHORTCUT_EVENTS.newPost);
         return;
       }
 
       // Alt+Left/Right: Navigate pages (when not in input)
-      if (event.altKey && !isInputField) {
+      if (event.altKey && !modKey) {
         if (event.key === 'ArrowLeft') {
           event.preventDefault();
           navigateRelative('prev');
@@ -100,18 +177,11 @@ export function useKeyboardNavigation() {
           return;
         }
       }
-
-      // Keyboard hints overlay (Ctrl+/)
-      if (event.ctrlKey && event.key === '/') {
-        event.preventDefault();
-        window.dispatchEvent(new CustomEvent('harbor:show-shortcuts'));
-        return;
-      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [navigateToPage, navigateRelative]);
+  }, [location.pathname, navigate, navigateToPage, navigateRelative]);
 
   return {
     navigateToPage,
@@ -170,18 +240,70 @@ export function useListKeyboardNavigation<T>(
 
 // Keyboard shortcuts info for help display
 export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
-  { key: '1', ctrlKey: true, action: () => {}, description: 'Go to Messages' },
-  { key: '2', ctrlKey: true, action: () => {}, description: 'Go to Journal' },
-  { key: '3', ctrlKey: true, action: () => {}, description: 'Go to Feed' },
-  { key: '4', ctrlKey: true, action: () => {}, description: 'Go to Network' },
-  { key: '5', ctrlKey: true, action: () => {}, description: 'Go to Settings' },
-  { key: 'N', ctrlKey: true, action: () => {}, description: 'New message/post' },
-  { key: 'K', ctrlKey: true, action: () => {}, description: 'Quick search' },
-  { key: '/', ctrlKey: true, action: () => {}, description: 'Show shortcuts' },
-  { key: 'Escape', action: () => {}, description: 'Close dialog/modal' },
-  { key: '←', altKey: true, action: () => {}, description: 'Previous page' },
-  { key: '→', altKey: true, action: () => {}, description: 'Next page' },
-  { key: '↑/k', action: () => {}, description: 'Previous item in list' },
-  { key: '↓/j', action: () => {}, description: 'Next item in list' },
-  { key: 'Enter', action: () => {}, description: 'Select/activate item' },
+  {
+    id: 'messages',
+    key: '1',
+    modifier: 'mod',
+    description: 'Go to Messages',
+    category: 'Navigation',
+  },
+  { id: 'wall', key: '2', modifier: 'mod', description: 'Go to My Wall', category: 'Navigation' },
+  { id: 'feed', key: '3', modifier: 'mod', description: 'Go to Feed', category: 'Navigation' },
+  { id: 'boards', key: '4', modifier: 'mod', description: 'Go to Boards', category: 'Navigation' },
+  {
+    id: 'network',
+    key: '5',
+    modifier: 'mod',
+    description: 'Go to Network',
+    category: 'Navigation',
+  },
+  {
+    id: 'settings-page',
+    key: '6',
+    modifier: 'mod',
+    description: 'Go to Settings',
+    category: 'Navigation',
+  },
+  {
+    id: 'previous-page',
+    key: '←',
+    modifier: 'alt',
+    description: 'Previous page',
+    category: 'Navigation',
+  },
+  { id: 'next-page', key: '→', modifier: 'alt', description: 'Next page', category: 'Navigation' },
+  { id: 'search', key: 'K', modifier: 'mod', description: 'Focus search', category: 'Actions' },
+  { id: 'new-message', key: 'N', modifier: 'mod', description: 'New message', category: 'Actions' },
+  {
+    id: 'new-post',
+    key: 'N',
+    modifier: 'mod',
+    shiftKey: true,
+    description: 'New post',
+    category: 'Actions',
+  },
+  { id: 'settings', key: ',', modifier: 'mod', description: 'Open Settings', category: 'Actions' },
+  {
+    id: 'shortcuts',
+    key: '/',
+    modifier: 'mod',
+    description: 'Show shortcuts',
+    category: 'Actions',
+  },
+  { id: 'close', key: 'Esc', description: 'Close or cancel', category: 'Actions' },
+  { id: 'send', key: 'Enter', description: 'Send message', category: 'Editing' },
+  {
+    id: 'new-line',
+    key: 'Enter',
+    shiftKey: true,
+    description: 'New line in message',
+    category: 'Editing',
+  },
+  {
+    id: 'send-alt',
+    key: 'Enter',
+    modifier: 'mod',
+    description: 'Send message',
+    category: 'Editing',
+  },
 ];

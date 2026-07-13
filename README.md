@@ -121,6 +121,11 @@ Access settings to:
 - **Network**: Configure auto-start and mDNS discovery
 - **Privacy**: Control post visibility and read receipts
 
+### Keyboard shortcuts
+
+Use the **Keyboard shortcuts** button in the app sidebar for a platform-aware reference. The full
+editing and navigation behavior is documented in [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md).
+
 ## Architecture
 
 ### Frontend (React + TypeScript)

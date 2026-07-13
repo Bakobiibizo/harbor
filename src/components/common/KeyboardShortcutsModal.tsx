@@ -1,52 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { XIcon } from '../icons';
-import { KEYBOARD_SHORTCUTS } from '../../hooks/useKeyboardNavigation';
+import {
+  formatShortcut,
+  getShortcutPlatform,
+  HARBOR_SHORTCUT_EVENTS,
+  KEYBOARD_SHORTCUTS,
+  type ShortcutCategory,
+} from '../../hooks/useKeyboardNavigation';
 
 export function KeyboardShortcutsModal() {
   const [isOpen, setIsOpen] = useState(false);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleShowShortcuts = () => setIsOpen(true);
     const handleEscape = () => setIsOpen(false);
 
-    window.addEventListener('harbor:show-shortcuts', handleShowShortcuts);
-    window.addEventListener('harbor:escape', handleEscape);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.showShortcuts, handleShowShortcuts);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.escape, handleEscape);
 
     return () => {
-      window.removeEventListener('harbor:show-shortcuts', handleShowShortcuts);
-      window.removeEventListener('harbor:escape', handleEscape);
+      window.removeEventListener(HARBOR_SHORTCUT_EVENTS.showShortcuts, handleShowShortcuts);
+      window.removeEventListener(HARBOR_SHORTCUT_EVENTS.escape, handleEscape);
     };
   }, []);
 
+  useEffect(() => {
+    if (isOpen) closeButtonRef.current?.focus();
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const formatKey = (shortcut: (typeof KEYBOARD_SHORTCUTS)[0]) => {
-    const parts: string[] = [];
-    if (shortcut.ctrlKey) parts.push('Ctrl');
-    if (shortcut.altKey) parts.push('Alt');
-    if (shortcut.shiftKey) parts.push('Shift');
-    parts.push(shortcut.key);
-    return parts.join(' + ');
-  };
-
-  // Group shortcuts by category
-  const navigationShortcuts = KEYBOARD_SHORTCUTS.filter(
-    (s) => s.description.includes('Go to') || s.description.includes('page'),
-  );
-  const actionShortcuts = KEYBOARD_SHORTCUTS.filter(
-    (s) =>
-      s.description.includes('New') ||
-      s.description.includes('search') ||
-      s.description.includes('Close') ||
-      s.description.includes('Show'),
-  );
-  const listShortcuts = KEYBOARD_SHORTCUTS.filter(
-    (s) =>
-      s.description.includes('item') ||
-      s.description.includes('Select') ||
-      s.description.includes('Previous item') ||
-      s.description.includes('Next item'),
-  );
+  const platform = getShortcutPlatform();
+  const categories: ShortcutCategory[] = ['Navigation', 'Actions', 'Editing'];
 
   return (
     <div
@@ -55,6 +41,9 @@ export function KeyboardShortcutsModal() {
       onClick={() => setIsOpen(false)}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="keyboard-shortcuts-title"
         className="w-full max-w-lg rounded-lg overflow-hidden"
         style={{
           background: 'hsl(var(--harbor-bg-elevated))',
@@ -68,12 +57,16 @@ export function KeyboardShortcutsModal() {
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
           <h3
+            id="keyboard-shortcuts-title"
             className="text-lg font-semibold"
             style={{ color: 'hsl(var(--harbor-text-primary))' }}
           >
             Keyboard Shortcuts
           </h3>
           <button
+            ref={closeButtonRef}
+            type="button"
+            aria-label="Close keyboard shortcuts"
             onClick={() => setIsOpen(false)}
             className="p-1 rounded-lg transition-colors duration-200"
             style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
@@ -84,92 +77,41 @@ export function KeyboardShortcutsModal() {
 
         {/* Content */}
         <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-          {/* Navigation */}
-          <div>
-            <h4
-              className="text-sm font-medium mb-3"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
-              Navigation
-            </h4>
-            <div className="space-y-2">
-              {navigationShortcuts.map((shortcut, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    {shortcut.description}
-                  </span>
-                  <kbd
-                    className="px-2 py-1 rounded text-xs font-mono"
-                    style={{
-                      background: 'hsl(var(--harbor-surface-1))',
-                      border: '1px solid hsl(var(--harbor-border-subtle))',
-                      color: 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    {formatKey(shortcut)}
-                  </kbd>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div>
-            <h4
-              className="text-sm font-medium mb-3"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
-              Actions
-            </h4>
-            <div className="space-y-2">
-              {actionShortcuts.map((shortcut, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    {shortcut.description}
-                  </span>
-                  <kbd
-                    className="px-2 py-1 rounded text-xs font-mono"
-                    style={{
-                      background: 'hsl(var(--harbor-surface-1))',
-                      border: '1px solid hsl(var(--harbor-border-subtle))',
-                      color: 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    {formatKey(shortcut)}
-                  </kbd>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* List Navigation */}
-          <div>
-            <h4
-              className="text-sm font-medium mb-3"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
-              List Navigation
-            </h4>
-            <div className="space-y-2">
-              {listShortcuts.map((shortcut, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <span className="text-sm" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                    {shortcut.description}
-                  </span>
-                  <kbd
-                    className="px-2 py-1 rounded text-xs font-mono"
-                    style={{
-                      background: 'hsl(var(--harbor-surface-1))',
-                      border: '1px solid hsl(var(--harbor-border-subtle))',
-                      color: 'hsl(var(--harbor-text-secondary))',
-                    }}
-                  >
-                    {formatKey(shortcut)}
-                  </kbd>
-                </div>
-              ))}
-            </div>
-          </div>
+          {categories.map((category) => (
+            <section key={category} aria-labelledby={`shortcuts-${category.toLowerCase()}`}>
+              <h4
+                id={`shortcuts-${category.toLowerCase()}`}
+                className="text-sm font-medium mb-3"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                {category}
+              </h4>
+              <div className="space-y-2">
+                {KEYBOARD_SHORTCUTS.filter((shortcut) => shortcut.category === category).map(
+                  (shortcut) => (
+                    <div key={shortcut.id} className="flex items-center justify-between gap-5">
+                      <span
+                        className="text-sm"
+                        style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                      >
+                        {shortcut.description}
+                      </span>
+                      <kbd
+                        className="px-2 py-1 rounded text-xs font-mono whitespace-nowrap"
+                        style={{
+                          background: 'hsl(var(--harbor-surface-1))',
+                          border: '1px solid hsl(var(--harbor-border-subtle))',
+                          color: 'hsl(var(--harbor-text-secondary))',
+                        }}
+                      >
+                        {formatShortcut(shortcut, platform)}
+                      </kbd>
+                    </div>
+                  ),
+                )}
+              </div>
+            </section>
+          ))}
         </div>
 
         {/* Footer */}
@@ -180,7 +122,10 @@ export function KeyboardShortcutsModal() {
           <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
             Press{' '}
             <kbd className="px-1 rounded" style={{ background: 'hsl(var(--harbor-surface-1))' }}>
-              Esc
+              {formatShortcut(
+                KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === 'close')!,
+                platform,
+              )}
             </kbd>{' '}
             to close
           </p>

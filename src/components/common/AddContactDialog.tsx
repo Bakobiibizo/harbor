@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { XIcon } from '../icons';
 import { Button } from './Button';
 import { addContactFromString } from '../../services/network';
 import { safePeerLabel } from '../../utils/relayName';
 import { parseContactInvite } from '../../utils/contactInvite';
+import { HARBOR_SHORTCUT_EVENTS } from '../../hooks/useKeyboardNavigation';
 
 interface Props {
   contactString: string;
@@ -33,6 +34,11 @@ function parseContactString(contactString: string): ContactPreview | null {
 export function AddContactDialog({ contactString, onClose }: Props) {
   const [isLoading, setIsLoading] = useState(false);
   const preview = parseContactString(contactString);
+
+  useEffect(() => {
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.escape, onClose);
+    return () => window.removeEventListener(HARBOR_SHORTCUT_EVENTS.escape, onClose);
+  }, [onClose]);
 
   async function handleConfirm() {
     setIsLoading(true);
