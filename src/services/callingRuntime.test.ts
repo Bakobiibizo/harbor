@@ -383,6 +383,37 @@ describe('AudioCallRuntime', () => {
     expect(runtime.getSnapshot().localVideoStream?.getVideoTracks()).toEqual([secondVideo]);
   });
 
+  it('stops a replacement camera track when WebRTC rejects the switch', async () => {
+    const pc = new MockPeerConnection();
+    const audioTrack = new MockTrack('audio');
+    const firstVideo = new MockTrack('video');
+    const rejectedVideo = new MockTrack('video');
+    const getUserMedia = vi
+      .fn()
+      .mockResolvedValueOnce(new MockMediaStream([audioTrack, firstVideo]))
+      .mockResolvedValueOnce(new MockMediaStream([rejectedVideo]));
+    const { runtime } = runtimeWith(pc, getUserMedia);
+    vi.mocked(callingService.startCall).mockResolvedValue({
+      callId: 'call-1',
+      callerPeerId: 'peer-local',
+      calleePeerId: 'peer-alice',
+      sdp: 'v=0\r\noffer\r\nm=video 9 UDP/TLS/RTP/SAVPF 96',
+      timestamp: 100,
+      signature: [1],
+    });
+    await runtime.startOutgoingCall('peer-alice', { video: true });
+    pc.senders
+      .find((sender) => sender.track.kind === 'video')
+      ?.replaceTrack.mockRejectedValueOnce(new Error('sender closed'));
+
+    await expect(runtime.switchCamera('camera-broken')).rejects.toThrow('sender closed');
+
+    expect(rejectedVideo.stop).toHaveBeenCalledTimes(1);
+    expect(firstVideo.stop).not.toHaveBeenCalled();
+    expect(audioTrack.stop).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().localVideoStream?.getVideoTracks()).toEqual([firstVideo]);
+  });
+
   it('hangs up via signed Tauri signaling and cleans up local media', async () => {
     const pc = new MockPeerConnection();
     const { runtime, track } = runtimeWith(pc);
@@ -429,7 +460,10 @@ describe('AudioCallRuntime', () => {
 
   it('distinguishes a missing platform media API from missing hardware', async () => {
     const pc = new MockPeerConnection();
-    const unavailable = new DOMException('The media capture API is not available.', 'NotSupportedError');
+    const unavailable = new DOMException(
+      'The media capture API is not available.',
+      'NotSupportedError',
+    );
     const { runtime } = runtimeWith(pc, vi.fn().mockRejectedValue(unavailable));
 
     await expect(runtime.startOutgoingCall('peer-alice')).rejects.toThrow(
@@ -586,12 +620,20 @@ describe('GroupMeshCallRuntime', () => {
       signature: [1],
     };
     vi.mocked(callingService.answerCall).mockResolvedValue({
-      callId: 'call-1', callerPeerId: 'peer-alice', calleePeerId: 'peer-local',
-      sdp: 'v=0\r\nanswer', timestamp: 100, signature: [1],
+      callId: 'call-1',
+      callerPeerId: 'peer-alice',
+      calleePeerId: 'peer-local',
+      sdp: 'v=0\r\nanswer',
+      timestamp: 100,
+      signature: [1],
     });
     vi.mocked(callingService.startCall).mockImplementation(async (calleePeerId, sdp) => ({
-      callId: `call-${calleePeerId}`, callerPeerId: 'peer-local', calleePeerId,
-      sdp, timestamp: 100, signature: [1],
+      callId: `call-${calleePeerId}`,
+      callerPeerId: 'peer-local',
+      calleePeerId,
+      sdp,
+      timestamp: 100,
+      signature: [1],
     }));
 
     const pending = runtime.prepareIncomingGroupCall(membership, 'peer-local');
@@ -602,8 +644,72 @@ describe('GroupMeshCallRuntime', () => {
     expect(callingService.answerCall).toHaveBeenCalledTimes(1);
     expect(callingService.startCall).toHaveBeenCalledWith('peer-zed', 'v=0\r\noffer');
     expect(accepted.participants.map((participant) => participant.peerId).sort()).toEqual([
-      'peer-alice', 'peer-zed',
+      'peer-alice',
+      'peer-zed',
     ]);
+  });
+
+  it('rejects malformed incoming rosters before requesting media', () => {
+    const { runtime, getUserMedia } = groupRuntimeWith([]);
+    const membership = {
+      roomId: 'room-invalid',
+      creatorPeerId: 'peer-alice',
+      senderPeerId: 'peer-alice',
+      action: 'invite' as const,
+      topology: 'relay_assisted_mesh_v1' as const,
+      rosterVersion: 1,
+      participants: ['peer-local', 'peer-alice', 'peer-alice'],
+      mediaMode: 'audio' as const,
+      nonce: 'nonce-invalid',
+      timestamp: 100,
+      signature: [1],
+    };
+
+    expect(() => runtime.prepareIncomingGroupCall(membership, 'peer-local')).toThrow(
+      'Invalid group-call membership roster',
+    );
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('isolates a failed incoming leg while another participant continues', async () => {
+    const pcs = [new MockPeerConnection()];
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException('microphone unavailable', 'NotFoundError'))
+      .mockResolvedValueOnce(new MockMediaStream([new MockTrack('audio')]));
+    const { runtime } = groupRuntimeWith(pcs, getUserMedia);
+    const membership = {
+      roomId: 'room-partial',
+      creatorPeerId: 'peer-alice',
+      senderPeerId: 'peer-alice',
+      action: 'invite' as const,
+      topology: 'relay_assisted_mesh_v1' as const,
+      rosterVersion: 1,
+      participants: ['peer-alice', 'peer-local', 'peer-zed'],
+      mediaMode: 'audio' as const,
+      nonce: 'nonce-partial',
+      timestamp: 100,
+      signature: [1],
+    };
+    vi.mocked(callingService.startCall).mockImplementation(async (calleePeerId, sdp) => ({
+      callId: `call-${calleePeerId}`,
+      callerPeerId: 'peer-local',
+      calleePeerId,
+      sdp,
+      timestamp: 100,
+      signature: [1],
+    }));
+
+    runtime.prepareIncomingGroupCall(membership, 'peer-local');
+    const snapshot = await runtime.acceptIncomingGroupCall(membership, [offerEnvelope()]);
+
+    expect(snapshot.state).toBe('degraded');
+    expect(snapshot.participants.find(({ peerId }) => peerId === 'peer-alice')).toMatchObject({
+      state: 'failed',
+    });
+    expect(snapshot.participants.find(({ peerId }) => peerId === 'peer-zed')).toMatchObject({
+      state: 'ringing',
+    });
   });
 
   it('isolates a failed participant while remaining mesh legs continue', async () => {

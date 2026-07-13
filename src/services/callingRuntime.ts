@@ -67,23 +67,10 @@ export interface AudioCallRuntimeOptions {
 }
 
 export type GroupCallRuntimeState =
-  | 'idle'
-  | 'starting'
-  | 'ringing'
-  | 'connecting'
-  | 'connected'
-  | 'degraded'
-  | 'ended'
-  | 'failed';
+  'idle' | 'starting' | 'ringing' | 'connecting' | 'connected' | 'degraded' | 'ended' | 'failed';
 
 export type GroupCallParticipantState =
-  | 'invited'
-  | 'ringing'
-  | 'connecting'
-  | 'connected'
-  | 'degraded'
-  | 'left'
-  | 'failed';
+  'invited' | 'ringing' | 'connecting' | 'connected' | 'degraded' | 'left' | 'failed';
 
 export interface GroupCallParticipantSnapshot {
   peerId: string;
@@ -253,8 +240,13 @@ export class AudioCallRuntime {
     this.preferredVideoDeviceId = options.videoDeviceId;
     this.update({
       state: 'requesting_microphone',
+      callId: null,
       peerId: calleePeerId,
+      localPeerId: null,
       direction: 'outgoing',
+      terminalReason: null,
+      error: null,
+      ice: null,
       videoRequested: Boolean(options.video),
       mediaMode: options.video ? 'video' : 'audio',
       cameraError: null,
@@ -289,6 +281,12 @@ export class AudioCallRuntime {
 
   async acceptIncomingCall(envelope: SignalingEnvelope): Promise<AudioCallRuntimeSnapshot> {
     const offer = this.requireOfferPayload(envelope.payload);
+    if (
+      envelope.senderPeerId !== offer.callerPeerId ||
+      envelope.recipientPeerId !== offer.calleePeerId
+    ) {
+      throw new Error('Incoming call signaling does not match its envelope.');
+    }
     const remoteWantsVideo = sdpHasVideo(offer.sdp);
     if (this.snapshot.state === 'incoming' && this.snapshot.callId === offer.callId) {
       this.cleanup();
@@ -301,6 +299,9 @@ export class AudioCallRuntime {
       peerId: offer.callerPeerId,
       localPeerId: offer.calleePeerId,
       direction: 'incoming',
+      terminalReason: null,
+      error: null,
+      ice: null,
       videoRequested: remoteWantsVideo,
       mediaMode: remoteWantsVideo ? 'video' : 'audio',
       cameraError: null,
@@ -343,27 +344,48 @@ export class AudioCallRuntime {
 
   async handleSignalingEnvelope(envelope: SignalingEnvelope): Promise<void> {
     switch (envelope.payload.type) {
-      case 'offer':
+      case 'offer': {
+        const offer = envelope.payload.payload;
+        if (
+          envelope.senderPeerId !== offer.callerPeerId ||
+          envelope.recipientPeerId !== offer.calleePeerId
+        ) {
+          return;
+        }
+        if (
+          !['idle', 'ended', 'failed'].includes(this.snapshot.state) &&
+          !(
+            this.snapshot.state === 'incoming' &&
+            this.snapshot.callId === offer.callId &&
+            this.snapshot.peerId === offer.callerPeerId
+          )
+        ) {
+          return;
+        }
         this.update({
           state: 'incoming',
-          callId: envelope.payload.payload.callId,
-          peerId: envelope.payload.payload.callerPeerId,
-          localPeerId: envelope.payload.payload.calleePeerId,
+          callId: offer.callId,
+          peerId: offer.callerPeerId,
+          localPeerId: offer.calleePeerId,
           direction: 'incoming',
-          videoRequested: sdpHasVideo(envelope.payload.payload.sdp),
-          mediaMode: sdpHasVideo(envelope.payload.payload.sdp) ? 'video' : 'audio',
+          videoRequested: sdpHasVideo(offer.sdp),
+          mediaMode: sdpHasVideo(offer.sdp) ? 'video' : 'audio',
           cameraError: null,
         });
         return;
+      }
       case 'answer':
+        if (!this.matchesCurrentSignal(envelope)) return;
         await this.applyAnswer(envelope.payload.payload.sdp, envelope.payload.payload.callId);
         return;
       case 'ice':
+        if (!this.matchesCurrentSignal(envelope)) return;
         await this.addRemoteIce(toIceCandidateInit(envelope.payload.payload));
         return;
       case 'hangup':
       case 'decline':
       case 'busy':
+        if (!this.matchesCurrentSignal(envelope)) return;
         this.finish('remote_hangup');
         return;
     }
@@ -384,7 +406,12 @@ export class AudioCallRuntime {
     if (!this.localStream) return;
     const videoTracks = getVideoTracks(this.localStream);
     if (enabled && videoTracks.length === 0 && this.snapshot.videoRequested) {
-      await this.switchCamera(this.preferredVideoDeviceId);
+      try {
+        await this.switchCamera(this.preferredVideoDeviceId);
+      } catch (error) {
+        this.update({ cameraError: errorMessage(error), localVideoEnabled: false });
+        throw error;
+      }
       return;
     }
     for (const track of videoTracks) {
@@ -410,10 +437,15 @@ export class AudioCallRuntime {
     const sender = this.connectionRuntime.peerConnection
       .getSenders?.()
       .find((candidate) => candidate.track?.kind === 'video');
-    if (sender) {
-      await sender.replaceTrack(newTrack);
-    } else {
-      this.connectionRuntime.peerConnection.addTrack(newTrack, this.localStream);
+    try {
+      if (sender) {
+        await sender.replaceTrack(newTrack);
+      } else {
+        this.connectionRuntime.peerConnection.addTrack(newTrack, this.localStream);
+      }
+    } catch (error) {
+      cameraStream.getTracks().forEach((track) => track.stop());
+      throw error;
     }
     oldTracks.forEach((track) => {
       this.localStream?.removeTrack?.(track);
@@ -446,7 +478,19 @@ export class AudioCallRuntime {
 
   dispose(): void {
     this.cleanup();
-    this.update({ state: 'idle', terminalReason: null, error: null });
+    this.update({
+      state: 'idle',
+      callId: null,
+      peerId: null,
+      localPeerId: null,
+      direction: null,
+      terminalReason: null,
+      error: null,
+      ice: null,
+      mediaMode: 'audio',
+      videoRequested: false,
+      cameraError: null,
+    });
   }
 
   private async prepareConnection(
@@ -508,7 +552,10 @@ export class AudioCallRuntime {
         } else {
           this.remoteStream?.addTrack(track);
         }
-        void this.remoteAudio?.play?.();
+        void this.remoteAudio?.play?.().catch(() => {
+          // Autoplay may require a user gesture. Keep the media session alive so
+          // the overlay can retry playback after interaction.
+        });
       }
       if (track.kind === 'video') {
         if (remote) {
@@ -565,6 +612,27 @@ export class AudioCallRuntime {
       state: 'connecting',
       remoteVideoAvailable: this.snapshot.remoteVideoAvailable || sdpHasVideo(sdp),
     });
+  }
+
+  private matchesCurrentSignal(envelope: SignalingEnvelope): boolean {
+    if (!this.snapshot.callId || !this.snapshot.peerId || !this.snapshot.localPeerId) return false;
+    const payload = envelope.payload.payload;
+    if (!('callId' in payload) || payload.callId !== this.snapshot.callId) return false;
+    if (
+      envelope.senderPeerId !== this.snapshot.peerId ||
+      envelope.recipientPeerId !== this.snapshot.localPeerId
+    ) {
+      return false;
+    }
+    if ('senderPeerId' in payload && payload.senderPeerId !== this.snapshot.peerId) return false;
+    if (envelope.payload.type === 'answer') {
+      const answer = envelope.payload.payload;
+      return (
+        answer.callerPeerId === this.snapshot.localPeerId &&
+        answer.calleePeerId === this.snapshot.peerId
+      );
+    }
+    return true;
   }
 
   private async addRemoteIce(candidate: RTCIceCandidateInit): Promise<void> {
@@ -750,6 +818,7 @@ export class GroupMeshCallRuntime {
     localPeerId: string,
   ): GroupCallRuntimeSnapshot {
     this.ensureIdle();
+    this.validateMembership(membership, localPeerId);
     const peers = membership.participants.filter((peerId) => peerId !== localPeerId);
     this.update({
       state: 'ringing',
@@ -779,11 +848,16 @@ export class GroupMeshCallRuntime {
     for (const envelope of pendingOffers) {
       if (envelope.payload.type !== 'offer') continue;
       const peerId = envelope.senderPeerId;
+      if (!membership.participants.includes(peerId) || peerId === localPeerId) continue;
       offeredPeers.add(peerId);
       const participantRuntime = this.createParticipantRuntime(peerId);
       this.runtimes.set(peerId, participantRuntime);
-      await participantRuntime.acceptIncomingCall(envelope);
-      this.participantSnapshots.set(peerId, participantRuntime.getSnapshot());
+      try {
+        await participantRuntime.acceptIncomingCall(envelope);
+        this.participantSnapshots.set(peerId, participantRuntime.getSnapshot());
+      } catch (error) {
+        this.failedParticipants.set(peerId, errorMessage(error));
+      }
     }
 
     const outgoingPeers = membership.participants.filter(
@@ -797,14 +871,23 @@ export class GroupMeshCallRuntime {
       outgoingPeers.map(async (peerId) => {
         const participantRuntime = this.createParticipantRuntime(peerId);
         this.runtimes.set(peerId, participantRuntime);
-        const participantSnapshot = await participantRuntime.startOutgoingCall(peerId, {
-          ...options,
-          video: membership.mediaMode === 'video',
-        });
-        this.participantSnapshots.set(peerId, participantSnapshot);
+        try {
+          const participantSnapshot = await participantRuntime.startOutgoingCall(peerId, {
+            ...options,
+            video: membership.mediaMode === 'video',
+          });
+          this.participantSnapshots.set(peerId, participantSnapshot);
+        } catch (error) {
+          this.failedParticipants.set(peerId, errorMessage(error));
+        }
       }),
     );
     this.recompute();
+    if (this.snapshot.participants.every((participant) => participant.state === 'failed')) {
+      const error = 'Could not establish media with any group-call participant.';
+      this.update({ state: 'failed', error });
+      throw new Error(error);
+    }
     return this.getSnapshot();
   }
 
@@ -842,7 +925,9 @@ export class GroupMeshCallRuntime {
     options: StartGroupCallOptions = {},
   ): Promise<GroupCallRuntimeSnapshot> {
     this.ensureIdle();
-    const uniquePeerIds = [...new Set(peerIds.filter(Boolean))];
+    const uniquePeerIds = [
+      ...new Set(peerIds.filter((peerId) => Boolean(peerId) && peerId !== options.localPeerId)),
+    ];
     if (uniquePeerIds.length === 0) {
       throw new Error('Select at least one participant for a group call.');
     }
@@ -923,9 +1008,17 @@ export class GroupMeshCallRuntime {
 
   async setCameraEnabled(enabled: boolean): Promise<void> {
     await Promise.all(
-      [...this.runtimes.values()].map((runtime) => runtime.setCameraEnabled(enabled)),
+      [...this.runtimes.entries()].map(async ([peerId, runtime]) => {
+        try {
+          await runtime.setCameraEnabled(enabled);
+          this.participantSnapshots.set(peerId, runtime.getSnapshot());
+        } catch {
+          // Camera denial is a per-leg video degradation, not a failed audio
+          // session. AudioCallRuntime records the actionable camera error.
+          this.participantSnapshots.set(peerId, runtime.getSnapshot());
+        }
+      }),
     );
-    this.update({ localCameraEnabled: enabled });
     this.recompute();
   }
 
@@ -958,6 +1051,20 @@ export class GroupMeshCallRuntime {
         this.recompute();
       },
     });
+  }
+
+  private validateMembership(membership: GroupMembershipSignal, localPeerId: string): void {
+    const canonical = [...new Set(membership.participants)].sort();
+    if (
+      membership.topology !== GROUP_CALL_TOPOLOGY ||
+      canonical.length < 2 ||
+      canonical.length > GROUP_CALL_MAX_PARTICIPANTS ||
+      canonical.some((peerId, index) => peerId !== membership.participants[index]) ||
+      !canonical.includes(localPeerId) ||
+      !canonical.includes(membership.creatorPeerId)
+    ) {
+      throw new Error('Invalid group-call membership roster.');
+    }
   }
 
   private placeholderParticipant(

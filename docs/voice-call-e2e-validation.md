@@ -2,6 +2,8 @@
 
 This scenario validates the production voice-call path across two isolated Harbor profiles. It is intentionally not satisfied by command-signing tests alone: the evidence must show two profiles, libp2p signaling, persisted call state, WebRTC runtime state, UI state transitions, ICE exchange, connected media state, and clean hangup.
 
+For final packaged Windows to macOS hardware acceptance, use [Packaged Windows and macOS call acceptance](windows-macos-call-acceptance.md). The commands below are source-build development validation only.
+
 ## Preconditions
 
 - Run from the repository root.
@@ -16,11 +18,11 @@ This scenario validates the production voice-call path across two isolated Harbo
 Run these before and after the manual two-profile scenario:
 
 ```bash
-pnpm exec vitest run src/services/voiceCallE2e.test.ts src/services/callingRuntime.test.ts src/stores/calling.test.ts
+pnpm exec vitest run src/services/voiceCallE2e.test.ts src/services/callingRuntime.test.ts src/services/callingIce.test.ts src/stores/calling.test.ts
 cargo test --manifest-path src-tauri/Cargo.toml offer_answer_ice_hangup_cross_libp2p_signaling_protocol
 ```
 
-The Vitest regression drives two isolated frontend audio runtimes through offer, answer, ICE, connected, and hangup states. The Cargo regression drives the real libp2p request-response signaling protocol across two swarms. These are not a substitute for the two-profile app scenario below, but they prevent closing voice work with only local signing tests.
+The Vitest regression drives isolated frontend profiles through audio and video in both directions, reject, offer/answer, ICE/TURN configuration, connected state, mute/camera controls, hangup, and clean relaunch. It also rejects stale or wrong-peer signaling and asserts transient signaling and credential markers do not enter runtime snapshots. The Cargo regression drives the real libp2p request-response signaling protocol across two swarms. These are not a substitute for the two-profile app scenario below, but they prevent closing voice work with only local signing tests.
 
 ## Two-profile app scenario
 
