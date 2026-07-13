@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { EnsureMediaTransferInput, MediaTransferState } from '../types';
+import type {
+  EnsureMediaTransferInput,
+  MediaCacheDiagnostics,
+  MediaCacheSettings,
+  MediaTransferState,
+} from '../types';
 
 /** Media storage service - wraps Tauri commands for content-addressed media storage */
 export const mediaService = {
@@ -55,5 +60,13 @@ export const mediaService = {
 
   async retryTransfer(mediaHash: string): Promise<MediaTransferState> {
     return invoke<MediaTransferState>('retry_media_transfer', { mediaHash });
+  },
+
+  async getCacheDiagnostics(): Promise<MediaCacheDiagnostics> {
+    return invoke<MediaCacheDiagnostics>('get_media_cache_diagnostics');
+  },
+
+  async updateCacheSettings(settings: MediaCacheSettings): Promise<MediaCacheDiagnostics> {
+    return invoke<MediaCacheDiagnostics>('update_media_cache_settings', { settings });
   },
 };

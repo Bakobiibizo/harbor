@@ -59,7 +59,7 @@ export function useTauriEvents() {
 
     const contactFeedPoller = new ContactFeedPoller({
       fetchContact: (peerId) => feedService.fetchContactWall(peerId),
-      publishRefresh: (peerId) => coordinator.enqueue({ domains: ['posts'], peerId }),
+      publishRefresh: (peerId) => coordinator.enqueue({ domains: ['posts', 'media'], peerId }),
     });
     let activeMediaProfileId: string | null = null;
     const reconcileContactFeedPoller = () => {

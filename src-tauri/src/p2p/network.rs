@@ -42,9 +42,10 @@ use crate::services::mentions_service::IncomingMentionEnvelope;
 use crate::services::messaging_service::IncomingMessageParams;
 use crate::services::{
     BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
-    IncomingWallSocialEventParams, MediaStorageService, MentionsService, MessagingService,
-    PermissionsService, PostsService, SignableGetWallPosts, SignableGetWallSocialEvents,
-    SignableWallPostSubmit, SignableWallSocialEventSubmit, WallSocialService,
+    IncomingWallSocialEventParams, MediaStorageService, MediaTransferUpdate, MentionsService,
+    MessagingService, PermissionsService, PostsService, SignableGetWallPosts,
+    SignableGetWallSocialEvents, SignableWallPostSubmit, SignableWallSocialEventSubmit,
+    WallSocialService,
 };
 use std::sync::Arc;
 fn solve_work(c: &super::protocols::board_sync::WorkChallenge) -> u64 {
@@ -2150,12 +2151,16 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &hash,
-                        "failed",
-                        None,
-                        None,
-                        Some("transport_timeout"),
-                        Some("The attachment source did not respond. You can retry."),
-                        false,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: None,
+                            total_bytes: None,
+                            error_code: Some("transport_timeout"),
+                            error_message: Some(
+                                "The attachment source did not respond. You can retry.",
+                            ),
+                            increment_attempt: false,
+                        },
                     );
                 }
             }
@@ -2170,25 +2175,12 @@ impl NetworkService {
         &self,
         profile_id: Option<&str>,
         hash: &str,
-        status: &str,
-        bytes_received: Option<u64>,
-        total_bytes: Option<u64>,
-        error_code: Option<&str>,
-        error_message: Option<&str>,
-        increment_attempt: bool,
+        update: MediaTransferUpdate<'_>,
     ) {
         let Some(media_service) = self.media_service.as_ref() else {
             return;
         };
-        match media_service.update_transfer(
-            hash,
-            status,
-            bytes_received,
-            total_bytes,
-            error_code,
-            error_message,
-            increment_attempt,
-        ) {
+        match media_service.update_transfer(hash, update) {
             Ok(state) => {
                 let profile_id = profile_id
                     .map(str::to_owned)
@@ -2486,12 +2478,16 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &expected_hash,
-                        "failed",
-                        None,
-                        None,
-                        Some("authorization_revoked"),
-                        Some("The attachment source is no longer an active contact."),
-                        false,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: None,
+                            total_bytes: None,
+                            error_code: Some("authorization_revoked"),
+                            error_message: Some(
+                                "The attachment source is no longer an active contact.",
+                            ),
+                            increment_attempt: false,
+                        },
                     );
                     return;
                 }
@@ -2499,12 +2495,14 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &expected_hash,
-                        "failed",
-                        None,
-                        None,
-                        Some("response_mismatch"),
-                        Some("The attachment response could not be verified."),
-                        false,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: None,
+                            total_bytes: None,
+                            error_code: Some("response_mismatch"),
+                            error_message: Some("The attachment response could not be verified."),
+                            increment_attempt: false,
+                        },
                     );
                     return;
                 }
@@ -2512,24 +2510,28 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &media_hash,
-                        "failed",
-                        None,
-                        Some(data.len() as u64),
-                        Some("size_limit"),
-                        Some("The attachment exceeds Harbor's transfer limit."),
-                        false,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: None,
+                            total_bytes: Some(data.len() as u64),
+                            error_code: Some("size_limit"),
+                            error_message: Some("The attachment exceeds Harbor's transfer limit."),
+                            increment_attempt: false,
+                        },
                     );
                     return;
                 }
                 self.transition_media(
                     Some(&profile_id),
                     &media_hash,
-                    "transferring",
-                    Some(data.len() as u64),
-                    Some(data.len() as u64),
-                    None,
-                    None,
-                    false,
+                    MediaTransferUpdate {
+                        status: "transferring",
+                        bytes_received: Some(data.len() as u64),
+                        total_bytes: Some(data.len() as u64),
+                        error_code: None,
+                        error_message: None,
+                        increment_attempt: false,
+                    },
                 );
                 // Verify hash matches actual SHA256 of received bytes
                 let mut hasher = Sha256::new();
@@ -2544,12 +2546,14 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &media_hash,
-                        "failed",
-                        Some(data.len() as u64),
-                        Some(data.len() as u64),
-                        Some("integrity_failed"),
-                        Some("The attachment failed its integrity check."),
-                        false,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: Some(data.len() as u64),
+                            total_bytes: Some(data.len() as u64),
+                            error_code: Some("integrity_failed"),
+                            error_message: Some("The attachment failed its integrity check."),
+                            increment_attempt: false,
+                        },
                     );
                     return;
                 }
@@ -2590,13 +2594,20 @@ impl NetworkService {
                             self.transition_media(
                                 Some(&profile_id),
                                 &hash,
-                                "ready",
-                                Some(data.len() as u64),
-                                Some(data.len() as u64),
-                                None,
-                                None,
-                                false,
+                                MediaTransferUpdate {
+                                    status: "ready",
+                                    bytes_received: Some(data.len() as u64),
+                                    total_bytes: Some(data.len() as u64),
+                                    error_code: None,
+                                    error_message: None,
+                                    increment_attempt: false,
+                                },
                             );
+                            if let Err(error) = media_service.enforce_cache_policy() {
+                                warn!(
+                                    "Failed to enforce media cache policy after transfer: {error}"
+                                );
+                            }
                         }
                         Err(e) => {
                             warn!("Failed to store media from {}: {}", peer, e);
@@ -2617,12 +2628,16 @@ impl NetworkService {
                             self.transition_media(
                                 Some(&profile_id),
                                 &media_hash,
-                                "failed",
-                                Some(data.len() as u64),
-                                Some(data.len() as u64),
-                                Some("storage_failed"),
-                                Some("Harbor could not save this attachment. You can retry."),
-                                false,
+                                MediaTransferUpdate {
+                                    status: "failed",
+                                    bytes_received: Some(data.len() as u64),
+                                    total_bytes: Some(data.len() as u64),
+                                    error_code: Some("storage_failed"),
+                                    error_message: Some(
+                                        "Harbor could not save this attachment. You can retry.",
+                                    ),
+                                    increment_attempt: false,
+                                },
                             );
                         }
                     }
@@ -2645,12 +2660,16 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &media_hash,
-                        "failed",
-                        Some(data.len() as u64),
-                        Some(data.len() as u64),
-                        Some("service_unavailable"),
-                        Some("Media storage is unavailable. Restart Harbor and retry."),
-                        false,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: Some(data.len() as u64),
+                            total_bytes: Some(data.len() as u64),
+                            error_code: Some("service_unavailable"),
+                            error_message: Some(
+                                "Media storage is unavailable. Restart Harbor and retry.",
+                            ),
+                            increment_attempt: false,
+                        },
                     );
                 }
             }
@@ -2676,20 +2695,22 @@ impl NetworkService {
                     self.transition_media(
                         Some(&profile_id),
                         &hash,
-                        if unavailable { "unavailable" } else { "failed" },
-                        None,
-                        None,
-                        Some(if unavailable {
-                            "source_missing"
-                        } else {
-                            "remote_error"
-                        }),
-                        Some(if unavailable {
-                            "The source does not currently have this attachment."
-                        } else {
-                            "The source could not provide this attachment. You can retry."
-                        }),
-                        false,
+                        MediaTransferUpdate {
+                            status: if unavailable { "unavailable" } else { "failed" },
+                            bytes_received: None,
+                            total_bytes: None,
+                            error_code: Some(if unavailable {
+                                "source_missing"
+                            } else {
+                                "remote_error"
+                            }),
+                            error_message: Some(if unavailable {
+                                "The source does not currently have this attachment."
+                            } else {
+                                "The source could not provide this attachment. You can retry."
+                            }),
+                            increment_attempt: false,
+                        },
                     );
                 }
             }
@@ -5197,12 +5218,14 @@ impl NetworkService {
                         self.transition_media(
                             Some(&profile_id),
                             &media_hash,
-                            "transferring",
-                            Some(0),
-                            None,
-                            None,
-                            None,
-                            true,
+                            MediaTransferUpdate {
+                                status: "transferring",
+                                bytes_received: Some(0),
+                                total_bytes: None,
+                                error_code: None,
+                                error_message: None,
+                                increment_attempt: true,
+                            },
                         );
                         let outbound_id = self
                             .swarm

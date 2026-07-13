@@ -21,6 +21,8 @@ import {
   type MediaPermissionState,
 } from '../services/mediaPermissions';
 import { safeIdentityLabel } from '../utils/relayName';
+import { mediaService } from '../services/media';
+import type { MediaCacheDiagnostics, MediaCacheSettings } from '../types';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -242,6 +244,8 @@ export function SettingsPage() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateError, setUpdateError] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
+  const [mediaCache, setMediaCache] = useState<MediaCacheDiagnostics | null>(null);
+  const [isSavingMediaCache, setIsSavingMediaCache] = useState(false);
 
   const identity = state.status === 'unlocked' ? state.identity : null;
   const notificationCount = storedNotifications.filter(
@@ -257,6 +261,33 @@ export function SettingsPage() {
       setBio(identity.bio || '');
     }
   }, [identity]);
+
+  useEffect(() => {
+    if (activeSection !== 'privacy') return;
+    let cancelled = false;
+    mediaService
+      .getCacheDiagnostics()
+      .then((diagnostics) => {
+        if (!cancelled) setMediaCache(diagnostics);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Could not load media cache settings');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection]);
+
+  const saveMediaCacheSettings = async (settings: MediaCacheSettings) => {
+    setIsSavingMediaCache(true);
+    try {
+      setMediaCache(await mediaService.updateCacheSettings(settings));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update media cache');
+    } finally {
+      setIsSavingMediaCache(false);
+    }
+  };
 
   const getInitials = (name: string) => {
     return name
@@ -1525,6 +1556,111 @@ export function SettingsPage() {
                   <option value="contacts">Contacts only</option>
                   <option value="public">Anyone with the link</option>
                 </select>
+              </div>
+
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h4
+                      className="font-medium"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      Preload contact media
+                    </h4>
+                    <p
+                      className="text-sm mt-0.5"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      Keep recent attachments from accepted contacts on this device. Cached files
+                      remain local and are removed automatically.
+                    </p>
+                  </div>
+                  <Toggle
+                    enabled={mediaCache?.settings.enabled ?? true}
+                    onChange={(enabled) =>
+                      mediaCache &&
+                      void saveMediaCacheSettings({ ...mediaCache.settings, enabled })
+                    }
+                  />
+                </div>
+
+                {mediaCache && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5">
+                    <label
+                      className="text-sm"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      Keep recent media for
+                      <select
+                        aria-label="Media cache retention"
+                        disabled={isSavingMediaCache}
+                        value={mediaCache.settings.retentionSeconds}
+                        onChange={(event) =>
+                          void saveMediaCacheSettings({
+                            ...mediaCache.settings,
+                            retentionSeconds: Number(event.target.value),
+                          })
+                        }
+                        className="w-full px-3 py-2 rounded-lg mt-1"
+                        style={{
+                          background: 'hsl(var(--harbor-surface-1))',
+                          border: '1px solid hsl(var(--harbor-border-subtle))',
+                          color: 'hsl(var(--harbor-text-primary))',
+                        }}
+                      >
+                        <option value={86400}>1 day</option>
+                        <option value={604800}>7 days</option>
+                        <option value={2592000}>30 days</option>
+                        <option value={7776000}>90 days</option>
+                      </select>
+                    </label>
+                    <label
+                      className="text-sm"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      Storage budget
+                      <select
+                        aria-label="Media cache storage budget"
+                        disabled={isSavingMediaCache}
+                        value={mediaCache.settings.maxBytes}
+                        onChange={(event) =>
+                          void saveMediaCacheSettings({
+                            ...mediaCache.settings,
+                            maxBytes: Number(event.target.value),
+                          })
+                        }
+                        className="w-full px-3 py-2 rounded-lg mt-1"
+                        style={{
+                          background: 'hsl(var(--harbor-surface-1))',
+                          border: '1px solid hsl(var(--harbor-border-subtle))',
+                          color: 'hsl(var(--harbor-text-primary))',
+                        }}
+                      >
+                        <option value={134217728}>128 MB</option>
+                        <option value={536870912}>512 MB</option>
+                        <option value={1073741824}>1 GB</option>
+                        <option value={2147483648}>2 GB</option>
+                      </select>
+                    </label>
+                    <p
+                      className="sm:col-span-2 text-xs"
+                      style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                    >
+                      {(mediaCache.cachedBytes / 1024 / 1024).toFixed(1)} MB used across{' '}
+                      {mediaCache.cachedCount} cached item
+                      {mediaCache.cachedCount === 1 ? '' : 's'}; {mediaCache.pendingCount} waiting.
+                      {mediaCache.evictedLastRun > 0
+                        ? ` ${mediaCache.evictedLastRun} item${mediaCache.evictedLastRun === 1 ? '' : 's'} removed during the last cleanup.`
+                        : ''}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div

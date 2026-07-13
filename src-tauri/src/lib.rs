@@ -293,6 +293,9 @@ pub fn run() {
             if let Err(error) = media_service.reconstruct_transfers() {
                 tracing::warn!("Failed to reconstruct media transfer state: {error}");
             }
+            if let Err(error) = media_service.enforce_cache_policy() {
+                tracing::warn!("Failed to reconcile the media cache: {error}");
+            }
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
@@ -497,6 +500,8 @@ pub fn run() {
             commands::get_media_transfer,
             commands::retry_media_transfer,
             commands::preload_missing_media,
+            commands::get_media_cache_diagnostics,
+            commands::update_media_cache_settings,
             // Wall sync commands (relay-based wall post sync)
             commands::sync_wall_to_relay,
             commands::fetch_contact_wall_from_relay,

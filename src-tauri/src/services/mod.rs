@@ -31,7 +31,10 @@ pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
 pub use identity_publishing_policy::IdentityPublishingPolicy;
 pub use identity_service::IdentityService;
-pub use media_service::{MediaStorageService, MediaTransferState};
+pub use media_service::{
+    MediaCacheDiagnostics, MediaCacheSettings, MediaStorageService, MediaTransferState,
+    MediaTransferUpdate,
+};
 pub use mentions_service::{
     MentionReceipt, MentionsService, PublishMentionedPostRequest, PublishMentionedPostResult,
     ResolvedMention,

@@ -36,6 +36,35 @@ pub struct MediaTransferState {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCacheSettings {
+    pub enabled: bool,
+    pub retention_seconds: u64,
+    pub max_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCacheDiagnostics {
+    pub settings: MediaCacheSettings,
+    pub entry_count: u64,
+    pub cached_count: u64,
+    pub pending_count: u64,
+    pub cached_bytes: u64,
+    pub evicted_last_run: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MediaTransferUpdate<'a> {
+    pub status: &'a str,
+    pub bytes_received: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub error_code: Option<&'a str>,
+    pub error_message: Option<&'a str>,
+    pub increment_attempt: bool,
+}
+
 /// Service for content-addressed media file storage
 pub struct MediaStorageService {
     media_dir: PathBuf,
@@ -231,23 +260,22 @@ impl MediaStorageService {
     pub fn update_transfer(
         &self,
         hash: &str,
-        status: &str,
-        bytes_received: Option<u64>,
-        total_bytes: Option<u64>,
-        error_code: Option<&str>,
-        error_message: Option<&str>,
-        increment_attempt: bool,
+        update: MediaTransferUpdate<'_>,
     ) -> Result<MediaTransferState> {
         validate_hash(hash)?;
-        if bytes_received.is_some_and(|size| size > MAX_TRANSFER_BYTES)
-            || total_bytes.is_some_and(|size| size > MAX_TRANSFER_BYTES)
+        if update
+            .bytes_received
+            .is_some_and(|size| size > MAX_TRANSFER_BYTES)
+            || update
+                .total_bytes
+                .is_some_and(|size| size > MAX_TRANSFER_BYTES)
         {
             return Err(AppError::InvalidData(
                 "Attachment progress exceeds limits".into(),
             ));
         }
         if !matches!(
-            status,
+            update.status,
             "queued"
                 | "discovering"
                 | "transferring"
@@ -278,16 +306,16 @@ impl MediaStorageService {
                         updated_at = excluded.updated_at",
                     rusqlite::params![
                         hash,
-                        status,
-                        bytes_received.unwrap_or(0) as i64,
-                        total_bytes.map(|value| value as i64),
-                        u8::from(increment_attempt),
-                        error_code,
-                        error_message,
+                        update.status,
+                        update.bytes_received.unwrap_or(0) as i64,
+                        update.total_bytes.map(|value| value as i64),
+                        u8::from(update.increment_attempt),
+                        update.error_code,
+                        update.error_message,
                         now,
-                        bytes_received.map(|value| value as i64),
-                        total_bytes.map(|value| value as i64),
-                        u8::from(increment_attempt),
+                        update.bytes_received.map(|value| value as i64),
+                        update.total_bytes.map(|value| value as i64),
+                        u8::from(update.increment_attempt),
                     ],
                 )?;
                 Ok(())
@@ -422,6 +450,386 @@ impl MediaStorageService {
     /// frontend can load via Tauri's asset protocol.
     pub fn get_media_path(&self, hash: &str) -> Result<PathBuf> {
         self.resolve_path(hash)
+    }
+
+    /// Return the durable prefetch policy. It is stored per Harbor profile so
+    /// switching accounts cannot leak cache preferences or diagnostics.
+    pub fn cache_settings(&self) -> Result<MediaCacheSettings> {
+        self.db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT enabled, retention_seconds, max_bytes
+                     FROM media_cache_settings WHERE id = 1",
+                    [],
+                    |row| {
+                        Ok(MediaCacheSettings {
+                            enabled: row.get::<_, i64>(0)? != 0,
+                            retention_seconds: row.get::<_, i64>(1)?.max(0) as u64,
+                            max_bytes: row.get::<_, i64>(2)?.max(0) as u64,
+                        })
+                    },
+                )
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn cache_reserved_bytes(&self) -> Result<u64> {
+        self.db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM media_cache_entries",
+                    [],
+                    |row| Ok(row.get::<_, i64>(0)?.max(0) as u64),
+                )
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn is_cache_tracked(&self, hash: &str) -> Result<bool> {
+        validate_hash(hash)?;
+        self.db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM media_cache_entries WHERE media_hash = ?)",
+                    [hash],
+                    |row| row.get(0),
+                )
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn update_cache_settings(&self, settings: MediaCacheSettings) -> Result<()> {
+        const MIN_RETENTION_SECONDS: u64 = 60 * 60;
+        const MAX_RETENTION_SECONDS: u64 = 90 * 24 * 60 * 60;
+        const MIN_CACHE_BYTES: u64 = 32 * 1024 * 1024;
+        const MAX_CACHE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+        if !(MIN_RETENTION_SECONDS..=MAX_RETENTION_SECONDS).contains(&settings.retention_seconds)
+            || !(MIN_CACHE_BYTES..=MAX_CACHE_BYTES).contains(&settings.max_bytes)
+        {
+            return Err(AppError::Validation(
+                "Media cache retention or storage budget is outside supported limits".into(),
+            ));
+        }
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE media_cache_settings
+                     SET enabled = ?, retention_seconds = ?, max_bytes = ?,
+                         updated_at = strftime('%s','now') WHERE id = 1",
+                    rusqlite::params![
+                        u8::from(settings.enabled),
+                        settings.retention_seconds as i64,
+                        settings.max_bytes as i64,
+                    ],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    /// Register one verified contact attachment for prefetch. Returns false
+    /// when the policy is disabled, the post is outside the retention window,
+    /// or the individual attachment cannot fit within the configured budget.
+    pub fn register_cache_candidate(
+        &self,
+        hash: &str,
+        source_peer_id: &str,
+        observed_at: i64,
+        size_bytes: Option<u64>,
+    ) -> Result<bool> {
+        validate_hash(hash)?;
+        if source_peer_id.is_empty() {
+            return Err(AppError::Validation("Media source is required".into()));
+        }
+        let settings = self.cache_settings()?;
+        let now = chrono::Utc::now().timestamp();
+        let observed_at = observed_at.min(now);
+        if !settings.enabled
+            || observed_at < now.saturating_sub(settings.retention_seconds as i64)
+            || size_bytes.is_some_and(|size| size > settings.max_bytes || size > MAX_TRANSFER_BYTES)
+        {
+            return Ok(false);
+        }
+        let retain_until = observed_at.saturating_add(settings.retention_seconds as i64);
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO media_cache_entries
+                        (media_hash, observed_at, last_accessed_at,
+                         retain_until, size_bytes, cached_at)
+                     VALUES (?, ?, ?, ?, ?, NULL)
+                     ON CONFLICT(media_hash) DO UPDATE SET
+                        observed_at = MAX(observed_at, excluded.observed_at),
+                        last_accessed_at = MAX(last_accessed_at, excluded.last_accessed_at),
+                        retain_until = MAX(retain_until, excluded.retain_until),
+                        size_bytes = COALESCE(excluded.size_bytes, size_bytes)",
+                    rusqlite::params![
+                        hash,
+                        observed_at,
+                        observed_at,
+                        retain_until,
+                        size_bytes.map(|value| value as i64),
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO media_cache_sources
+                        (media_hash, source_peer_id, observed_at, retain_until)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT(media_hash, source_peer_id) DO UPDATE SET
+                        observed_at = MAX(observed_at, excluded.observed_at),
+                        retain_until = MAX(retain_until, excluded.retain_until)",
+                    rusqlite::params![hash, source_peer_id, observed_at, retain_until],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        Ok(true)
+    }
+
+    /// Reading cached media extends its recency, but not beyond one retention
+    /// interval. This gives explicit user activity priority under the budget.
+    pub fn touch_cache_entry(&self, hash: &str) -> Result<()> {
+        validate_hash(hash)?;
+        let settings = self.cache_settings()?;
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE media_cache_entries
+                     SET last_accessed_at = ?, retain_until = MAX(retain_until, ?)
+                     WHERE media_hash = ?",
+                    rusqlite::params![
+                        now,
+                        now.saturating_add(settings.retention_seconds as i64),
+                        hash
+                    ],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    /// Remove cache eligibility for peers that are no longer accepted and
+    /// unblocked. Bytes are removed by the deterministic eviction pass.
+    pub fn retain_cache_sources(&self, source_peer_ids: &[String]) -> Result<()> {
+        self.db
+            .with_connection(|conn| {
+                if source_peer_ids.is_empty() {
+                    conn.execute("DELETE FROM media_cache_sources", [])?;
+                } else {
+                    let placeholders = std::iter::repeat_n("?", source_peer_ids.len())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let sql = format!(
+                        "DELETE FROM media_cache_sources
+                         WHERE source_peer_id NOT IN ({placeholders})"
+                    );
+                    conn.execute(&sql, rusqlite::params_from_iter(source_peer_ids.iter()))?;
+                }
+                conn.execute(
+                    "UPDATE media_cache_entries
+                     SET retain_until = COALESCE(
+                         (SELECT MAX(retain_until) FROM media_cache_sources s
+                          WHERE s.media_hash = media_cache_entries.media_hash),
+                         0
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn prune_unauthorized_cache_sources(&self) -> Result<()> {
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "DELETE FROM media_cache_sources
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM contacts c
+                         WHERE c.peer_id = media_cache_sources.source_peer_id
+                           AND c.is_blocked = 0
+                     )",
+                    [],
+                )?;
+                conn.execute(
+                    "UPDATE media_cache_entries
+                     SET retain_until = COALESCE(
+                         (SELECT MAX(retain_until) FROM media_cache_sources s
+                          WHERE s.media_hash = media_cache_entries.media_hash),
+                         0
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    /// Reconcile durable metadata with disk, then evict expired entries first
+    /// and least-recently-used entries second. Hash is the stable tie-breaker.
+    pub fn enforce_cache_policy(&self) -> Result<u64> {
+        let settings = self.cache_settings()?;
+        let now = chrono::Utc::now().timestamp();
+        let rows = self
+            .db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT media_hash, retain_until, last_accessed_at
+                     FROM media_cache_entries
+                     ORDER BY retain_until ASC, last_accessed_at ASC, media_hash ASC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+
+        let mut cached = Vec::new();
+        for (hash, retain_until, last_accessed_at) in rows {
+            if self.is_locally_owned(&hash)? {
+                self.db
+                    .with_connection(|conn| {
+                        conn.execute(
+                            "DELETE FROM media_cache_entries WHERE media_hash = ?",
+                            [&hash],
+                        )?;
+                        Ok(())
+                    })
+                    .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+                continue;
+            }
+            if let Ok(path) = self.resolve_path(&hash) {
+                let size = std::fs::metadata(&path)?.len();
+                self.db
+                    .with_connection(|conn| {
+                        conn.execute(
+                            "UPDATE media_cache_entries
+                             SET size_bytes = ?, cached_at = COALESCE(cached_at, ?)
+                             WHERE media_hash = ?",
+                            rusqlite::params![size as i64, now, hash],
+                        )?;
+                        Ok(())
+                    })
+                    .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+                cached.push((hash, retain_until, last_accessed_at, size, path));
+            }
+        }
+
+        let mut total_bytes = cached.iter().map(|row| row.3).sum::<u64>();
+        let mut evicted = 0u64;
+        for (hash, retain_until, _, size, path) in cached {
+            if retain_until > now && settings.enabled && total_bytes <= settings.max_bytes {
+                continue;
+            }
+            std::fs::remove_file(&path)?;
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+            total_bytes = total_bytes.saturating_sub(size);
+            evicted += 1;
+            self.db
+                .with_connection(|conn| {
+                    conn.execute(
+                        "DELETE FROM media_cache_entries WHERE media_hash = ?",
+                        [&hash],
+                    )?;
+                    conn.execute(
+                        "UPDATE media_transfers
+                         SET status = 'queued', bytes_received = 0,
+                             error_code = 'cache_evicted',
+                             error_message = 'Attachment removed by the local cache policy',
+                             updated_at = ? WHERE media_hash = ?",
+                        rusqlite::params![now, hash],
+                    )?;
+                    Ok(())
+                })
+                .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        }
+
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "DELETE FROM media_cache_entries
+                     WHERE retain_until <= ? AND cached_at IS NULL",
+                    [now],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        Ok(evicted)
+    }
+
+    /// Pin bytes imported by the local user. Network receipts deliberately do
+    /// not call this method, so only explicit local ownership bypasses eviction.
+    pub fn pin_local_media(&self, hash: &str) -> Result<()> {
+        validate_hash(hash)?;
+        self.db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO media_local_pins(media_hash, pinned_at)
+                     VALUES (?, strftime('%s','now'))
+                     ON CONFLICT(media_hash) DO UPDATE SET pinned_at = excluded.pinned_at",
+                    [hash],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn cache_diagnostics(&self, evicted_last_run: u64) -> Result<MediaCacheDiagnostics> {
+        let settings = self.cache_settings()?;
+        let (entry_count, cached_count, cached_bytes) = self
+            .db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*),
+                            SUM(CASE WHEN cached_at IS NOT NULL THEN 1 ELSE 0 END),
+                            COALESCE(SUM(CASE WHEN cached_at IS NOT NULL THEN size_bytes ELSE 0 END), 0)
+                     FROM media_cache_entries",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?.max(0) as u64,
+                            row.get::<_, i64>(1)?.max(0) as u64,
+                            row.get::<_, i64>(2)?.max(0) as u64,
+                        ))
+                    },
+                )
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        Ok(MediaCacheDiagnostics {
+            settings,
+            entry_count,
+            cached_count,
+            pending_count: entry_count.saturating_sub(cached_count),
+            cached_bytes,
+            evicted_last_run,
+        })
+    }
+
+    fn is_locally_owned(&self, hash: &str) -> Result<bool> {
+        self.db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM media_local_pins WHERE media_hash = ?1
+                     ) OR EXISTS(
+                         SELECT 1 FROM post_media pm
+                         JOIN posts p ON p.post_id = pm.post_id
+                         LEFT JOIN local_identity li ON li.peer_id = p.author_peer_id
+                         WHERE pm.media_hash = ?1 AND (p.is_local = 1 OR li.peer_id IS NOT NULL)
+                     )",
+                    [hash],
+                    |row| row.get::<_, bool>(0),
+                )
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
     }
 
     // ── private helpers ──────────────────────────────────────────────
@@ -629,12 +1037,14 @@ mod tests {
         let progress = service
             .update_transfer(
                 &hash,
-                "transferring",
-                Some(400),
-                Some(1_000),
-                None,
-                None,
-                true,
+                MediaTransferUpdate {
+                    status: "transferring",
+                    bytes_received: Some(400),
+                    total_bytes: Some(1_000),
+                    error_code: None,
+                    error_message: None,
+                    increment_attempt: true,
+                },
             )
             .unwrap();
         assert_eq!(progress.bytes_received, 400);
@@ -643,18 +1053,30 @@ mod tests {
         let failed = service
             .update_transfer(
                 &hash,
-                "failed",
-                None,
-                None,
-                Some("transport_timeout"),
-                Some("Timed out"),
-                false,
+                MediaTransferUpdate {
+                    status: "failed",
+                    bytes_received: None,
+                    total_bytes: None,
+                    error_code: Some("transport_timeout"),
+                    error_message: Some("Timed out"),
+                    increment_attempt: false,
+                },
             )
             .unwrap();
         assert_eq!(failed.error_code.as_deref(), Some("transport_timeout"));
 
         let retrying = service
-            .update_transfer(&hash, "retrying", Some(0), None, None, None, true)
+            .update_transfer(
+                &hash,
+                MediaTransferUpdate {
+                    status: "retrying",
+                    bytes_received: Some(0),
+                    total_bytes: None,
+                    error_code: None,
+                    error_message: None,
+                    increment_attempt: true,
+                },
+            )
             .unwrap();
         assert_eq!(retrying.attempt_count, 2);
         assert_eq!(retrying.error_code, None);
@@ -694,12 +1116,14 @@ mod tests {
             service
                 .update_transfer(
                     &hash,
-                    "transferring",
-                    Some(100),
-                    Some(500),
-                    None,
-                    None,
-                    true,
+                    MediaTransferUpdate {
+                        status: "transferring",
+                        bytes_received: Some(100),
+                        total_bytes: Some(500),
+                        error_code: None,
+                        error_message: None,
+                        increment_attempt: true,
+                    },
                 )
                 .unwrap();
         }
@@ -734,5 +1158,189 @@ mod tests {
             .unwrap();
         assert_eq!(state.status, "queued");
         assert_eq!(state.bytes_received, 0);
+    }
+
+    #[test]
+    fn cache_policy_persists_and_reconstructs_ready_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("cache.sqlite");
+        let hash;
+        {
+            let db = Arc::new(Database::new(db_path.clone()).unwrap());
+            let service = MediaStorageService::new(tmp.path(), db).unwrap();
+            hash = service
+                .store_media(b"cached contact image", "image/png")
+                .unwrap();
+            assert!(service
+                .register_cache_candidate(
+                    &hash,
+                    "accepted-contact",
+                    chrono::Utc::now().timestamp(),
+                    Some(20),
+                )
+                .unwrap());
+            service
+                .update_cache_settings(MediaCacheSettings {
+                    enabled: true,
+                    retention_seconds: 30 * 24 * 60 * 60,
+                    max_bytes: 128 * 1024 * 1024,
+                })
+                .unwrap();
+        }
+
+        let reopened = Arc::new(Database::new(db_path).unwrap());
+        let service = MediaStorageService::new(tmp.path(), reopened).unwrap();
+        let evicted = service.enforce_cache_policy().unwrap();
+        let diagnostics = service.cache_diagnostics(evicted).unwrap();
+        assert_eq!(diagnostics.settings.retention_seconds, 30 * 24 * 60 * 60);
+        assert_eq!(diagnostics.cached_count, 1);
+        assert_eq!(diagnostics.cached_bytes, 20);
+        assert!(service.has_media(&hash));
+    }
+
+    #[test]
+    fn cache_eviction_is_expiry_then_lru_with_hash_tie_break() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db.clone()).unwrap();
+        let expired = service.store_media(b"expired", "image/png").unwrap();
+        let older = service.store_media(b"older", "image/png").unwrap();
+        let newer = service.store_media(b"newer", "image/png").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        for (hash, size) in [(&expired, 7u64), (&older, 5u64), (&newer, 5u64)] {
+            service
+                .register_cache_candidate(hash, "accepted-contact", now, Some(size))
+                .unwrap();
+        }
+        db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE media_cache_entries SET retain_until = 0 WHERE media_hash = ?",
+                [&expired],
+            )?;
+            conn.execute(
+                "UPDATE media_cache_entries SET last_accessed_at = 1 WHERE media_hash = ?",
+                [&older],
+            )?;
+            conn.execute(
+                "UPDATE media_cache_entries SET last_accessed_at = 2 WHERE media_hash = ?",
+                [&newer],
+            )?;
+            conn.execute(
+                "UPDATE media_cache_settings SET max_bytes = 5 WHERE id = 1",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(service.enforce_cache_policy().unwrap(), 2);
+        assert!(!service.has_media(&expired));
+        assert!(!service.has_media(&older));
+        assert!(service.has_media(&newer));
+        let evicted_state = service.get_transfer(&older).unwrap().unwrap();
+        assert_eq!(evicted_state.error_code.as_deref(), Some("cache_evicted"));
+    }
+
+    #[test]
+    fn disabling_or_revoking_a_source_removes_only_managed_remote_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db).unwrap();
+        let remote = service.store_media(b"remote", "image/png").unwrap();
+        let local = service.store_media(b"local", "image/png").unwrap();
+        service
+            .register_cache_candidate(
+                &remote,
+                "removed-contact",
+                chrono::Utc::now().timestamp(),
+                Some(6),
+            )
+            .unwrap();
+
+        service.retain_cache_sources(&[]).unwrap();
+        assert_eq!(service.enforce_cache_policy().unwrap(), 1);
+        assert!(!service.has_media(&remote));
+        assert!(service.has_media(&local));
+    }
+
+    #[test]
+    fn identical_local_and_remote_hash_stays_pinned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db.clone()).unwrap();
+        let hash = service.store_media(b"shared bytes", "image/png").unwrap();
+        service.pin_local_media(&hash).unwrap();
+        service
+            .register_cache_candidate(
+                &hash,
+                "remote-contact",
+                chrono::Utc::now().timestamp(),
+                Some(12),
+            )
+            .unwrap();
+        service.retain_cache_sources(&[]).unwrap();
+
+        assert_eq!(service.enforce_cache_policy().unwrap(), 0);
+        assert!(service.has_media(&hash));
+        assert_eq!(
+            service.get_transfer(&hash).unwrap().unwrap().status,
+            "ready"
+        );
+        let tracked: i64 = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM media_cache_entries WHERE media_hash = ?",
+                    [&hash],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(tracked, 0);
+    }
+
+    #[test]
+    fn shared_hash_retains_each_authorized_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db.clone()).unwrap();
+        let hash = service.store_media(b"shared remote", "image/png").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        service
+            .register_cache_candidate(&hash, "contact-a", now, Some(13))
+            .unwrap();
+        service
+            .register_cache_candidate(&hash, "contact-b", now, Some(13))
+            .unwrap();
+
+        service
+            .retain_cache_sources(&["contact-b".to_string()])
+            .unwrap();
+        assert_eq!(service.enforce_cache_policy().unwrap(), 0);
+        assert!(service.has_media(&hash));
+        let sources: Vec<String> = db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT source_peer_id FROM media_cache_sources
+                     WHERE media_hash = ? ORDER BY source_peer_id",
+                )?;
+                let rows = stmt.query_map([&hash], |row| row.get(0))?;
+                rows.collect()
+            })
+            .unwrap();
+        assert_eq!(sources, vec!["contact-b"]);
+    }
+
+    #[test]
+    fn cache_settings_reject_unbounded_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db).unwrap();
+        assert!(service
+            .update_cache_settings(MediaCacheSettings {
+                enabled: true,
+                retention_seconds: 1,
+                max_bytes: u64::MAX,
+            })
+            .is_err());
     }
 }

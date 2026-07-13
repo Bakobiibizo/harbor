@@ -30,3 +30,18 @@ export interface EnsureMediaTransferInput {
   fileName?: string;
   totalBytes?: number;
 }
+
+export interface MediaCacheSettings {
+  enabled: boolean;
+  retentionSeconds: number;
+  maxBytes: number;
+}
+
+export interface MediaCacheDiagnostics {
+  settings: MediaCacheSettings;
+  entryCount: number;
+  cachedCount: number;
+  pendingCount: number;
+  cachedBytes: number;
+  evictedLastRun: number;
+}
