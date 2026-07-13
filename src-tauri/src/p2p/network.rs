@@ -1225,6 +1225,53 @@ impl NetworkService {
         Ok(())
     }
 
+    /// Existing beta contacts may predate capability exchange. Replaying a
+    /// signed acceptance on their next connection repairs both sides without
+    /// weakening the requirement for an author-issued WallRead signature.
+    fn reconcile_contact_acceptance_grants(&mut self, peer_id: PeerId) {
+        let peer = peer_id.to_string();
+        let is_contact = self
+            .contacts_service
+            .as_ref()
+            .and_then(|service| service.is_contact(&peer).ok())
+            .unwrap_or(false);
+        if !is_contact {
+            return;
+        }
+        let needs_reconciliation = self
+            .permissions_service
+            .as_ref()
+            .map(|permissions| {
+                !permissions
+                    .peer_has_capability(&peer, Capability::WallRead)
+                    .unwrap_or(false)
+                    || !permissions
+                        .we_have_capability(&peer, Capability::WallRead)
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !needs_reconciliation {
+            return;
+        }
+
+        // Use a transient correlation ID so a failed repair attempt cannot
+        // regress the durable accepted request row back to `failed`.
+        let request_id = uuid::Uuid::new_v4().to_string();
+
+        match self.create_identity_request(request_id.clone(), "accepted".into(), &peer) {
+            Ok(request) => {
+                let outbound_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .identity_exchange
+                    .send_request(&peer_id, request);
+                self.pending_identity_requests
+                    .insert(outbound_id, (request_id, "accepted".into()));
+            }
+            Err(error) => warn!("Could not reconcile contact grants with {peer}: {error}"),
+        }
+    }
+
     /// Start listening on configured addresses
     pub fn start_listening(&mut self) -> Result<()> {
         // Listen on TCP
@@ -1305,7 +1352,7 @@ impl NetworkService {
                     is_connected: true,
                     last_seen: Some(chrono::Utc::now().timestamp()),
                 };
-                self.connected_peers.insert(peer_id, peer_info);
+                let first_connection = self.connected_peers.insert(peer_id, peer_info).is_none();
                 self.stats.connected_peers = self.connected_peers.len();
 
                 let _ = self
@@ -1314,6 +1361,9 @@ impl NetworkService {
                         peer_id: peer_id.to_string(),
                     })
                     .await;
+                if first_connection {
+                    self.reconcile_contact_acceptance_grants(peer_id);
+                }
             }
 
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -3581,6 +3631,18 @@ impl NetworkService {
                 "review"
             }
             "accepted" => {
+                let correlated_acceptance = service
+                    .is_contact(&request.requester_peer_id)
+                    .unwrap_or(false)
+                    || service
+                        .contact_request_for_peer(&request.requester_peer_id, "outgoing")
+                        .ok()
+                        .flatten()
+                        .is_some_and(|existing| existing.request_id == request.request_id);
+                if !correlated_acceptance {
+                    warn!("Rejected uncorrelated contact acceptance from {peer}");
+                    return;
+                }
                 if let Err(error) = self.process_contact_acceptance_grants(
                     &request.requester_peer_id,
                     &request.public_key,
