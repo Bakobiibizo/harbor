@@ -55,8 +55,11 @@ if [[ $actual_machine != "$expected_machine" ]]; then
   exit 1
 fi
 
-# Project-owned build hosts use a user-scoped rustup toolchain when available.
-# This takes precedence over an older distribution Cargo such as Ubuntu's 1.75.
+# Project-owned build hosts use user-scoped Node/pnpm and rustup toolchains when
+# available. These take precedence over missing or older distribution packages.
+if [[ -d $HOME/.local/bin ]]; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
 if [[ -d $HOME/.cargo/bin ]]; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
