@@ -101,7 +101,7 @@ mkdir -p "$output_root"
 for platform in "${platforms[@]}"; do
   case "$platform" in
     linux-x86_64)
-      "$script_dir/build-unix-platform.sh" \
+      bash "$script_dir/build-unix-platform.sh" \
         --repo-url "$repository_url" \
         --commit "$commit" \
         --worktree "$linux_worktree" \
