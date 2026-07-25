@@ -8,8 +8,16 @@ use crate::commands::NetworkState;
 use crate::db::Database;
 use crate::services::{
     ContactsService, IdentityService, MediaCacheDiagnostics, MediaCacheSettings,
-    MediaStorageService, MediaTransferState, MediaTransferUpdate,
+    MediaStorageService, MediaTransferState, MediaTransferUpdate, StoredMediaInfo,
 };
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaAssetInfo {
+    pub file_path: String,
+    pub mime_type: String,
+    pub total_bytes: u64,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,70 +38,50 @@ pub struct EnsureMediaTransferInput {
 #[tauri::command]
 pub async fn store_media(
     file_path: String,
-    mime_type: String,
+    mime_type: Option<String>,
     media_service: State<'_, Arc<MediaStorageService>>,
-) -> Result<String, String> {
-    let data = std::fs::read(&file_path)
-        .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
-
-    let hash = media_service
-        .store_media(&data, &mime_type)
-        .map_err(|e| format!("Failed to store media: {}", e))?;
-    media_service
-        .pin_local_media(&hash)
-        .map_err(|e| format!("Failed to protect local media: {}", e))?;
-
-    Ok(hash)
+) -> Result<StoredMediaInfo, String> {
+    let path = std::path::PathBuf::from(file_path);
+    let mime_type = mime_type.unwrap_or_else(|| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(extension_to_mime)
+            .unwrap_or("application/octet-stream")
+            .to_string()
+    });
+    let service = media_service.inner().clone();
+    tokio::task::spawn_blocking(move || service.store_media_path(&path, &mime_type))
+        .await
+        .map_err(|error| format!("Media import worker failed: {error}"))?
+        .map_err(|error| format!("Failed to store media: {error}"))
 }
 
-/// Store media from raw bytes (base64-encoded from the frontend).
+/// Resolve a stored attachment to packaged asset-protocol metadata.
 ///
-/// This is useful when the frontend already has the file data in memory
-/// (e.g., from a drag-and-drop or paste event) rather than a file path.
+/// The frontend receives the file path and converts it to an asset URL, so
+/// attachment bytes never need to be copied through the IPC serializer.
 #[tauri::command]
-pub async fn store_media_bytes(
-    data: Vec<u8>,
-    mime_type: String,
-    media_service: State<'_, Arc<MediaStorageService>>,
-) -> Result<String, String> {
-    let hash = media_service
-        .store_media(&data, &mime_type)
-        .map_err(|e| format!("Failed to store media: {}", e))?;
-    media_service
-        .pin_local_media(&hash)
-        .map_err(|e| format!("Failed to protect local media: {}", e))?;
-
-    Ok(hash)
-}
-
-/// Get a URL that the frontend can use in `<img>` or `<video>` tags to
-/// display a stored media file.
-///
-/// Returns a `data:` URL with the file contents base64-encoded. This avoids
-/// needing the Tauri asset protocol (which requires additional configuration)
-/// and works reliably on all platforms.
-#[tauri::command]
-pub async fn get_media_url(
+pub async fn get_media_asset(
     hash: String,
     media_service: State<'_, Arc<MediaStorageService>>,
-) -> Result<String, String> {
+) -> Result<MediaAssetInfo, String> {
     let path = media_service
         .get_media_path(&hash)
         .map_err(|e| format!("Media not found: {}", e))?;
-
-    let data = std::fs::read(&path).map_err(|e| format!("Failed to read media file: {}", e))?;
+    let total_bytes = std::fs::metadata(&path)
+        .map_err(|error| format!("Failed to inspect media file: {error}"))?
+        .len();
     let _ = media_service.touch_cache_entry(&hash);
-
-    // Determine MIME type from file extension
-    let mime = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(extension_to_mime)
-        .unwrap_or("application/octet-stream");
-
-    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-
-    Ok(format!("data:{};base64,{}", mime, encoded))
+    Ok(MediaAssetInfo {
+        mime_type: path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(extension_to_mime)
+            .unwrap_or("application/octet-stream")
+            .to_string(),
+        file_path: path.to_string_lossy().into_owned(),
+        total_bytes,
+    })
 }
 
 #[tauri::command]
@@ -296,13 +284,16 @@ pub async fn preload_missing_media(
         .into_iter()
         .map(|contact| contact.peer_id)
         .collect();
+    let pending_profile_avatars = contacts_service
+        .pending_profile_avatars()
+        .map_err(|error| error.to_string())?;
     media_service
         .prune_unauthorized_cache_sources()
         .map_err(|error| error.to_string())?;
     media_service
         .enforce_cache_policy()
         .map_err(|error| error.to_string())?;
-    if !settings.enabled || active_contacts.is_empty() {
+    if active_contacts.is_empty() || (!settings.enabled && pending_profile_avatars.is_empty()) {
         return Ok(0);
     }
 
@@ -314,8 +305,8 @@ pub async fn preload_missing_media(
         .map(|id| id.peer_id);
 
     // Query all supported media entries with their author (excluding own posts)
-    let all_media = db
-        .with_connection(|conn| {
+    let all_media = if settings.enabled {
+        db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT pm.media_hash, pm.media_type, p.author_peer_id,
                         pm.mime_type, pm.file_name, pm.file_size, MAX(p.created_at)
@@ -355,7 +346,10 @@ pub async fn preload_missing_media(
             }
             Ok(results)
         })
-        .map_err(|e| format!("Failed to query post_media: {}", e))?;
+        .map_err(|e| format!("Failed to query post_media: {}", e))?
+    } else {
+        Vec::new()
+    };
 
     // Only verified metadata from accepted contacts enters the bounded cache.
     // Keep every authorized source for a shared hash so a blocked/offline peer
@@ -406,6 +400,40 @@ pub async fn preload_missing_media(
         {
             reserved_bytes = reserved_bytes.saturating_add(size);
         }
+    }
+
+    // Signed profile revisions are staged until their avatar bytes verify.
+    // Requeue them here so restart/offline delivery follows the same bounded,
+    // authorized transfer path as post attachments.
+    for pending in pending_profile_avatars {
+        if media_service.has_media(&pending.avatar_hash) {
+            let old = contacts_service
+                .get_contact(&pending.peer_id)
+                .ok()
+                .flatten()
+                .and_then(|contact| contact.avatar_hash);
+            if contacts_service
+                .promote_verified_profile_avatar(&pending.peer_id, &pending.avatar_hash)
+                .unwrap_or(false)
+            {
+                if let Some(old) = old.filter(|old| old != &pending.avatar_hash) {
+                    let _ = media_service.delete_media_if_orphaned(&old);
+                }
+            }
+            continue;
+        }
+        let _ = media_service.ensure_transfer(
+            &pending.avatar_hash,
+            Some(&pending.peer_id),
+            "image",
+            pending.avatar_mime_type.as_deref(),
+            Some("profile-avatar"),
+            None,
+        );
+        candidate_sources
+            .entry(pending.avatar_hash)
+            .or_default()
+            .insert(pending.peer_id);
     }
 
     if candidate_sources.is_empty() {

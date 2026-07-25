@@ -26,7 +26,7 @@ export function NamedContactWallPage() {
   useEffect(() => {
     let cancelled = false;
     if (!qualifiedName) {
-      setResolution({ status: 'unavailable', message: 'This named wall link is malformed.' });
+      setResolution({ status: 'unavailable', message: 'This profile link is malformed.' });
       return;
     }
     const accountName = qualifiedName;

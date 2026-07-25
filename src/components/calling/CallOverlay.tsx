@@ -95,19 +95,28 @@ export function CallOverlay() {
   const declineIncomingGroupCall = useCallingStore((state) => state.declineIncomingGroupCall);
   const hangupActiveCall = useCallingStore((state) => state.hangupActiveCall);
   const leaveGroupCall = useCallingStore((state) => state.leaveGroupCall);
+  const retryGroupParticipant = useCallingStore((state) => state.retryGroupParticipant);
   const dismissCallUi = useCallingStore((state) => state.dismissCallUi);
   const setCameraEnabled = useCallingStore((state) => state.setCameraEnabled);
   const setGroupMuted = useCallingStore((state) => state.setGroupMuted);
   const setGroupCameraEnabled = useCallingStore((state) => state.setGroupCameraEnabled);
+  const enableCallAudio = useCallingStore((state) => state.enableCallAudio);
+
+  const runCallAction = (context: string, action: Promise<void>) => {
+    void action.catch((error) => {
+      // The calling store has already published the actionable failure state.
+      console.warn(`[Calling] ${context} failed`, error);
+    });
+  };
   const contacts = useContactsStore((state) => state.contacts);
   const localVideoRef = useVideoElement(snapshot.localVideoStream);
   const remoteVideoRef = useVideoElement(snapshot.remoteVideoStream);
 
   const peerName = useMemo(() => {
     const peerId = snapshot.peerId;
-    if (!peerId) return 'Unverified Harbor user';
+    if (!peerId) return 'Harbor user@unverified';
     const contact = contacts.find((item) => item.peerId === peerId);
-    return safePeerLabel(peerId, contact?.verifiedQualifiedName);
+    return safePeerLabel(peerId, contact?.verifiedQualifiedName, contact?.displayName);
   }, [contacts, snapshot.peerId]);
 
   if (groupSnapshot.state !== 'idle') {
@@ -117,7 +126,7 @@ export function CallOverlay() {
       groupSnapshot.participants.every((participant) => participant.state === 'invited');
     const contactName = (peerId: string) => {
       const contact = contacts.find((item) => item.peerId === peerId);
-      return safePeerLabel(peerId, contact?.verifiedQualifiedName);
+      return safePeerLabel(peerId, contact?.verifiedQualifiedName, contact?.displayName);
     };
     return (
       <div className="fixed inset-x-4 bottom-4 z-[150] sm:left-auto sm:w-[36rem]">
@@ -170,23 +179,65 @@ export function CallOverlay() {
           </div>
 
           {groupSnapshot.participants.some((participant) => participant.error) && (
-            <div className="mt-3 text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
-              Some participants have degraded media; remaining mesh connections continue.
+            <div className="mt-3 space-y-2 text-xs" style={{ color: 'hsl(var(--harbor-warning))' }}>
+              <p>Some participants have degraded media; remaining mesh connections continue.</p>
+              <div className="flex flex-wrap gap-2">
+                {groupSnapshot.participants
+                  .filter((participant) =>
+                    ['failed', 'declined', 'timed_out', 'disconnected'].includes(
+                      participant.state,
+                    ),
+                  )
+                  .map((participant) => {
+                    const name = contactName(participant.peerId);
+                    return (
+                      <button
+                        key={participant.peerId}
+                        type="button"
+                        onClick={() =>
+                          runCallAction(
+                            `Retry ${name}`,
+                            retryGroupParticipant(participant.peerId),
+                          )
+                        }
+                        className="rounded-lg border px-3 py-1.5 font-medium transition-colors"
+                        style={{
+                          borderColor: 'hsl(var(--harbor-border-subtle))',
+                          color: 'hsl(var(--harbor-text-primary))',
+                        }}
+                      >
+                        Retry {name}
+                      </button>
+                    );
+                  })}
+              </div>
             </div>
           )}
 
           <div className="mt-4 flex justify-end gap-2">
+            {groupSnapshot.participants.some((participant) => participant.remoteAudioBlocked) && (
+              <button
+                onClick={() => runCallAction('Enable call audio', enableCallAudio())}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                style={{
+                  background: 'hsl(var(--harbor-accent))',
+                  color: 'hsl(var(--harbor-bg-primary))',
+                }}
+              >
+                Enable call audio
+              </button>
+            )}
             {isIncomingGroup && (
               <>
                 <button
-                  onClick={() => void declineIncomingGroupCall()}
+                  onClick={() => runCallAction('Decline group call', declineIncomingGroupCall())}
                   className="px-4 py-2 rounded-lg text-sm font-medium"
                   style={{ color: 'hsl(var(--harbor-error))' }}
                 >
                   Decline
                 </button>
                 <button
-                  onClick={() => void acceptIncomingGroupCall()}
+                  onClick={() => runCallAction('Accept group call', acceptIncomingGroupCall())}
                   className="px-4 py-2 rounded-lg text-sm font-medium"
                   style={{
                     background: 'hsl(var(--harbor-accent))',
@@ -229,7 +280,7 @@ export function CallOverlay() {
               <button
                 onClick={() => {
                   if (isTerminalGroup) dismissCallUi();
-                  else void leaveGroupCall('normal');
+                  else runCallAction('Leave group call', leaveGroupCall('normal'));
                 }}
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
                 style={{
@@ -339,6 +390,18 @@ export function CallOverlay() {
         </div>
 
         <div className="mt-4 flex justify-end gap-2">
+          {snapshot.remoteAudioBlocked && (
+            <button
+              onClick={() => runCallAction('Enable call audio', enableCallAudio())}
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              style={{
+                background: 'hsl(var(--harbor-accent))',
+                color: 'hsl(var(--harbor-bg-primary))',
+              }}
+            >
+              Enable call audio
+            </button>
+          )}
           {showVideo && (
             <button
               onClick={() => void setCameraEnabled(!snapshot.localVideoEnabled)}
@@ -353,7 +416,7 @@ export function CallOverlay() {
           )}
           {isIncoming && (
             <button
-              onClick={() => void acceptIncomingCall()}
+              onClick={() => runCallAction('Accept call', acceptIncomingCall())}
               className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               style={{
                 background: 'hsl(var(--harbor-success))',
@@ -365,7 +428,7 @@ export function CallOverlay() {
           )}
           {isIncoming ? (
             <button
-              onClick={() => void declineIncomingCall()}
+              onClick={() => runCallAction('Decline call', declineIncomingCall())}
               className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               style={{
                 background: 'hsl(var(--harbor-error) / 0.16)',
@@ -380,7 +443,7 @@ export function CallOverlay() {
                 if (isTerminal) {
                   dismissCallUi();
                 } else {
-                  void hangupActiveCall('normal');
+                  runCallAction('End call', hangupActiveCall('normal'));
                 }
               }}
               className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"

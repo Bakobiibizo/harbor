@@ -9,6 +9,22 @@ use std::collections::{HashMap, HashSet};
 const CHALLENGE_TTL_SECS: i64 = 120;
 const SESSION_TTL_SECS: i64 = 900;
 
+/// Hard bounds for authentication state held by one relay process.
+#[derive(Clone, Copy, Debug)]
+pub struct StateLimits {
+    pub max_entries: usize,
+    pub replay_retention_secs: i64,
+}
+
+impl Default for StateLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 10_000,
+            replay_retention_secs: 600,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthChallenge {
     pub domain: String,
@@ -44,27 +60,52 @@ pub struct AuthService {
     key_id: String,
     signing_key: libp2p::identity::Keypair,
     outstanding: HashMap<String, AuthChallenge>,
-    used_challenges: HashSet<String>,
+    used_challenges: HashMap<String, i64>,
     revoked_sessions: HashSet<String>,
+    limits: StateLimits,
     epoch: String,
 }
 
 impl AuthService {
+    pub fn relay_name(&self) -> &str {
+        &self.relay
+    }
+
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
     pub fn signing_key(&self) -> libp2p::identity::Keypair {
         self.signing_key.clone()
     }
+    #[allow(dead_code)] // Used by library consumers/tests; the binary supplies explicit limits.
     pub fn new(
         relay: impl Into<String>,
         key_id: impl Into<String>,
         signing_key: libp2p::identity::Keypair,
     ) -> Self {
+        Self::new_with_limits(relay, key_id, signing_key, StateLimits::default())
+    }
+
+    pub fn new_with_limits(
+        relay: impl Into<String>,
+        key_id: impl Into<String>,
+        signing_key: libp2p::identity::Keypair,
+        limits: StateLimits,
+    ) -> Self {
+        assert!(limits.max_entries > 0, "auth max_entries must be nonzero");
+        assert!(
+            limits.replay_retention_secs > 0,
+            "auth replay retention must be positive"
+        );
         Self {
             relay: relay.into(),
             key_id: key_id.into(),
             signing_key,
             outstanding: HashMap::new(),
-            used_challenges: HashSet::new(),
+            used_challenges: HashMap::new(),
             revoked_sessions: HashSet::new(),
+            limits,
             epoch: uuid::Uuid::new_v4().to_string(),
         }
     }
@@ -76,6 +117,10 @@ impl AuthService {
         at: i64,
     ) -> Result<AuthChallenge, String> {
         validate_audience(audience)?;
+        self.prune(at);
+        if self.outstanding.len() >= self.limits.max_entries {
+            return Err("challenge capacity reached".into());
+        }
         let mut random = [0u8; 32];
         OsRng.fill_bytes(&mut random);
         let mut challenge = AuthChallenge {
@@ -108,13 +153,14 @@ impl AuthService {
         client_signature: &[u8],
         at: i64,
     ) -> Result<String, String> {
+        self.prune(at);
         if challenge.relay != self.relay || challenge.key_id != self.key_id {
             return Err("challenge authority mismatch".into());
         }
         if at > challenge.expires_at || at < challenge.issued_at {
             return Err("challenge expired".into());
         }
-        if self.used_challenges.contains(&challenge.id) {
+        if self.used_challenges.contains_key(&challenge.id) {
             return Err("challenge already used".into());
         }
         let stored = self
@@ -141,8 +187,14 @@ impl AuthService {
         if !public.verify(&challenge_bytes(challenge)?, client_signature) {
             return Err("invalid client signature".into());
         }
+        if self.used_challenges.len() >= self.limits.max_entries {
+            return Err("challenge replay capacity reached".into());
+        }
         self.outstanding.remove(&challenge.id);
-        self.used_challenges.insert(challenge.id.clone());
+        self.used_challenges.insert(
+            challenge.id.clone(),
+            at.saturating_add(self.limits.replay_retention_secs),
+        );
         let claims = SessionClaims {
             domain: "harbor/relay-session/1".into(),
             version: 1,
@@ -198,6 +250,18 @@ impl AuthService {
             URL_SAFE_NO_PAD.encode(bytes),
             URL_SAFE_NO_PAD.encode(signature)
         ))
+    }
+
+    fn prune(&mut self, at: i64) {
+        self.outstanding
+            .retain(|_, challenge| challenge.expires_at >= at);
+        self.used_challenges
+            .retain(|_, expires_at| *expires_at >= at);
+    }
+
+    #[cfg(test)]
+    fn state_counts(&self) -> (usize, usize) {
+        (self.outstanding.len(), self.used_challenges.len())
     }
 }
 
@@ -294,5 +358,76 @@ mod tests {
             .unwrap();
         let restarted = AuthService::new("relay.test", "k1", s.signing_key());
         assert!(restarted.authorize(&token, "introduce", 102).is_err());
+    }
+
+    #[test]
+    fn challenge_churn_is_hard_bounded_and_expiry_reclaims_capacity() {
+        let relay = libp2p::identity::Keypair::generate_ed25519();
+        let mut service = AuthService::new_with_limits(
+            "relay.test",
+            "k1",
+            relay,
+            StateLimits {
+                max_entries: 3,
+                replay_retention_secs: 10,
+            },
+        );
+        for _ in 0..3 {
+            let peer = libp2p::identity::Keypair::generate_ed25519()
+                .public()
+                .to_peer_id();
+            service.issue_challenge(&peer, "introduce", 100).unwrap();
+        }
+        let rotating_peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        assert!(service
+            .issue_challenge(&rotating_peer, "introduce", 100)
+            .is_err());
+        assert_eq!(service.state_counts(), (3, 0));
+
+        // The issuance path always prunes before checking its hard bound.
+        assert!(service
+            .issue_challenge(&rotating_peer, "introduce", 221)
+            .is_ok());
+        assert_eq!(service.state_counts(), (1, 0));
+    }
+
+    #[test]
+    fn replay_records_expire_without_weakening_single_use_within_retention() {
+        let relay = libp2p::identity::Keypair::generate_ed25519();
+        let client = libp2p::identity::Keypair::generate_ed25519();
+        let peer = client.public().to_peer_id();
+        let mut service = AuthService::new_with_limits(
+            "relay.test",
+            "k1",
+            relay,
+            StateLimits {
+                max_entries: 1,
+                replay_retention_secs: 10,
+            },
+        );
+        let challenge = service.issue_challenge(&peer, "introduce", 100).unwrap();
+        let signature = client.sign(&challenge_bytes(&challenge).unwrap()).unwrap();
+        service
+            .complete(
+                &challenge,
+                &client.public().encode_protobuf(),
+                &signature,
+                101,
+            )
+            .unwrap();
+        assert!(service
+            .complete(
+                &challenge,
+                &client.public().encode_protobuf(),
+                &signature,
+                102,
+            )
+            .is_err());
+        assert_eq!(service.state_counts(), (0, 1));
+
+        service.issue_challenge(&peer, "introduce", 112).unwrap();
+        assert_eq!(service.state_counts(), (1, 0));
     }
 }

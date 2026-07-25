@@ -3,10 +3,15 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import toast, { Toaster } from 'react-hot-toast';
 import { isTauri } from '@tauri-apps/api/core';
 import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore } from './stores';
-import { useTauriEvents } from './hooks';
+import { useHarborControlEvents, useTauriEvents } from './hooks';
 import { MainLayout, WindowsTitleBar } from './components/layout';
-import { AccountSelection, CreateIdentity, UnlockIdentity } from './components/onboarding';
-import { LegacyIdentityMigration } from './components/identity';
+import {
+  AccountSelection,
+  CreateIdentity,
+  IdentityInitializationFailure,
+  UnlockIdentity,
+} from './components/onboarding';
+import { IdentityPublishingGate } from './components/identity';
 import { AddContactDialog, ErrorBoundary } from './components/common';
 import { CallOverlay } from './components/calling/CallOverlay';
 import { HarborIcon } from './components/icons';
@@ -20,8 +25,20 @@ import {
   SettingsPage,
 } from './pages';
 import { NamedContactWallPage } from './pages/NamedContactWall';
-import type { AccountInfo } from './types';
 import { checkForUpdate } from './services/updater';
+import { getErrorMessage } from './utils/errors';
+import {
+  activateProfile,
+  isCurrentProfile,
+  onProfileSuspend,
+  suspendProfile,
+  type ProfileToken,
+} from './services/profileSession';
+import {
+  hydrateProfilePersistence,
+  resetProfilePersistenceMemory,
+} from './services/profilePersistence';
+import { resetProfileRuntime } from './services/profileRuntime';
 
 function LoadingScreen() {
   return (
@@ -80,19 +97,42 @@ function LoadingScreen() {
   );
 }
 
-function AppContent() {
+function ProfileEventBridge({ token }: { token: ProfileToken }) {
+  useTauriEvents(token);
+  return null;
+}
+
+function GlobalControlBridge() {
+  useHarborControlEvents();
+  return null;
+}
+
+export function AppContent() {
   const { state, initialize } = useIdentityStore();
   const { checkStatus, startNetwork, pendingDeepLinkContact, setPendingDeepLinkContact } =
     useNetworkStore();
   const { autoStartNetwork } = useSettingsStore();
-  const { accounts, loading: accountsLoading, loadAccounts } = useAccountsStore();
+  const { accounts, activeAccount, loading: accountsLoading, loadAccounts } = useAccountsStore();
 
   // UI state for account flow
   const [showCreateAccount, setShowCreateAccount] = useState(false);
-  const [selectedAccount, setSelectedAccount] = useState<AccountInfo | null>(null);
+  const [showAccountSelection, setShowAccountSelection] = useState(false);
+  const [profileToken, setProfileToken] = useState<ProfileToken | null>(null);
+  const [entryReady, setEntryReady] = useState(false);
+  const [persistenceReady, setPersistenceReady] = useState(false);
+  const [profileHydrationError, setProfileHydrationError] = useState<string | null>(null);
+  const [profileHydrationAttempt, setProfileHydrationAttempt] = useState(0);
 
-  // Set up Tauri event listeners for real-time updates from backend
-  useTauriEvents();
+  useEffect(
+    () =>
+      onProfileSuspend(() => {
+        resetProfileRuntime();
+        resetProfilePersistenceMemory();
+        setPersistenceReady(false);
+        setProfileHydrationError(null);
+      }),
+    [],
+  );
 
   // Check quietly on launch. Installation remains an explicit user decision in Settings.
   useEffect(() => {
@@ -114,59 +154,159 @@ function AppContent() {
     loadAccounts();
   }, [loadAccounts]);
 
-  // Initialize identity after accounts are loaded
+  // Establish the trusted backend-selected namespace before identity or any
+  // profile service starts. Persisted profile data is hydrated only after the
+  // identity is unlocked.
   useEffect(() => {
-    if (!accountsLoading) {
-      initialize();
+    if (accountsLoading) return;
+    // A populated session is never rebound in-process. AccountSelection commits
+    // the target then relaunches; keep this UI stable during that short handoff.
+    if (entryReady && profileToken) return;
+
+    let cancelled = false;
+    setEntryReady(false);
+    setPersistenceReady(false);
+    setProfileHydrationError(null);
+
+    const initializeEntry = async () => {
+      if (activeAccount) {
+        const token = activateProfile(activeAccount.id);
+        setProfileToken(token);
+        await initialize();
+        if (!cancelled && isCurrentProfile(token)) setEntryReady(true);
+        return;
+      }
+
+      suspendProfile();
+      resetProfileRuntime();
+      resetProfilePersistenceMemory();
+      setProfileToken(null);
+      await initialize();
+      if (!cancelled) setEntryReady(true);
+    };
+
+    void initializeEntry();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountsLoading, activeAccount?.id, initialize]);
+
+  // Identity creation registers the first account in the backend. Refresh the
+  // registry so the new trusted profile can be activated before main UI mounts.
+  useEffect(() => {
+    if (entryReady && state.status === 'unlocked' && !activeAccount && !accountsLoading) {
+      void loadAccounts();
     }
-  }, [accountsLoading, initialize]);
+  }, [entryReady, state.status, activeAccount, accountsLoading, loadAccounts]);
+
+  // A successful lock suspends the old epoch. Reactivate only the namespace and
+  // listener bridge for the locked screen; private persistence stays cleared.
+  useEffect(() => {
+    if (
+      entryReady &&
+      state.status === 'locked' &&
+      activeAccount &&
+      !isCurrentProfile(profileToken)
+    ) {
+      const token = activateProfile(activeAccount.id);
+      setProfileToken(token);
+      setPersistenceReady(false);
+    }
+  }, [entryReady, state.status, activeAccount, profileToken]);
+
+  // Unlocking restores only the selected profile's persisted state. The epoch
+  // check prevents a delayed hydration from profile A committing after B starts.
+  useEffect(() => {
+    if (
+      !entryReady ||
+      state.status !== 'unlocked' ||
+      !profileToken ||
+      persistenceReady ||
+      !isCurrentProfile(profileToken)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    void hydrateProfilePersistence()
+      .then(() => {
+        if (!cancelled && isCurrentProfile(profileToken)) setPersistenceReady(true);
+      })
+      .catch((error) => {
+        if (!cancelled && isCurrentProfile(profileToken)) {
+          setProfileHydrationError(getErrorMessage(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entryReady, state.status, profileToken, persistenceReady, profileHydrationAttempt]);
 
   // Auto-start network when identity is unlocked (if enabled in settings)
   useEffect(() => {
-    if (state.status === 'unlocked') {
-      checkStatus().then(async () => {
-        // Only auto-start if setting is enabled and network isn't already running
-        const networkState = useNetworkStore.getState();
-        if (autoStartNetwork && !networkState.isRunning) {
-          console.log('[Harbor] Auto-starting network...');
-          await startNetwork();
+    if (state.status === 'unlocked' && persistenceReady) {
+      void checkStatus()
+        .then(async () => {
+          // Only auto-start if setting is enabled and network isn't already running
+          const networkState = useNetworkStore.getState();
+          if (autoStartNetwork && !networkState.isRunning) {
+            console.log('[Harbor] Auto-starting network...');
+            await startNetwork();
 
-          // Auto-connect to public relays for circuit addressing
-          console.log('[Harbor] Auto-connecting to public relays...');
-          const { connectToPublicRelays } = useNetworkStore.getState();
-          try {
-            await connectToPublicRelays();
-            console.log('[Harbor] Connected to public relays');
-          } catch (error) {
-            console.error('[Harbor] Failed to connect to public relays:', error);
-          }
-
-          // Connect to saved bootstrap nodes
-          const settingsState = useSettingsStore.getState();
-          if (settingsState.bootstrapNodes.length > 0) {
-            console.log('[Harbor] Connecting to saved bootstrap nodes...');
-            const { addBootstrapNode } = useNetworkStore.getState();
-            for (const node of settingsState.bootstrapNodes) {
-              try {
-                await addBootstrapNode(node);
-                console.log(`[Harbor] Connected to bootstrap node: ${node}`);
-              } catch (error) {
-                console.error(`[Harbor] Failed to connect to bootstrap node: ${node}`, error);
-              }
+            // Auto-connect to public relays for circuit addressing
+            console.log('[Harbor] Auto-connecting to public relays...');
+            const { connectToPublicRelays } = useNetworkStore.getState();
+            try {
+              await connectToPublicRelays();
+              console.log('[Harbor] Connected to public relays');
+            } catch (error) {
+              console.error('[Harbor] Failed to connect to public relays:', error);
             }
           }
-        }
-      });
+        })
+        .catch((error) => {
+          console.error('[Harbor] Automatic network startup failed:', error);
+        });
     }
-  }, [state.status, checkStatus, autoStartNetwork, startNetwork]);
+  }, [state.status, persistenceReady, checkStatus, autoStartNetwork, startNetwork]);
 
   // Loading state
-  if (accountsLoading || state.status === 'loading') {
+  if (
+    accountsLoading ||
+    !entryReady ||
+    state.status === 'loading' ||
+    (state.status === 'unlocked' && !persistenceReady && !profileHydrationError)
+  ) {
     return <LoadingScreen />;
   }
 
+  const profileBridge =
+    profileToken && isCurrentProfile(profileToken) ? (
+      <ProfileEventBridge key={profileToken.epoch} token={profileToken} />
+    ) : null;
+
+  if (profileHydrationError) {
+    return (
+      <IdentityInitializationFailure
+        state={{
+          status: 'recoverableError',
+          source: 'profileStorage',
+          error: {
+            code: 'PROFILE_STORAGE_ERROR',
+            message: profileHydrationError,
+            recovery: 'Check local storage access, then retry.',
+          },
+        }}
+        onRetry={() => {
+          setProfileHydrationError(null);
+          setProfileHydrationAttempt((attempt) => attempt + 1);
+        }}
+      />
+    );
+  }
+
   // Show create account screen if user chose to create new or no accounts exist
-  if (showCreateAccount || (accounts.length === 0 && state.status === 'no_identity')) {
+  if (showCreateAccount || (accounts.length === 0 && state.status === 'absent')) {
     return (
       <CreateIdentity
         onBack={accounts.length > 0 ? () => setShowCreateAccount(false) : undefined}
@@ -174,66 +314,81 @@ function AppContent() {
     );
   }
 
-  // Multiple accounts exist - show account selection
-  if (accounts.length > 1 && state.status !== 'unlocked' && !selectedAccount) {
+  // Account selection is an explicit switch flow. Normal startup opens the active account.
+  if (showAccountSelection && accounts.length > 1 && state.status !== 'unlocked') {
     return (
-      <AccountSelection
-        onSelectAccount={(account) => {
-          setSelectedAccount(account);
-          // Re-initialize identity to load the selected account's data
-          initialize();
-        }}
-        onCreateAccount={() => setShowCreateAccount(true)}
-      />
+      <>
+        {profileBridge}
+        <AccountSelection onCreateAccount={() => setShowCreateAccount(true)} />
+      </>
     );
   }
 
-  // No identity in current profile - show create screen
-  if (state.status === 'no_identity') {
+  // Only authoritative backend absence may offer account creation.
+  if (state.status === 'absent') {
     return <CreateIdentity />;
+  }
+
+  if (state.status === 'recoverableError' || state.status === 'fatalError') {
+    return (
+      <>
+        {profileBridge}
+        <IdentityInitializationFailure
+          state={state}
+          onRetry={() => void initialize()}
+          onSwitchAccount={accounts.length > 1 ? () => setShowAccountSelection(true) : undefined}
+        />
+      </>
+    );
   }
 
   // Identity locked - show unlock screen
   if (state.status === 'locked') {
     return (
-      <UnlockIdentity
-        onSwitchAccount={
-          accounts.length > 1
-            ? () => {
-                setSelectedAccount(null);
-              }
-            : undefined
-        }
-      />
+      <>
+        {profileBridge}
+        <UnlockIdentity
+          onSwitchAccount={
+            accounts.length > 1
+              ? () => {
+                  setShowAccountSelection(true);
+                }
+              : undefined
+          }
+        />
+      </>
     );
   }
 
   // Identity unlocked - show main app
   return (
-    <LegacyIdentityMigration identity={state.identity}>
-      <>
-        <MainLayout>
-          <Routes>
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/wall" element={<WallPage />} />
-            <Route path="/contacts/:peerId/wall" element={<ContactWallPage />} />
-            <Route path="/name/:qualifiedName/wall" element={<NamedContactWallPage />} />
-            <Route path="/feed" element={<FeedPage />} />
-            <Route path="/boards" element={<BoardsPage />} />
-            <Route path="/network" element={<NetworkPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/chat" replace />} />
-          </Routes>
-        </MainLayout>
-        <CallOverlay />
-        {pendingDeepLinkContact && (
-          <AddContactDialog
-            contactString={pendingDeepLinkContact}
-            onClose={() => setPendingDeepLinkContact(null)}
-          />
-        )}
-      </>
-    </LegacyIdentityMigration>
+    <>
+      {profileBridge}
+      <IdentityPublishingGate identity={state.identity}>
+        <>
+          <MainLayout>
+            <Routes>
+              <Route path="/chat" element={<ChatPage />} />
+              <Route path="/wall" element={<WallPage />} />
+              <Route path="/contacts/:peerId/wall" element={<ContactWallPage />} />
+              <Route path="/name/:qualifiedName/wall" element={<NamedContactWallPage />} />
+              <Route path="/feed" element={<FeedPage />} />
+              <Route path="/boards" element={<BoardsPage />} />
+              <Route path="/network" element={<NetworkPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/chat" replace />} />
+            </Routes>
+          </MainLayout>
+          <CallOverlay />
+          {pendingDeepLinkContact && (
+            <AddContactDialog
+              contactString={pendingDeepLinkContact}
+              onClose={() => setPendingDeepLinkContact(null)}
+            />
+          )}
+        </>
+      </IdentityPublishingGate>
+    </>
   );
 }
 
@@ -243,6 +398,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <HashRouter>
+        <GlobalControlBridge />
         <div className="flex h-screen flex-col overflow-hidden">
           {showWindowsTitleBar && <WindowsTitleBar />}
           <div className="harbor-app-content min-h-0 flex-1 overflow-hidden">

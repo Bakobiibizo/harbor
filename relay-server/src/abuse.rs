@@ -1,7 +1,7 @@
 //! Layered relay abuse controls for privacy-preserving introduction requests.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkChallenge {
@@ -10,6 +10,7 @@ pub struct WorkChallenge {
     pub requester: String,
     pub target: String,
     pub action: String,
+    pub audience: String,
     pub expires_at: i64,
     pub difficulty: u8,
     pub key_id: String,
@@ -27,6 +28,7 @@ impl WorkChallenge {
             &self.requester,
             &self.target,
             &self.action,
+            &self.audience,
             &self.expires_at.to_string(),
             &nonce.to_string(),
         ] {
@@ -61,19 +63,49 @@ pub struct Limits {
     pub global: u32,
     pub window_secs: i64,
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct CapacityLimits {
+    pub max_entries: usize,
+    pub retention_secs: i64,
+}
+
+impl Default for CapacityLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 10_000,
+            retention_secs: 600,
+        }
+    }
+}
 pub struct AbuseGuard {
     limits: Limits,
+    capacities: CapacityLimits,
     events: VecDeque<(i64, String, String, String, String)>,
-    used: HashSet<String>,
-    pressure: HashMap<String, u8>,
+    used: HashMap<String, i64>,
+    pressure: HashMap<String, (u8, i64)>,
     issued: HashMap<String, WorkChallenge>,
 }
 impl AbuseGuard {
+    #[allow(dead_code)] // Used by library consumers/tests; the binary supplies explicit limits.
     pub fn new(limits: Limits) -> Self {
+        Self::new_with_capacities(limits, CapacityLimits::default())
+    }
+
+    pub fn new_with_capacities(limits: Limits, capacities: CapacityLimits) -> Self {
+        assert!(
+            capacities.max_entries > 0,
+            "abuse max_entries must be nonzero"
+        );
+        assert!(
+            capacities.retention_secs > 0,
+            "abuse retention must be positive"
+        );
         Self {
             limits,
+            capacities,
             events: VecDeque::new(),
-            used: HashSet::new(),
+            used: HashMap::new(),
             pressure: HashMap::new(),
             issued: HashMap::new(),
         }
@@ -91,12 +123,17 @@ impl AbuseGuard {
         key: &libp2p::identity::Keypair,
         delivery_key: Vec<u8>,
     ) -> Result<WorkChallenge, String> {
+        self.prune(at);
+        if self.issued.len() >= self.capacities.max_entries {
+            return Err("request accepted for processing".into());
+        }
         let mut c = WorkChallenge {
             id: uuid::Uuid::new_v4().to_string(),
             relay: relay.into(),
             requester: requester.into(),
             target: target.into(),
             action: action.into(),
+            audience: "introduce".into(),
             expires_at: at + 300,
             difficulty: self.difficulty(requester, false),
             key_id: key_id.into(),
@@ -117,7 +154,7 @@ impl AbuseGuard {
         if known_contact {
             0
         } else {
-            14u8.saturating_add(*self.pressure.get(peer).unwrap_or(&0))
+            14u8.saturating_add(self.pressure.get(peer).map(|p| p.0).unwrap_or(0))
                 .min(24)
         }
     }
@@ -137,6 +174,7 @@ impl AbuseGuard {
             || issued.requester != challenge.requester
             || issued.target != challenge.target
             || issued.action != challenge.action
+            || issued.audience != challenge.audience
             || issued.expires_at != challenge.expires_at
             || issued.difficulty != challenge.difficulty
             || issued.key_id != challenge.key_id
@@ -145,11 +183,11 @@ impl AbuseGuard {
         {
             return Err("request accepted for processing".into());
         }
-        if self.used.contains(&challenge.id) {
+        if self.used.contains_key(&challenge.id) {
             return Err("request accepted for processing".into());
         }
         if !known_contact && !challenge.verify(nonce, at) {
-            self.bump(&challenge.requester);
+            self.bump(&challenge.requester, at);
             return Err("request accepted for processing".into());
         }
         let counts = (
@@ -165,10 +203,17 @@ impl AbuseGuard {
             || counts.3 >= self.limits.action
             || counts.4 >= self.limits.global
         {
-            self.bump(&challenge.requester);
+            self.bump(&challenge.requester, at);
             return Err("request accepted for processing".into());
         }
-        self.used.insert(challenge.id.clone());
+        if self.used.len() >= self.capacities.max_entries {
+            self.bump(&challenge.requester, at);
+            return Err("request accepted for processing".into());
+        }
+        self.used.insert(
+            challenge.id.clone(),
+            at.saturating_add(self.capacities.retention_secs),
+        );
         self.issued.remove(&challenge.id);
         self.events.push_back((
             at,
@@ -198,10 +243,30 @@ impl AbuseGuard {
         {
             self.events.pop_front();
         }
+        self.used.retain(|_, expires_at| *expires_at >= at);
+        self.issued
+            .retain(|_, challenge| challenge.expires_at >= at);
+        self.pressure.retain(|_, (_, last_seen)| {
+            at.saturating_sub(*last_seen) < self.capacities.retention_secs
+        });
     }
-    fn bump(&mut self, peer: &str) {
-        let p = self.pressure.entry(peer.into()).or_default();
-        *p = p.saturating_add(2).min(10);
+    fn bump(&mut self, peer: &str, at: i64) {
+        if let Some((value, last_seen)) = self.pressure.get_mut(peer) {
+            *value = value.saturating_add(2).min(10);
+            *last_seen = at;
+        } else if self.pressure.len() < self.capacities.max_entries {
+            self.pressure.insert(peer.into(), (2, at));
+        }
+    }
+
+    #[cfg(test)]
+    fn state_counts(&self) -> (usize, usize, usize, usize) {
+        (
+            self.events.len(),
+            self.used.len(),
+            self.pressure.len(),
+            self.issued.len(),
+        )
     }
 }
 
@@ -215,6 +280,7 @@ mod tests {
             requester: "peer".into(),
             target: "@alice@relay.test".into(),
             action: "introduce".into(),
+            audience: "introduce".into(),
             expires_at: 300,
             difficulty: d,
             key_id: "k1".into(),
@@ -240,7 +306,7 @@ mod tests {
         let c = challenge("fixed", 8);
         assert_eq!(
             hex(&c.digest(0)),
-            "8d791b81b66904190ed8336458c6182e72adaf2e397d36c276c45d846be0474d"
+            "0624484e5a290812ab299d5a8f812391b69950f0537e080bafe832230b12fc21"
         );
         let n = solve(&c);
         assert!(c.verify(n, 100));
@@ -324,6 +390,109 @@ mod tests {
             .is_err());
         assert!(g.check_and_record(&c, nonce, "net", 100, false).is_ok());
         assert!(g.check_and_record(&c, nonce, "net", 100, false).is_err());
+    }
+
+    #[test]
+    fn issued_used_and_pressure_churn_remain_bounded_then_expire() {
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let mut guard = AbuseGuard::new_with_capacities(
+            limits(),
+            CapacityLimits {
+                max_entries: 2,
+                retention_secs: 10,
+            },
+        );
+        for requester in ["peer-1", "peer-2"] {
+            guard
+                .issue_with_delivery_key(
+                    "relay.test",
+                    requester,
+                    "@alice@relay.test",
+                    "introduce",
+                    100,
+                    "k1",
+                    &key,
+                    vec![7; 32],
+                )
+                .unwrap();
+        }
+        assert!(guard
+            .issue_with_delivery_key(
+                "relay.test",
+                "peer-3",
+                "@alice@relay.test",
+                "introduce",
+                100,
+                "k1",
+                &key,
+                vec![7; 32],
+            )
+            .is_err());
+        assert_eq!(guard.state_counts(), (0, 0, 0, 2));
+
+        // Challenge expiry prunes the issued set before the capacity check.
+        guard
+            .issue_with_delivery_key(
+                "relay.test",
+                "peer-3",
+                "@alice@relay.test",
+                "introduce",
+                401,
+                "k1",
+                &key,
+                vec![7; 32],
+            )
+            .unwrap();
+        assert_eq!(guard.state_counts(), (0, 0, 0, 1));
+
+        // Invalid submissions build pressure, but rotating peer identities cannot
+        // grow that map beyond the declared process-state capacity.
+        for requester in ["rotating-1", "rotating-2", "rotating-3"] {
+            let mut item = challenge(requester, 24);
+            item.requester = requester.into();
+            item.expires_at = 1_000;
+            guard.remember(item.clone());
+            let _ = guard.check_and_record(&item, 0, "same-source", 500, false);
+        }
+        assert!(guard.state_counts().2 <= 2);
+        guard.prune(511);
+        assert_eq!(guard.state_counts().2, 0);
+    }
+
+    #[test]
+    fn accepted_event_and_replay_cardinality_stays_within_global_limit() {
+        let mut guard = AbuseGuard::new_with_capacities(
+            Limits {
+                peer: 10,
+                network: 10,
+                target: 10,
+                action: 10,
+                global: 2,
+                window_secs: 10,
+            },
+            CapacityLimits {
+                max_entries: 2,
+                retention_secs: 10,
+            },
+        );
+        for id in ["one", "two"] {
+            let item = challenge(id, 0);
+            guard.remember(item.clone());
+            guard
+                .check_and_record(&item, 0, "same-source", 100, true)
+                .unwrap();
+        }
+        assert_eq!(guard.state_counts(), (2, 2, 0, 0));
+        let third = challenge("three", 0);
+        guard.remember(third.clone());
+        assert!(guard
+            .check_and_record(&third, 0, "same-source", 100, true)
+            .is_err());
+        assert!(guard.state_counts().0 <= 2);
+        assert!(guard.state_counts().1 <= 2);
+
+        guard.prune(111);
+        assert_eq!(guard.state_counts(), (0, 0, 0, 1));
     }
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()

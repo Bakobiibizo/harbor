@@ -1,17 +1,23 @@
 //! Posts service for managing wall/blog posts
 
 use ed25519_dalek::VerifyingKey;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::db::{
-    Capability, Database, Post, PostData, PostMedia, PostMediaData, PostVisibility,
-    PostsRepository, RecordPostEventParams,
+    Capability, Database, EnqueuePostRelayMutation, Post, PostData, PostMedia, PostMediaData,
+    PostRelayOutboxEntry, PostVisibility, PostsRepository, RecordPostEventParams,
 };
 use crate::error::{AppError, Result};
+use crate::p2p::protocols::board_sync::{
+    BoardSyncRequest as WireBoardSyncRequest, WallPostMediaItem,
+};
 use crate::services::{
     verify, ContactsService, IdentityService, PermissionsService, Signable, SignablePost,
-    SignablePostDelete, SignablePostMedia, SignablePostUpdate, SignedPostMediaMetadata,
+    SignablePostDelete, SignablePostMedia, SignablePostUpdate, SignableWallPostSubmit,
+    SignedPostMediaMetadata,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +139,17 @@ pub struct PostsService {
     identity_service: Arc<IdentityService>,
     contacts_service: Arc<ContactsService>,
     permissions_service: Arc<PermissionsService>,
+    #[cfg(test)]
+    local_commit_failpoint: AtomicU8,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LocalPostCommitFailpoint {
+    AfterLamport = 1,
+    AfterEvent = 2,
+    AfterProjection = 3,
+    AfterMedia = 4,
+    AfterOutbox = 5,
 }
 
 /// A post ready to be synced over the network
@@ -327,6 +344,36 @@ pub(crate) fn post_media_data_from_signed(
     }
 }
 
+fn signed_media_from_stored(media: PostMedia) -> SignedPostMediaMetadata {
+    SignedPostMediaMetadata {
+        media_hash: media.media_hash,
+        media_type: media.media_type,
+        mime_type: media.mime_type,
+        file_name: media.file_name,
+        file_size: media.file_size,
+        width: media.width,
+        height: media.height,
+        duration_seconds: media.duration_seconds,
+        sort_order: media.sort_order,
+        signature: media.signature,
+    }
+}
+
+fn wire_media_from_signed(media: &SignedPostMediaMetadata) -> WallPostMediaItem {
+    WallPostMediaItem {
+        media_hash: media.media_hash.clone(),
+        media_type: media.media_type.clone(),
+        mime_type: media.mime_type.clone(),
+        file_name: media.file_name.clone(),
+        file_size: media.file_size,
+        width: media.width,
+        height: media.height,
+        duration_seconds: media.duration_seconds,
+        sort_order: media.sort_order,
+        signature: media.signature.clone(),
+    }
+}
+
 impl PostsService {
     pub fn assert_can_publish(&self) -> Result<()> {
         crate::services::IdentityPublishingPolicy::enforce(&self.db, &self.identity_service)
@@ -343,7 +390,31 @@ impl PostsService {
             identity_service,
             contacts_service,
             permissions_service,
+            #[cfg(test)]
+            local_commit_failpoint: AtomicU8::new(0),
         }
+    }
+
+    #[cfg(test)]
+    fn inject_local_commit_failure(&self, failpoint: LocalPostCommitFailpoint) {
+        self.local_commit_failpoint
+            .store(failpoint as u8, Ordering::SeqCst);
+    }
+
+    fn fail_local_commit_if(&self, failpoint: LocalPostCommitFailpoint) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .local_commit_failpoint
+            .compare_exchange(failpoint as u8, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return Err(AppError::Internal(format!(
+                "injected local post commit failure after stage {failpoint:?}"
+            )));
+        }
+        #[cfg(not(test))]
+        let _ = failpoint;
+        Ok(())
     }
 
     /// Create a new post without media.
@@ -371,103 +442,163 @@ impl PostsService {
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let post_id = Uuid::new_v4().to_string();
-        let lamport_clock =
-            self.db
-                .next_lamport_clock(&identity.peer_id)
-                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let created_at = chrono::Utc::now().timestamp();
-
-        let mut signed_media_items = Vec::with_capacity(media.len());
-        for item in media {
-            let unsigned = SignedPostMediaMetadata {
-                media_hash: item.media_hash.to_string(),
-                media_type: item.media_type.to_string(),
-                mime_type: item.mime_type.to_string(),
-                file_name: item.file_name.to_string(),
-                file_size: item.file_size,
-                width: item.width,
-                height: item.height,
-                duration_seconds: item.duration_seconds,
-                sort_order: item.sort_order,
-                signature: Vec::new(),
-            };
-            validate_signed_media_metadata(&unsigned)?;
-
-            let signable_media = signable_media_from_signed(&post_id, &identity.peer_id, &unsigned);
-            let media_signature = self.identity_service.sign(&signable_media)?;
-            signed_media_items.push(SignedPostMediaMetadata {
-                signature: media_signature,
-                ..unsigned
-            });
-        }
-
-        let media_hashes = sorted_media_hashes(&signed_media_items);
-
-        // Create signable. If media is part of the post, media_hashes is non-empty
-        // before the post signature is produced.
-        let signable = SignablePost {
-            post_id: post_id.clone(),
-            author_peer_id: identity.peer_id.clone(),
-            content_type: content_type.to_string(),
-            content_text: content_text.map(String::from),
-            media_hashes: media_hashes.clone(),
-            visibility: visibility.to_string(),
-            lamport_clock,
-            created_at,
-        };
-
-        let signature = self.identity_service.sign(&signable)?;
-
-        // Store locally
-        let post_data = PostData {
-            post_id: post_id.clone(),
-            author_peer_id: identity.peer_id.clone(),
-            content_type: content_type.to_string(),
-            content_text: content_text.map(String::from),
-            visibility,
-            lamport_clock: lamport_clock as i64,
-            created_at,
-            signature: signature.clone(),
-        };
-
-        PostsRepository::insert_post(&self.db, &post_data)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-        for media_item in &signed_media_items {
-            let media_data = post_media_data_from_signed(&post_id, media_item);
-            PostsRepository::add_media(&self.db, &media_data)
-                .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-        }
-
-        // Record event
         let event_id = format!("created:{}", post_id);
-        let payload_cbor = signable.signable_bytes()?;
-        PostsRepository::record_post_event(
-            &self.db,
-            &RecordPostEventParams {
-                event_id: &event_id,
-                event_type: "created",
-                post_id: &post_id,
-                author_peer_id: &identity.peer_id,
-                lamport_clock: lamport_clock as i64,
-                timestamp: created_at,
-                payload_cbor: &payload_cbor,
-                signature: &signature,
-            },
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        self.db.with_connection_mut_result(|connection| {
+            let transaction = connection.transaction().map_err(AppError::Database)?;
+            let lamport_clock =
+                PostsRepository::next_lamport_in_transaction(&transaction, &identity.peer_id)
+                    .map_err(AppError::Database)? as u64;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterLamport)?;
 
-        Ok(OutgoingPost {
-            post_id,
-            author_peer_id: identity.peer_id,
-            content_type: content_type.to_string(),
-            content_text: content_text.map(String::from),
-            media_hashes,
-            media_items: signed_media_items,
-            visibility: visibility.to_string(),
-            lamport_clock,
-            created_at,
-            signature,
+            let mut signed_media_items = Vec::with_capacity(media.len());
+            for item in media {
+                let unsigned = SignedPostMediaMetadata {
+                    media_hash: item.media_hash.to_string(),
+                    media_type: item.media_type.to_string(),
+                    mime_type: item.mime_type.to_string(),
+                    file_name: item.file_name.to_string(),
+                    file_size: item.file_size,
+                    width: item.width,
+                    height: item.height,
+                    duration_seconds: item.duration_seconds,
+                    sort_order: item.sort_order,
+                    signature: Vec::new(),
+                };
+                validate_signed_media_metadata(&unsigned)?;
+                let signable_media =
+                    signable_media_from_signed(&post_id, &identity.peer_id, &unsigned);
+                signed_media_items.push(SignedPostMediaMetadata {
+                    signature: self.identity_service.sign(&signable_media)?,
+                    ..unsigned
+                });
+            }
+            let media_hashes = sorted_media_hashes(&signed_media_items);
+            let signable = SignablePost {
+                post_id: post_id.clone(),
+                author_peer_id: identity.peer_id.clone(),
+                content_type: content_type.to_string(),
+                content_text: content_text.map(String::from),
+                media_hashes: media_hashes.clone(),
+                visibility: visibility.to_string(),
+                lamport_clock,
+                created_at,
+            };
+            let signature = self.identity_service.sign(&signable)?;
+            let event_payload = signable.signable_bytes()?;
+            PostsRepository::record_post_event_in_transaction(
+                &transaction,
+                &RecordPostEventParams {
+                    event_id: &event_id,
+                    event_type: "created",
+                    post_id: &post_id,
+                    author_peer_id: &identity.peer_id,
+                    lamport_clock: lamport_clock as i64,
+                    timestamp: created_at,
+                    payload_cbor: &event_payload,
+                    signature: &signature,
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterEvent)?;
+
+            PostsRepository::insert_local_post_in_transaction(
+                &transaction,
+                &PostData {
+                    post_id: post_id.clone(),
+                    author_peer_id: identity.peer_id.clone(),
+                    content_type: content_type.to_string(),
+                    content_text: content_text.map(String::from),
+                    visibility,
+                    lamport_clock: lamport_clock as i64,
+                    created_at,
+                    signature: signature.clone(),
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterProjection)?;
+
+            for media_item in &signed_media_items {
+                PostsRepository::add_media_in_transaction(
+                    &transaction,
+                    &post_media_data_from_signed(&post_id, media_item),
+                )
+                .map_err(AppError::Database)?;
+            }
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterMedia)?;
+
+            let media_items: Vec<WallPostMediaItem> = signed_media_items
+                .iter()
+                .map(|item| WallPostMediaItem {
+                    media_hash: item.media_hash.clone(),
+                    media_type: item.media_type.clone(),
+                    mime_type: item.mime_type.clone(),
+                    file_name: item.file_name.clone(),
+                    file_size: item.file_size,
+                    width: item.width,
+                    height: item.height,
+                    duration_seconds: item.duration_seconds,
+                    sort_order: item.sort_order,
+                    signature: item.signature.clone(),
+                })
+                .collect();
+            let relay_signable = SignableWallPostSubmit {
+                author_peer_id: identity.peer_id.clone(),
+                post_id: post_id.clone(),
+                content_type: content_type.to_string(),
+                content_text: content_text.map(String::from),
+                visibility: visibility.to_string(),
+                lamport_clock: lamport_clock as i64,
+                created_at,
+                signature: signature.clone(),
+                media_hashes: media_hashes.clone(),
+                media_items: signed_media_items.clone(),
+                timestamp: created_at,
+            };
+            let wire = WireBoardSyncRequest::SubmitWallPost {
+                author_peer_id: identity.peer_id.clone(),
+                post_id: post_id.clone(),
+                content_type: content_type.to_string(),
+                content_text: content_text.map(String::from),
+                visibility: visibility.to_string(),
+                lamport_clock: lamport_clock as i64,
+                created_at,
+                signature: signature.clone(),
+                media_hashes: media_hashes.clone(),
+                timestamp: created_at,
+                request_signature: self.identity_service.sign(&relay_signable)?,
+                media_items,
+            };
+            let mut relay_payload = Vec::new();
+            ciborium::ser::into_writer(&wire, &mut relay_payload).map_err(|error| {
+                AppError::Serialization(format!("Could not encode post relay request: {error}"))
+            })?;
+            PostsRepository::enqueue_post_relay_in_transaction(
+                &transaction,
+                &EnqueuePostRelayMutation {
+                    event_id: &event_id,
+                    post_id: &post_id,
+                    mutation_type: "create",
+                    payload_cbor: &relay_payload,
+                    created_at,
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterOutbox)?;
+            transaction.commit().map_err(AppError::Database)?;
+
+            Ok(OutgoingPost {
+                post_id: post_id.clone(),
+                author_peer_id: identity.peer_id.clone(),
+                content_type: content_type.to_string(),
+                content_text: content_text.map(String::from),
+                media_hashes,
+                media_items: signed_media_items,
+                visibility: visibility.to_string(),
+                lamport_clock,
+                created_at,
+                signature,
+            })
         })
     }
 
@@ -483,87 +614,142 @@ impl PostsService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        // Verify we own the post
-        let post = PostsRepository::get_by_post_id(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?
-            .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
-
-        if post.author_peer_id != identity.peer_id {
-            return Err(AppError::PermissionDenied(
-                "Cannot update another user's post".to_string(),
-            ));
-        }
-
-        let lamport_clock =
-            self.db
-                .next_lamport_clock(&identity.peer_id)
-                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let updated_at = chrono::Utc::now().timestamp();
+        self.db.with_connection_mut_result(|connection| {
+            let transaction = connection.transaction().map_err(AppError::Database)?;
+            let post = PostsRepository::get_by_post_id_inner(&transaction, post_id)
+                .map_err(AppError::Database)?
+                .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
+            if post.author_peer_id != identity.peer_id {
+                return Err(AppError::PermissionDenied(
+                    "Cannot update another user's post".to_string(),
+                ));
+            }
+            if post.deleted_at.is_some() {
+                return Err(AppError::Validation(
+                    "Cannot update a deleted post".to_string(),
+                ));
+            }
 
-        // Create and sign the update event.
-        let signable = SignablePostUpdate {
-            post_id: post_id.to_string(),
-            author_peer_id: identity.peer_id.clone(),
-            content_text: content_text.map(String::from),
-            lamport_clock,
-            updated_at,
-        };
+            let lamport_clock =
+                PostsRepository::next_lamport_in_transaction(&transaction, &identity.peer_id)
+                    .map_err(AppError::Database)? as u64;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterLamport)?;
 
-        let signature = self.identity_service.sign(&signable)?;
+            let update_signable = SignablePostUpdate {
+                post_id: post_id.to_string(),
+                author_peer_id: identity.peer_id.clone(),
+                content_text: content_text.map(String::from),
+                lamport_clock,
+                updated_at,
+            };
+            let update_signature = self.identity_service.sign(&update_signable)?;
+            let media_items: Vec<SignedPostMediaMetadata> =
+                PostsRepository::get_post_media_inner(&transaction, post_id)
+                    .map_err(AppError::Database)?
+                    .into_iter()
+                    .map(signed_media_from_stored)
+                    .collect();
+            let media_hashes = sorted_media_hashes(&media_items);
+            let snapshot_signable = SignablePost {
+                post_id: post_id.to_string(),
+                author_peer_id: identity.peer_id.clone(),
+                content_type: post.content_type.clone(),
+                content_text: content_text.map(String::from),
+                media_hashes: media_hashes.clone(),
+                visibility: post.visibility.to_string(),
+                lamport_clock,
+                created_at: post.created_at,
+            };
+            let snapshot_signature = self.identity_service.sign(&snapshot_signable)?;
+            let event_id = format!("updated:{post_id}:{lamport_clock}");
+            let event_payload = update_signable.signable_bytes()?;
+            PostsRepository::record_post_event_in_transaction(
+                &transaction,
+                &RecordPostEventParams {
+                    event_id: &event_id,
+                    event_type: "updated",
+                    post_id,
+                    author_peer_id: &identity.peer_id,
+                    lamport_clock: lamport_clock as i64,
+                    timestamp: updated_at,
+                    payload_cbor: &event_payload,
+                    signature: &update_signature,
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterEvent)?;
 
-        // Also materialize a current-state post signature so relay snapshots and
-        // direct fetches can be verified by consumers that did not see the
-        // original create event in this session.
-        let media_hashes = PostsRepository::get_media_hashes(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-        let current_post_signable = SignablePost {
-            post_id: post_id.to_string(),
-            author_peer_id: identity.peer_id.clone(),
-            content_type: post.content_type.clone(),
-            content_text: content_text.map(String::from),
-            media_hashes,
-            visibility: post.visibility.to_string(),
-            lamport_clock,
-            created_at: post.created_at,
-        };
-        let current_post_signature = self.identity_service.sign(&current_post_signable)?;
-
-        // Update locally with the current-state signature.
-        PostsRepository::update_post_with_signature(
-            &self.db,
-            post_id,
-            content_text,
-            updated_at,
-            lamport_clock as i64,
-            &current_post_signature,
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-        // Record event
-        let event_id = format!("updated:{}:{}", post_id, lamport_clock);
-        let payload_cbor = signable.signable_bytes()?;
-        PostsRepository::record_post_event(
-            &self.db,
-            &RecordPostEventParams {
-                event_id: &event_id,
-                event_type: "updated",
+            if !PostsRepository::update_local_post_in_transaction(
+                &transaction,
                 post_id,
-                author_peer_id: &identity.peer_id,
-                lamport_clock: lamport_clock as i64,
-                timestamp: updated_at,
-                payload_cbor: &payload_cbor,
-                signature: &signature,
-            },
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+                content_text,
+                updated_at,
+                lamport_clock as i64,
+                &snapshot_signature,
+            )
+            .map_err(AppError::Database)?
+            {
+                return Err(AppError::Validation(
+                    "Post changed during update".to_string(),
+                ));
+            }
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterProjection)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterMedia)?;
 
-        Ok(OutgoingPostUpdate {
-            post_id: post_id.to_string(),
-            author_peer_id: identity.peer_id,
-            content_text: content_text.map(String::from),
-            lamport_clock,
-            updated_at,
-            signature,
+            let relay_signable = SignableWallPostSubmit {
+                author_peer_id: identity.peer_id.clone(),
+                post_id: post_id.to_string(),
+                content_type: post.content_type.clone(),
+                content_text: content_text.map(String::from),
+                visibility: post.visibility.to_string(),
+                lamport_clock: lamport_clock as i64,
+                created_at: post.created_at,
+                signature: snapshot_signature.clone(),
+                media_hashes: media_hashes.clone(),
+                media_items: media_items.clone(),
+                timestamp: updated_at,
+            };
+            let wire = WireBoardSyncRequest::SubmitWallPost {
+                author_peer_id: identity.peer_id.clone(),
+                post_id: post_id.to_string(),
+                content_type: post.content_type,
+                content_text: content_text.map(String::from),
+                visibility: post.visibility.to_string(),
+                lamport_clock: lamport_clock as i64,
+                created_at: post.created_at,
+                signature: snapshot_signature,
+                media_hashes,
+                timestamp: updated_at,
+                request_signature: self.identity_service.sign(&relay_signable)?,
+                media_items: media_items.iter().map(wire_media_from_signed).collect(),
+            };
+            let mut relay_payload = Vec::new();
+            ciborium::ser::into_writer(&wire, &mut relay_payload).map_err(|error| {
+                AppError::Serialization(format!("Could not encode post relay request: {error}"))
+            })?;
+            PostsRepository::enqueue_post_relay_in_transaction(
+                &transaction,
+                &EnqueuePostRelayMutation {
+                    event_id: &event_id,
+                    post_id,
+                    mutation_type: "update",
+                    payload_cbor: &relay_payload,
+                    created_at: updated_at,
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterOutbox)?;
+            transaction.commit().map_err(AppError::Database)?;
+
+            Ok(OutgoingPostUpdate {
+                post_id: post_id.to_string(),
+                author_peer_id: identity.peer_id.clone(),
+                content_text: content_text.map(String::from),
+                lamport_clock,
+                updated_at,
+                signature: update_signature,
+            })
         })
     }
 
@@ -575,68 +761,105 @@ impl PostsService {
             .get_identity()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
-        // Verify we own the post
-        let post = PostsRepository::get_by_post_id(&self.db, post_id)
-            .map_err(|e| AppError::DatabaseString(e.to_string()))?
-            .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
-
-        if post.author_peer_id != identity.peer_id {
-            return Err(AppError::PermissionDenied(
-                "Cannot delete another user's post".to_string(),
-            ));
-        }
-
-        let lamport_clock =
-            self.db
-                .next_lamport_clock(&identity.peer_id)
-                .map_err(|e| AppError::DatabaseString(e.to_string()))? as u64;
         let deleted_at = chrono::Utc::now().timestamp();
+        self.db.with_connection_mut_result(|connection| {
+            let transaction = connection.transaction().map_err(AppError::Database)?;
+            let post = PostsRepository::get_by_post_id_inner(&transaction, post_id)
+                .map_err(AppError::Database)?
+                .ok_or_else(|| AppError::NotFound("Post not found".to_string()))?;
+            if post.author_peer_id != identity.peer_id {
+                return Err(AppError::PermissionDenied(
+                    "Cannot delete another user's post".to_string(),
+                ));
+            }
+            if let Some(existing_deleted_at) = post.deleted_at {
+                transaction.commit().map_err(AppError::Database)?;
+                return Ok(OutgoingPostDelete {
+                    post_id: post_id.to_string(),
+                    author_peer_id: identity.peer_id.clone(),
+                    lamport_clock: post.lamport_clock as u64,
+                    deleted_at: existing_deleted_at,
+                    signature: post.signature,
+                });
+            }
 
-        // Create signable
-        let signable = SignablePostDelete {
-            post_id: post_id.to_string(),
-            author_peer_id: identity.peer_id.clone(),
-            lamport_clock,
-            deleted_at,
-        };
+            let lamport_clock =
+                PostsRepository::next_lamport_in_transaction(&transaction, &identity.peer_id)
+                    .map_err(AppError::Database)? as u64;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterLamport)?;
+            let signable = SignablePostDelete {
+                post_id: post_id.to_string(),
+                author_peer_id: identity.peer_id.clone(),
+                lamport_clock,
+                deleted_at,
+            };
+            let signature = self.identity_service.sign(&signable)?;
+            let event_id = format!("deleted:{post_id}:{lamport_clock}");
+            let event_payload = signable.signable_bytes()?;
+            PostsRepository::record_post_event_in_transaction(
+                &transaction,
+                &RecordPostEventParams {
+                    event_id: &event_id,
+                    event_type: "deleted",
+                    post_id,
+                    author_peer_id: &identity.peer_id,
+                    lamport_clock: lamport_clock as i64,
+                    timestamp: deleted_at,
+                    payload_cbor: &event_payload,
+                    signature: &signature,
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterEvent)?;
 
-        let signature = self.identity_service.sign(&signable)?;
-
-        // Delete locally and retain the tombstone lamport/signature so stale
-        // creates or updates cannot resurrect the post.
-        PostsRepository::delete_post_with_tombstone(
-            &self.db,
-            post_id,
-            deleted_at,
-            lamport_clock as i64,
-            &signature,
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
-
-        // Record event
-        let event_id = format!("deleted:{}", post_id);
-        let payload_cbor = signable.signable_bytes()?;
-        PostsRepository::record_post_event(
-            &self.db,
-            &RecordPostEventParams {
-                event_id: &event_id,
-                event_type: "deleted",
+            if !PostsRepository::delete_local_post_in_transaction(
+                &transaction,
                 post_id,
-                author_peer_id: &identity.peer_id,
-                lamport_clock: lamport_clock as i64,
-                timestamp: deleted_at,
-                payload_cbor: &payload_cbor,
-                signature: &signature,
-            },
-        )
-        .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+                deleted_at,
+                lamport_clock as i64,
+                &signature,
+            )
+            .map_err(AppError::Database)?
+            {
+                return Err(AppError::Validation(
+                    "Post changed during delete".to_string(),
+                ));
+            }
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterProjection)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterMedia)?;
 
-        Ok(OutgoingPostDelete {
-            post_id: post_id.to_string(),
-            author_peer_id: identity.peer_id,
-            lamport_clock,
-            deleted_at,
-            signature,
+            let wire = WireBoardSyncRequest::DeleteWallPost {
+                author_peer_id: identity.peer_id.clone(),
+                post_id: post_id.to_string(),
+                lamport_clock,
+                deleted_at,
+                signature: signature.clone(),
+            };
+            let mut relay_payload = Vec::new();
+            ciborium::ser::into_writer(&wire, &mut relay_payload).map_err(|error| {
+                AppError::Serialization(format!("Could not encode post relay request: {error}"))
+            })?;
+            PostsRepository::enqueue_post_relay_in_transaction(
+                &transaction,
+                &EnqueuePostRelayMutation {
+                    event_id: &event_id,
+                    post_id,
+                    mutation_type: "delete",
+                    payload_cbor: &relay_payload,
+                    created_at: deleted_at,
+                },
+            )
+            .map_err(AppError::Database)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterOutbox)?;
+            transaction.commit().map_err(AppError::Database)?;
+
+            Ok(OutgoingPostDelete {
+                post_id: post_id.to_string(),
+                author_peer_id: identity.peer_id.clone(),
+                lamport_clock,
+                deleted_at,
+                signature,
+            })
         })
     }
 
@@ -746,6 +969,39 @@ impl PostsService {
     pub fn get_post(&self, post_id: &str) -> Result<Option<Post>> {
         PostsRepository::get_by_post_id(&self.db, post_id)
             .map_err(|e| AppError::DatabaseString(e.to_string()))
+    }
+
+    /// Atomically lease a bounded batch of committed mutations for exact-wire relay delivery.
+    pub fn claim_due_relay_outbox(
+        &self,
+        relay_peer_id: &str,
+        now: i64,
+        lease_seconds: i64,
+        limit: u32,
+    ) -> Result<Vec<PostRelayOutboxEntry>> {
+        PostsRepository::claim_due_relay_outbox(&self.db, relay_peer_id, now, lease_seconds, limit)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn acknowledge_relay_outbox(
+        &self,
+        event_id: &str,
+        relay_peer_id: &str,
+        now: i64,
+    ) -> Result<bool> {
+        PostsRepository::acknowledge_relay_outbox(&self.db, event_id, relay_peer_id, now)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
+    pub fn fail_relay_outbox_attempt(
+        &self,
+        event_id: &str,
+        error: &str,
+        conflict: bool,
+        now: i64,
+    ) -> Result<bool> {
+        PostsRepository::fail_relay_outbox_attempt(&self.db, event_id, error, conflict, now)
+            .map_err(|db_error| AppError::DatabaseString(db_error.to_string()))
     }
 
     /// Get local user's posts (their wall)
@@ -1123,6 +1379,7 @@ mod tests {
     use crate::services::{sign, ContactsService, PermissionsService};
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
+    use rusqlite::OptionalExtension;
     use std::sync::Arc;
 
     /// Create a full test environment with identity service that has a created+unlocked identity.
@@ -1135,6 +1392,19 @@ mod tests {
         String, // peer_id of the created identity
     ) {
         let db = Arc::new(Database::in_memory().unwrap());
+        create_test_env_with_db(db)
+    }
+
+    fn create_test_env_with_db(
+        db: Arc<Database>,
+    ) -> (
+        Arc<Database>,
+        Arc<IdentityService>,
+        Arc<ContactsService>,
+        Arc<PermissionsService>,
+        PostsService,
+        String,
+    ) {
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let contacts_service = Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
         let permissions_service = Arc::new(PermissionsService::new(
@@ -1161,7 +1431,7 @@ mod tests {
         let peer_id = info.peer_id;
         db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                "INSERT INTO identity_publishing_state(peer_id, mode, updated_at) VALUES(?, 'unverified', 1)",
                 [&peer_id],
             )
             .map(|_| ())
@@ -1228,6 +1498,50 @@ mod tests {
         (params, media_hashes, signature)
     }
 
+    fn local_atomic_state(
+        db: &Database,
+        post_id: &str,
+        peer_id: &str,
+    ) -> (
+        Option<(Option<String>, i64, Option<i64>, Vec<u8>, String)>,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) {
+        db.with_connection(|connection| {
+            Ok((
+                connection
+                    .query_row(
+                        "SELECT content_text,lamport_clock,deleted_at,signature,relay_status
+                         FROM posts WHERE post_id=?1",
+                        [post_id],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?,
+                connection.query_row(
+                    "SELECT current_value FROM lamport_clocks WHERE author_peer_id=?1",
+                    [peer_id],
+                    |row| row.get(0),
+                )?,
+                connection.query_row("SELECT COUNT(*) FROM post_events", [], |row| row.get(0))?,
+                connection.query_row("SELECT COUNT(*) FROM post_media", [], |row| row.get(0))?,
+                connection.query_row("SELECT COUNT(*) FROM post_relay_outbox", [], |row| {
+                    row.get(0)
+                })?,
+            ))
+        })
+        .unwrap()
+    }
+
     #[test]
     fn test_create_post_success() {
         let (_db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
@@ -1278,6 +1592,249 @@ mod tests {
             .unwrap();
 
         assert!(post2.lamport_clock > post1.lamport_clock);
+    }
+
+    #[test]
+    fn local_create_failure_at_each_commit_boundary_rolls_back_everything() {
+        let failpoints = [
+            LocalPostCommitFailpoint::AfterLamport,
+            LocalPostCommitFailpoint::AfterEvent,
+            LocalPostCommitFailpoint::AfterProjection,
+            LocalPostCommitFailpoint::AfterMedia,
+            LocalPostCommitFailpoint::AfterOutbox,
+        ];
+        for failpoint in failpoints {
+            let (db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
+            service.inject_local_commit_failure(failpoint);
+            let media_hash = "a".repeat(64);
+            let media = [CreatePostMediaParams {
+                media_hash: &media_hash,
+                media_type: "image",
+                mime_type: "image/png",
+                file_name: "failure.png",
+                file_size: 10,
+                width: Some(1),
+                height: Some(1),
+                duration_seconds: None,
+                sort_order: 0,
+            }];
+            assert!(service
+                .create_post_with_media("image", Some("atomic"), PostVisibility::Public, &media)
+                .is_err());
+
+            let state = db
+                .with_connection(|connection| {
+                    Ok((
+                        connection.query_row("SELECT COUNT(*) FROM posts", [], |row| {
+                            row.get::<_, i64>(0)
+                        })?,
+                        connection.query_row("SELECT COUNT(*) FROM post_events", [], |row| {
+                            row.get::<_, i64>(0)
+                        })?,
+                        connection.query_row("SELECT COUNT(*) FROM post_media", [], |row| {
+                            row.get::<_, i64>(0)
+                        })?,
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM post_relay_outbox",
+                            [],
+                            |row| row.get::<_, i64>(0),
+                        )?,
+                        connection
+                            .query_row(
+                                "SELECT current_value FROM lamport_clocks WHERE author_peer_id=?1",
+                                [&peer_id],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .optional()?,
+                    ))
+                })
+                .unwrap();
+            assert_eq!(state, (0, 0, 0, 0, None), "failed at {failpoint:?}");
+        }
+    }
+
+    #[test]
+    fn local_update_failure_at_each_commit_boundary_preserves_prior_state() {
+        for failpoint in [
+            LocalPostCommitFailpoint::AfterLamport,
+            LocalPostCommitFailpoint::AfterEvent,
+            LocalPostCommitFailpoint::AfterProjection,
+            LocalPostCommitFailpoint::AfterMedia,
+            LocalPostCommitFailpoint::AfterOutbox,
+        ] {
+            let (db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
+            let media_hash = "b".repeat(64);
+            let created = service
+                .create_post_with_media(
+                    "image",
+                    Some("original"),
+                    PostVisibility::Public,
+                    &[CreatePostMediaParams {
+                        media_hash: &media_hash,
+                        media_type: "image",
+                        mime_type: "image/png",
+                        file_name: "original.png",
+                        file_size: 20,
+                        width: Some(2),
+                        height: Some(2),
+                        duration_seconds: None,
+                        sort_order: 0,
+                    }],
+                )
+                .unwrap();
+            let before = local_atomic_state(&db, &created.post_id, &peer_id);
+
+            service.inject_local_commit_failure(failpoint);
+            assert!(service
+                .update_post(&created.post_id, Some("must roll back"))
+                .is_err());
+
+            assert_eq!(
+                local_atomic_state(&db, &created.post_id, &peer_id),
+                before,
+                "update failed at {failpoint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_delete_failure_at_each_commit_boundary_preserves_prior_state() {
+        for failpoint in [
+            LocalPostCommitFailpoint::AfterLamport,
+            LocalPostCommitFailpoint::AfterEvent,
+            LocalPostCommitFailpoint::AfterProjection,
+            LocalPostCommitFailpoint::AfterMedia,
+            LocalPostCommitFailpoint::AfterOutbox,
+        ] {
+            let (db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
+            let media_hash = "c".repeat(64);
+            let created = service
+                .create_post_with_media(
+                    "image",
+                    Some("keep me"),
+                    PostVisibility::Contacts,
+                    &[CreatePostMediaParams {
+                        media_hash: &media_hash,
+                        media_type: "image",
+                        mime_type: "image/png",
+                        file_name: "keep.png",
+                        file_size: 30,
+                        width: Some(3),
+                        height: Some(3),
+                        duration_seconds: None,
+                        sort_order: 0,
+                    }],
+                )
+                .unwrap();
+            let before = local_atomic_state(&db, &created.post_id, &peer_id);
+
+            service.inject_local_commit_failure(failpoint);
+            assert!(service.delete_post(&created.post_id).is_err());
+
+            assert_eq!(
+                local_atomic_state(&db, &created.post_id, &peer_id),
+                before,
+                "delete failed at {failpoint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_wire_payload_is_unchanged_across_retries() {
+        let (db, _identity, _contacts, _perms, service, _peer_id) = create_test_env();
+        let created = service
+            .create_post("text", Some("retry me"), PostVisibility::Public)
+            .unwrap();
+        let event_id: String = db
+            .with_connection(|connection| {
+                connection.query_row(
+                    "SELECT event_id FROM post_relay_outbox WHERE post_id=?1",
+                    [&created.post_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        let original = PostsRepository::get_relay_outbox(&db, &event_id)
+            .unwrap()
+            .unwrap();
+        let decoded: WireBoardSyncRequest =
+            ciborium::de::from_reader(original.payload_cbor.as_slice()).unwrap();
+        assert!(matches!(
+            decoded,
+            WireBoardSyncRequest::SubmitWallPost { .. }
+        ));
+
+        let now = chrono::Utc::now().timestamp() + 5;
+        let first = service
+            .claim_due_relay_outbox("relay-a", now, 30, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(first.payload_cbor, original.payload_cbor);
+        service
+            .fail_relay_outbox_attempt(&event_id, "temporary", false, now)
+            .unwrap();
+        let second = service
+            .claim_due_relay_outbox("relay-a", now + 2, 30, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(second.payload_cbor, original.payload_cbor);
+        assert_eq!(second.attempt_count, 2);
+    }
+
+    #[test]
+    fn delete_outbox_survives_restart_and_repeat_delete_is_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("post-outbox.sqlite");
+        let db = Arc::new(Database::new(path.clone()).unwrap());
+        let (db, identity, contacts, permissions, service, _peer_id) = create_test_env_with_db(db);
+        let created = service
+            .create_post("text", Some("delete me"), PostVisibility::Public)
+            .unwrap();
+        let deleted = service.delete_post(&created.post_id).unwrap();
+        let repeated = service.delete_post(&created.post_id).unwrap();
+        assert_eq!(repeated.lamport_clock, deleted.lamport_clock);
+        assert_eq!(repeated.signature, deleted.signature);
+        let delete_count: i64 = db
+            .with_connection(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM post_relay_outbox WHERE post_id=?1 AND mutation_type='delete'",
+                    [&created.post_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(delete_count, 1);
+        drop(service);
+        drop(permissions);
+        drop(contacts);
+        drop(identity);
+        drop(db);
+
+        let reopened = Database::new(path).unwrap();
+        let entries = PostsRepository::claim_due_relay_outbox(
+            &reopened,
+            "relay-after-restart",
+            chrono::Utc::now().timestamp() + 5,
+            30,
+            10,
+        )
+        .unwrap();
+        let deletion = entries
+            .iter()
+            .find(|entry| entry.mutation_type == "delete")
+            .expect("durable delete must be retried after restart");
+        let decoded: WireBoardSyncRequest =
+            ciborium::de::from_reader(deletion.payload_cbor.as_slice()).unwrap();
+        assert!(matches!(
+            decoded,
+            WireBoardSyncRequest::DeleteWallPost {
+                ref post_id,
+                lamport_clock,
+                ..
+            } if post_id == &created.post_id && lamport_clock == deleted.lamport_clock
+        ));
     }
 
     #[test]

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
+import { useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import toast from 'react-hot-toast';
 import type { NetworkEvent } from '../types';
 import {
@@ -21,17 +21,31 @@ import { ContactFeedPoller } from '../services/contactFeedPoller';
 import { notifyHarborEvent } from '../services/harborNotifications';
 import { isMediaTransferEventForIdentity } from '../services/mediaTransferEvents';
 import { safePeerLabel } from '../utils/relayName';
+import { summarizeSignalingForLog } from '../utils/signalingLog';
+import { registerProfileRuntimeReset } from '../services/profileRuntimeLifecycle';
+import { applyPostRelayStatusEvent } from '../stores/wall';
+import { createAsyncDisposerScope, registerAtomicResources } from '../utils/asyncDisposer';
+import type { ProfileToken } from '../services/profileSession';
+import {
+  beginProfileEventRegistration,
+  clearProfileEventRegistration,
+  markProfileEventsReady,
+} from '../services/profileEventReadiness';
 
 /**
  * Hook to listen to Tauri events from the Rust backend.
  * Should be called once at the app root level.
  */
-export function useTauriEvents() {
-  const unlistenersRef = useRef<UnlistenFn[]>([]);
+export function useTauriEvents(profileToken: ProfileToken) {
   const { refreshPeers, refreshStats } = useNetworkStore();
 
   useEffect(() => {
-    let cancelled = false;
+    let listenersReady = false;
+    const reportListenerError = (error: unknown) => {
+      console.warn('[TauriEvent] Listener lifecycle failure:', error);
+    };
+    const listenerScope = createAsyncDisposerScope(reportListenerError);
+    const readinessLease = beginProfileEventRegistration(profileToken);
     const coordinator = new ReactiveRefreshCoordinator({
       contacts: () => useContactsStore.getState().refreshContacts(),
       requests: () => useContactsStore.getState().loadRequests(),
@@ -68,6 +82,8 @@ export function useTauriEvents() {
       const contacts = useContactsStore.getState();
       const settings = useSettingsStore.getState();
       const profileId = identity.status === 'unlocked' ? identity.identity.peerId : null;
+      if (profileId) coordinator.start();
+      else coordinator.stop();
       if (profileId !== activeMediaProfileId) {
         activeMediaProfileId = profileId;
         useMediaTransfersStore.getState().reset();
@@ -93,114 +109,56 @@ export function useTauriEvents() {
     window.addEventListener('online', reconcileContactFeedPoller);
     window.addEventListener('offline', reconcileContactFeedPoller);
     reconcileContactFeedPoller();
-
-    function register(unlisten: UnlistenFn) {
-      if (cancelled) {
-        unlisten();
-      } else {
-        unlistenersRef.current.push(unlisten);
-      }
-    }
+    const unregisterProfileReset = registerProfileRuntimeReset(() => {
+      activeMediaProfileId = null;
+      contactFeedPoller.stop();
+      coordinator.stop();
+    });
 
     async function setupListeners() {
-      // Listen to network events
-      const unlistenNetwork = await listen<NetworkEvent>('harbor:network', (event) => {
-        console.log('[TauriEvent] harbor:network:', event.payload);
-        handleNetworkEvent(event.payload);
-      });
-      register(unlistenNetwork);
-
-      // Listen for deep-link contact strings forwarded from the OS via Rust
-      const unlistenDeepLink = await listen<string>('deep_link_contact', (event) => {
-        useNetworkStore.getState().setPendingDeepLinkContact(event.payload);
-      });
-      register(unlistenDeepLink);
-
-      const unlistenControl = await listen<{
-        id: string;
-        action: string;
-        payload: Record<string, unknown>;
-      }>('harbor:control', (event) => {
-        void (async () => {
-          try {
-            const result = await handleControlEvent(event.payload);
-            await emit('harbor:control-result', { id: event.payload.id, ok: true, result });
-          } catch (error) {
-            await emit('harbor:control-result', {
-              id: event.payload.id,
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        })();
-      });
-      register(unlistenControl);
+      const registered = await registerAtomicResources(
+        listenerScope,
+        [
+          // Listen to network events
+          () =>
+            listen<NetworkEvent>('harbor:network', (event) => {
+              if (!listenersReady || listenerScope.disposed) return;
+              console.log(
+                '[TauriEvent] harbor:network:',
+                event.payload.type === 'call_signaling_received'
+                  ? summarizeSignalingForLog(event.payload.message, 'inbound', 'received')
+                  : event.payload,
+              );
+              handleNetworkEvent(event.payload);
+            }),
+          // Listen for deep-link contact strings forwarded from the OS via Rust
+          () =>
+            listen<string>('deep_link_contact', (event) => {
+              if (!listenersReady || listenerScope.disposed) return;
+              useNetworkStore.getState().setPendingDeepLinkContact(event.payload);
+            }),
+        ],
+        reportListenerError,
+      );
+      listenersReady = registered && !listenerScope.disposed;
+      if (listenersReady && !markProfileEventsReady(readinessLease)) {
+        listenersReady = false;
+        listenerScope.dispose();
+      }
 
       // Future: Listen to message events
       // const unlistenMessage = await listen<MessageEvent>(
       //   "harbor:message",
       //   (event) => handleMessageEvent(event.payload)
       // );
-      // unlistenersRef.current.push(unlistenMessage);
-    }
-
-    async function handleControlEvent(event: {
-      id: string;
-      action: string;
-      payload: Record<string, unknown>;
-    }) {
-      const peerId = typeof event.payload.peerId === 'string' ? event.payload.peerId : '';
-      const video = event.payload.video === true;
-      switch (event.action) {
-        case 'state.snapshot':
-          return {
-            identity: useIdentityStore.getState().state,
-            call: useCallingStore.getState().runtimeSnapshot,
-            group: useCallingStore.getState().groupRuntimeSnapshot,
-            error: useCallingStore.getState().error,
-          };
-        case 'identity.refresh':
-          await useIdentityStore.getState().initialize();
-          return useIdentityStore.getState().state;
-        case 'call.start':
-          if (!peerId) throw new Error('call.start requires payload.peerId');
-          await useCallingStore.getState().startOutgoingCall(peerId, { video });
-          return useCallingStore.getState().runtimeSnapshot;
-        case 'call.accept':
-          await useCallingStore.getState().acceptIncomingCall();
-          return useCallingStore.getState().runtimeSnapshot;
-        case 'call.decline':
-          await useCallingStore.getState().declineIncomingCall();
-          return useCallingStore.getState().runtimeSnapshot;
-        case 'call.hangup':
-          await useCallingStore.getState().hangupActiveCall('normal');
-          return useCallingStore.getState().runtimeSnapshot;
-        case 'group.start': {
-          const peerIds = Array.isArray(event.payload.peerIds)
-            ? event.payload.peerIds.filter((value): value is string => typeof value === 'string')
-            : [];
-          if (peerIds.length === 0) throw new Error('group.start requires payload.peerIds');
-          await useCallingStore.getState().startOutgoingGroupCall(peerIds, { video });
-          return useCallingStore.getState().groupRuntimeSnapshot;
-        }
-        case 'group.accept':
-          await useCallingStore.getState().acceptIncomingGroupCall();
-          return useCallingStore.getState().groupRuntimeSnapshot;
-        case 'group.decline':
-          await useCallingStore.getState().declineIncomingGroupCall();
-          return useCallingStore.getState().groupRuntimeSnapshot;
-        case 'group.leave':
-          await useCallingStore.getState().leaveGroupCall('normal');
-          return useCallingStore.getState().groupRuntimeSnapshot;
-        default:
-          throw new Error(`Unknown Harbor control action: ${event.action}`);
-      }
+      // Add this registration to the atomic listener group above when enabled.
     }
 
     function handleNetworkEvent(event: NetworkEvent) {
+      if (useIdentityStore.getState().state.status !== 'unlocked') return;
       const contactName = (peerId: string) => {
         const contact = useContactsStore.getState().contacts.find((item) => item.peerId === peerId);
-        return safePeerLabel(peerId, contact?.verifiedQualifiedName);
+        return safePeerLabel(peerId, contact?.verifiedQualifiedName, contact?.displayName);
       };
       switch (event.type) {
         case 'peer_connected':
@@ -245,6 +203,31 @@ export function useTauriEvents() {
           });
           break;
 
+        case 'message_delivery_changed':
+          useMessagingStore
+            .getState()
+            .updateMessageStatus(
+              event.message_id,
+              event.status,
+              event.status === 'delivered' ? event.timestamp : undefined,
+              event.status === 'read' ? event.timestamp : undefined,
+            );
+          if (event.status === 'failed' && event.error) {
+            toast.error(event.error);
+          }
+          break;
+
+        case 'message_ack_received':
+          useMessagingStore
+            .getState()
+            .updateMessageStatus(
+              event.message_id,
+              event.status,
+              event.status === 'delivered' ? event.timestamp : undefined,
+              event.status === 'read' ? event.timestamp : undefined,
+            );
+          break;
+
         case 'listening_on':
           console.log(`[Network] Listening on: ${event.address}`);
           break;
@@ -269,10 +252,13 @@ export function useTauriEvents() {
         case 'contact_request_changed':
           coordinator.enqueue({ domains: ['requests'], peerId: event.peer_id });
           if (event.direction === 'incoming' && event.status === 'review') {
-            toast(`Contact request from ${event.display_name || 'a Harbor user'}`, {
-              icon: '👤',
-              duration: 6000,
-            });
+            toast(
+              `Contact request from ${safePeerLabel(event.peer_id, undefined, event.display_name)}`,
+              {
+                icon: '👤',
+                duration: 6000,
+              },
+            );
           } else if (event.status === 'accepted') {
             coordinator.enqueue({ domains: ['contacts', 'posts'], peerId: event.peer_id });
             toast.success('Contact request accepted');
@@ -323,7 +309,7 @@ export function useTauriEvents() {
         case 'content_fetched':
           console.log(`[Network] Content fetched from ${event.peer_id}: post ${event.post_id}`);
           // Refresh the feed to show new posts
-          coordinator.enqueue({ domains: ['posts'], peerId: event.peer_id });
+          coordinator.enqueue({ domains: ['posts', 'contacts'], peerId: event.peer_id });
           break;
 
         case 'content_sync_error':
@@ -370,6 +356,11 @@ export function useTauriEvents() {
           console.log(`[Network] Wall post synced to relay: ${event.post_id}`);
           break;
 
+        case 'post_relay_status_changed':
+          applyPostRelayStatusEvent(event);
+          coordinator.enqueue({ domains: ['posts'] });
+          break;
+
         case 'wall_posts_received':
           console.log(
             `[Network] Wall posts received from relay (author: ${event.author_peer_id}, count: ${event.post_count})`,
@@ -404,7 +395,8 @@ export function useTauriEvents() {
 
         case 'call_signaling_received':
           console.log(
-            `[Network] Call signaling ${event.message.payload.type} from ${event.peer_id}`,
+            '[Network] Call signaling:',
+            summarizeSignalingForLog(event.message, 'inbound', 'dispatching'),
           );
           {
             const calling = useCallingStore.getState();
@@ -448,24 +440,27 @@ export function useTauriEvents() {
           useCallingStore
             .getState()
             .hydrateCalls()
-            .catch(() => {});
+            .catch((error) => {
+              console.warn('[Network] Failed to reconcile calls after signaling failure', error);
+            });
           toast.error(`Call signaling failed: ${event.error}`);
           break;
       }
     }
 
-    setupListeners();
+    void setupListeners();
 
     // Cleanup on unmount
     return () => {
-      cancelled = true;
+      listenersReady = false;
       contactFeedPoller.stop();
+      unregisterProfileReset();
       storeUnsubscribers.forEach((unsubscribe) => unsubscribe());
       window.removeEventListener('online', reconcileContactFeedPoller);
       window.removeEventListener('offline', reconcileContactFeedPoller);
       coordinator.stop();
-      unlistenersRef.current.forEach((unlisten) => unlisten());
-      unlistenersRef.current = [];
+      listenerScope.dispose();
+      clearProfileEventRegistration(readinessLease);
     };
-  }, [refreshPeers, refreshStats]);
+  }, [profileToken, refreshPeers, refreshStats]);
 }

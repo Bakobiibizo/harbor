@@ -2,7 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "app": {
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**", "$APPLOCALDATA/**"]
+      }
     },
     "windows": [
       {
@@ -16,8 +20,6 @@
   },
   "build": {
     "beforeBuildCommand": "pnpm run build",
-    "beforeDevCommand": "pnpm run dev",
-    "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
   "bundle": {
@@ -50,5 +52,5 @@
     }
   },
   "productName": "Harbor",
-  "version": "1.4.1-beta.6"
+  "version": "1.4.1-beta.7"
 }

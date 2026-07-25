@@ -70,6 +70,16 @@ const wallItems = [
   },
 ];
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('useContactWallStore', () => {
   beforeEach(() => {
     useContactWallStore.getState().reset();
@@ -118,6 +128,83 @@ describe('useContactWallStore', () => {
     expect(feedService.fetchWallSocialEvents).toHaveBeenCalledWith('peer-alice', ['post-1']);
     expect(state.canReadContactsOnly).toBe(false);
     expect(state.error).toBeNull();
+  });
+
+  it('keeps the newest route peer authoritative when the old wall resolves last', async () => {
+    const peerBItems = wallItems.map((item, index) => ({
+      ...item,
+      postId: `peer-b-${index}`,
+      authorPeerId: 'peer-bob',
+      authorDisplayName: 'Bob',
+    }));
+    const wallA = deferred<typeof wallItems>();
+    vi.mocked(feedService.fetchContactWall).mockResolvedValue(undefined);
+    vi.mocked(feedService.getWall).mockImplementation((peerId) =>
+      peerId === 'peer-alice' ? wallA.promise : Promise.resolve(peerBItems),
+    );
+    vi.mocked(permissionsService.weHaveCapability).mockImplementation((peerId) =>
+      Promise.resolve(peerId === 'peer-bob'),
+    );
+
+    const loadingA = useContactWallStore.getState().loadWall('peer-alice', 20);
+    await vi.waitFor(() => expect(feedService.getWall).toHaveBeenCalledWith('peer-alice', 20));
+    await useContactWallStore.getState().loadWall('peer-bob', 20);
+    wallA.resolve(wallItems);
+    await loadingA;
+
+    expect(useContactWallStore.getState()).toMatchObject({
+      authorPeerId: 'peer-bob',
+      wallItems: peerBItems.map((item) => ({ ...item, likes: 0, likedByUser: false })),
+      canReadContactsOnly: true,
+      isLoading: false,
+      isSyncing: false,
+      error: null,
+    });
+  });
+
+  it('ignores loading and error completion from an old route peer', async () => {
+    const wallA = deferred<typeof wallItems>();
+    vi.mocked(feedService.fetchContactWall).mockResolvedValue(undefined);
+    vi.mocked(feedService.getWall).mockImplementation((peerId) =>
+      peerId === 'peer-alice' ? wallA.promise : Promise.resolve([]),
+    );
+    vi.mocked(permissionsService.weHaveCapability).mockResolvedValue(false);
+
+    const loadingA = useContactWallStore.getState().loadWall('peer-alice', 20);
+    await vi.waitFor(() => expect(feedService.getWall).toHaveBeenCalledWith('peer-alice', 20));
+    await useContactWallStore.getState().loadWall('peer-bob', 20);
+    wallA.reject(new Error('stale wall failure'));
+    await loadingA;
+
+    expect(useContactWallStore.getState()).toMatchObject({
+      authorPeerId: 'peer-bob',
+      wallItems: [],
+      isLoading: false,
+      isSyncing: false,
+      error: null,
+      syncError: null,
+    });
+  });
+
+  it('does not commit a delayed wall after profile teardown', async () => {
+    const wallA = deferred<typeof wallItems>();
+    vi.mocked(feedService.fetchContactWall).mockResolvedValue(undefined);
+    vi.mocked(feedService.getWall).mockReturnValue(wallA.promise);
+    vi.mocked(permissionsService.weHaveCapability).mockResolvedValue(true);
+
+    const loading = useContactWallStore.getState().loadWall('peer-alice', 20);
+    await vi.waitFor(() => expect(feedService.getWall).toHaveBeenCalled());
+    useContactWallStore.getState().reset();
+    wallA.resolve(wallItems);
+    await loading;
+
+    expect(useContactWallStore.getState()).toMatchObject({
+      authorPeerId: null,
+      wallItems: [],
+      isLoading: false,
+      isSyncing: false,
+      error: null,
+    });
   });
 
   it('reconciles event-driven wall changes from local state without starting another sync', async () => {
@@ -233,5 +320,34 @@ describe('useContactWallStore', () => {
 
     expect(useContactWallStore.getState().comments['post-1']).toHaveLength(1);
     expect(useContactWallStore.getState().commentCounts['post-1']).toBe(1);
+  });
+
+  it('does not attach delayed comments to a newly selected contact wall', async () => {
+    const oldComments = deferred<Awaited<ReturnType<typeof commentsService.getComments>>>();
+    useContactWallStore.setState({ authorPeerId: 'peer-alice' });
+    vi.mocked(commentsService.getComments).mockReturnValue(oldComments.promise);
+    vi.mocked(feedService.fetchContactWall).mockResolvedValue(undefined);
+    vi.mocked(feedService.getWall).mockResolvedValue([]);
+    vi.mocked(permissionsService.weHaveCapability).mockResolvedValue(false);
+
+    const loadingComments = useContactWallStore.getState().loadComments('post-1');
+    await useContactWallStore.getState().loadWall('peer-bob', 20);
+    oldComments.resolve([
+      {
+        id: 1,
+        commentId: 'old-comment',
+        postId: 'post-1',
+        authorPeerId: 'peer-alice',
+        authorName: 'Alice',
+        content: 'old wall only',
+        createdAt: 1,
+        deletedAt: null,
+      },
+    ]);
+    await loadingComments;
+
+    expect(useContactWallStore.getState().authorPeerId).toBe('peer-bob');
+    expect(useContactWallStore.getState().comments).toEqual({});
+    expect(useContactWallStore.getState().loadingComments.size).toBe(0);
   });
 });

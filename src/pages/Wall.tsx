@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import type { WallContentType } from '../stores';
@@ -10,7 +9,7 @@ import {
   type WallVisibilityStats,
 } from '../services/feed';
 import { getShareableContactString } from '../services/network';
-import { WallIcon, EllipsisIcon } from '../components/icons';
+import { WallIcon, EllipsisIcon, PlusIcon } from '../components/icons';
 import { LinkPreviewCard } from '../components/common/LinkPreviewCard';
 import { ModalityFilter } from '../components/common/ModalityFilter';
 import { PostMedia } from '../components/common/PostMedia';
@@ -19,8 +18,31 @@ import { createLogger } from '../utils/logger';
 import { safeIdentityLabel, safePeerLabel } from '../utils/relayName';
 import type { Comment } from '../services/comments';
 import { matchesModalityFilter } from '../utils/postModality';
+import { saveTextToDownloads } from '../services/downloads';
+import { HARBOR_SHORTCUT_EVENTS } from '../hooks';
 
 const log = createLogger('Wall');
+const PROFILE_POSTED_MILESTONE_PREFIX = 'harbor-profile-has-posted-v1:';
+
+export function profilePostedMilestoneKey(identityId: string): string {
+  return `${PROFILE_POSTED_MILESTONE_PREFIX}${encodeURIComponent(identityId)}`;
+}
+
+export function hasProfileEverPosted(identityId: string): boolean {
+  try {
+    return localStorage.getItem(profilePostedMilestoneKey(identityId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistProfilePostedMilestone(identityId: string): void {
+  try {
+    localStorage.setItem(profilePostedMilestoneKey(identityId), '1');
+  } catch {
+    // The placeholder still remains dismissed for this session through component state.
+  }
+}
 
 /** Content type metadata for UI rendering */
 const CONTENT_TYPES: {
@@ -121,12 +143,12 @@ const PREVIEW_OPTIONS: {
   {
     perspective: 'contact',
     label: 'Contact preview',
-    summary: 'Contacts with WallRead see public and contacts-only posts.',
+    summary: 'Approved contacts see public and contacts-only posts.',
   },
   {
     perspective: 'owner',
     label: 'Owner preview',
-    summary: 'You see every non-deleted local wall post regardless of visibility.',
+    summary: 'You see every non-deleted local post regardless of visibility.',
   },
 ];
 
@@ -195,9 +217,9 @@ function VisibilityBadge({
 function buildRssConfig(identity: IdentityInfo) {
   return {
     base_url: `harbor://peer/${identity.peerId}`,
-    title: `${safeIdentityLabel(identity)}'s Public Harbor Wall`,
+    title: `${safeIdentityLabel(identity)}'s Public Harbor Posts`,
     description:
-      'Locally generated RSS XML containing only posts marked Public on this Harbor wall.',
+      'Locally generated RSS XML containing only posts marked Public on this Harbor profile.',
     max_items: 50,
   };
 }
@@ -208,7 +230,7 @@ function buildRssFilename(displayName: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-  return `harbor-${safeName || 'wall'}-public-rss.xml`;
+  return `harbor-${safeName || 'profile'}-public-rss.xml`;
 }
 
 function getPreviewExplanation(
@@ -223,7 +245,7 @@ function getPreviewExplanation(
     case 'guest':
       return `Guest preview is loaded from the backend as public-only: ${publicCount} public post${publicCount === 1 ? '' : 's'} are visible; ${contactsOnlyCount} contacts-only post${contactsOnlyCount === 1 ? '' : 's'} are hidden.`;
     case 'contact':
-      return `Contact preview is loaded from the backend for contacts with WallRead: ${totalCount} post${totalCount === 1 ? '' : 's'} are visible (${publicCount} public + ${contactsOnlyCount} contacts-only).`;
+      return `Contact preview is loaded for approved contacts: ${totalCount} post${totalCount === 1 ? '' : 's'} are visible (${publicCount} public + ${contactsOnlyCount} contacts-only).`;
     case 'owner':
       return `Owner preview is loaded from the backend and shows all ${totalCount} non-deleted local post${totalCount === 1 ? '' : 's'}, including contacts-only posts.`;
   }
@@ -324,7 +346,7 @@ function WallCommentsSection({
                     'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
                 }}
               >
-                {safePeerLabel(comment.authorPeerId, comment.authorName)
+                {safePeerLabel(comment.authorPeerId, undefined, comment.authorName)
                   .split(' ')
                   .map((part) => part[0])
                   .join('')
@@ -337,7 +359,7 @@ function WallCommentsSection({
                     className="text-sm font-medium"
                     style={{ color: 'hsl(var(--harbor-text-primary))' }}
                   >
-                    {safePeerLabel(comment.authorPeerId, comment.authorName)}
+                    {safePeerLabel(comment.authorPeerId, undefined, comment.authorName)}
                   </span>
                   <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     {formatCommentDate(comment.createdAt)}
@@ -391,6 +413,7 @@ export function WallPage() {
     setEditingPost,
   } = useWallStore();
   const { socialView, setSocialView } = useSettingsStore();
+  const identity = state.status === 'unlocked' ? state.identity : null;
   const [previewPerspective, setPreviewPerspective] = useState<WallPreviewPerspective>('guest');
   const [previewPosts, setPreviewPosts] = useState<FeedItem[]>([]);
   const [visibilityStats, setVisibilityStats] = useState<WallVisibilityStats | null>(null);
@@ -402,8 +425,14 @@ export function WallPage() {
   const [editContent, setEditContent] = useState('');
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [submittingComments, setSubmittingComments] = useState<Set<string>>(new Set());
-
-  const identity = state.status === 'unlocked' ? state.identity : null;
+  const [postsReady, setPostsReady] = useState(false);
+  const [postedIdentityThisSession, setPostedIdentityThisSession] = useState<string | null>(null);
+  const hasEverPosted = Boolean(
+    identity &&
+    (posts.length > 0 ||
+      postedIdentityThisSession === identity.peerId ||
+      hasProfileEverPosted(identity.peerId)),
+  );
 
   // Feed and personal wall intentionally share the persisted modality filter.
   const filteredPosts = useMemo(() => {
@@ -412,10 +441,23 @@ export function WallPage() {
 
   // Load posts from SQLite on mount
   useEffect(() => {
-    if (identity) {
-      loadPosts();
-    }
+    let cancelled = false;
+    setPostsReady(false);
+    if (!identity) return;
+
+    void loadPosts().finally(() => {
+      if (!cancelled) setPostsReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [identity, loadPosts]);
+
+  useEffect(() => {
+    if (!identity || posts.length === 0) return;
+    persistProfilePostedMilestone(identity.peerId);
+    setPostedIdentityThisSession(identity.peerId);
+  }, [identity, posts.length]);
 
   // Load the production backend wall preview and visibility counts.
   useEffect(() => {
@@ -441,7 +483,7 @@ export function WallPage() {
       .catch((err) => {
         if (cancelled) return;
         log.error('Failed to load wall preview', err);
-        setPreviewError('Could not load wall preview from the local backend.');
+        setPreviewError('Could not load profile preview from the local backend.');
       })
       .finally(() => {
         if (!cancelled) {
@@ -497,7 +539,7 @@ export function WallPage() {
       toast.success(
         post.visibility === 'public'
           ? 'Public post reference copied'
-          : 'Contacts-only post reference copied. Only contacts with WallRead should receive it.',
+          : 'Contacts-only post reference copied. Share it only with approved contacts.',
       );
     } catch (err) {
       log.error('Failed to copy post reference', err);
@@ -534,10 +576,7 @@ export function WallPage() {
       const rssXml = await generatePublicRssXml();
       const filename = buildRssFilename(safeIdentityLabel(identity));
       try {
-        const savedPath = await invoke<string>('save_to_downloads', {
-          filename,
-          content: rssXml,
-        });
+        const savedPath = await saveTextToDownloads(filename, rssXml);
         toast.success(`Public RSS XML saved to ${savedPath}`);
       } catch (saveErr) {
         log.warn('Tauri save_to_downloads failed, falling back to browser download', saveErr);
@@ -652,52 +691,74 @@ export function WallPage() {
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       {/* Header */}
       <header
-        className="px-6 py-4 border-b flex-shrink-0"
+        className="harbor-page-gutter-x flex-shrink-0 border-b py-4"
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
         <div className="max-w-3xl mx-auto">
-          <div
-            className="mb-4 h-36 rounded-xl overflow-hidden relative flex items-center px-6"
-            style={{ background: 'hsl(var(--harbor-bg-elevated))' }}
-          >
-            <img src="/harbor.svg" alt="" className="absolute right-5 w-32 h-32 opacity-80" />
-            <div className="relative z-10">
-              <p
-                className="text-xs uppercase tracking-[0.2em] font-semibold"
-                style={{ color: 'hsl(var(--harbor-primary))' }}
+          {postsReady && !hasEverPosted && (
+            <div
+              className="relative mb-4 flex h-36 items-center overflow-hidden rounded-xl px-6"
+              style={{ background: 'hsl(var(--harbor-bg-elevated))' }}
+              data-testid="empty-profile-placeholder"
+            >
+              <img src="/harbor.svg" alt="" className="absolute right-5 h-32 w-32 opacity-80" />
+              <div className="relative z-10">
+                <p
+                  className="text-xs font-semibold uppercase tracking-[0.2em]"
+                  style={{ color: 'hsl(var(--harbor-primary))' }}
+                >
+                  Your space
+                </p>
+                <p
+                  className="text-xl font-bold"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
+                  Share what matters to you.
+                </p>
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1
+                className="text-2xl font-bold"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
-                Your space
+                My profile
+              </h1>
+              <p className="mt-1 text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                Your posts, media, and public profile
               </p>
-              <p className="text-xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-                Share what matters to you.
+              <p
+                className="mt-1 text-xs"
+                style={{
+                  color:
+                    syncStatus === 'partial_failure'
+                      ? 'hsl(var(--harbor-warning))'
+                      : 'hsl(var(--harbor-text-tertiary))',
+                }}
+              >
+                {isSyncingRelay
+                  ? 'Syncing to relay… local posts are already saved.'
+                  : lastSyncAt
+                    ? `Last relay sync ${formatDate(new Date(lastSyncAt * 1000))}${syncError ? ' · Partial sync failure, retry by posting or manual sync.' : ''}`
+                    : 'Not synced to relay yet. Local posts remain available.'}
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.newPost))}
+              className="harbor-interactive flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
+              style={{ background: 'hsl(var(--harbor-primary))' }}
+            >
+              <PlusIcon className="h-4 w-4" />
+              Add post
+            </button>
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-            Wall
-          </h1>
-          <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Your personal space for thoughts and creations
-          </p>
-          <p
-            className="text-xs mt-1"
-            style={{
-              color:
-                syncStatus === 'partial_failure'
-                  ? 'hsl(var(--harbor-warning))'
-                  : 'hsl(var(--harbor-text-tertiary))',
-            }}
-          >
-            {isSyncingRelay
-              ? 'Syncing to relay… local posts are already saved.'
-              : lastSyncAt
-                ? `Last relay sync ${formatDate(new Date(lastSyncAt * 1000))}${syncError ? ' · Partial sync failure, retry by posting or manual sync.' : ''}`
-                : 'Not synced to relay yet. Local posts remain available.'}
-          </p>
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="harbor-page-gutter flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto space-y-6">
           <button
             type="button"
@@ -709,7 +770,7 @@ export function WallPage() {
               border: '1px solid hsl(var(--harbor-border-subtle))',
             }}
           >
-            {showPreview ? 'Close wall preview' : 'Preview and share wall'}
+            {showPreview ? 'Close profile preview' : 'Preview and share profile'}
           </button>
           {/* Preview, RSS, and sharing surfaces */}
           <section
@@ -731,7 +792,7 @@ export function WallPage() {
                     className="text-base font-semibold"
                     style={{ color: 'hsl(var(--harbor-text-primary))' }}
                   >
-                    Preview and share your wall
+                    Preview and share your profile
                   </h2>
                   <p
                     className="text-sm mt-1 max-w-2xl"
@@ -802,7 +863,11 @@ export function WallPage() {
 
             <div className="p-5 space-y-5">
               <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Wall preview mode">
+                <div
+                  className="flex flex-wrap gap-2"
+                  role="tablist"
+                  aria-label="Profile preview mode"
+                >
                   {PREVIEW_OPTIONS.map((option) => {
                     const isSelected = previewPerspective === option.perspective;
                     return (
@@ -1012,8 +1077,8 @@ export function WallPage() {
                       className="text-xs mt-1"
                       style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
                     >
-                      Feed URIs identify your public wall. Contact invites include only public keys
-                      and reachable addresses, never private keys or backups.
+                      Feed URIs identify your public profile. Contact invites include only public
+                      keys and reachable addresses, never private keys or backups.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1083,7 +1148,7 @@ export function WallPage() {
               >
                 {socialView === 'all'
                   ? 'Share your first post with your contacts. Your posts are stored locally and shared peer-to-peer.'
-                  : 'Use Create post in the sidebar, or switch to a different filter.'}
+                  : 'Use Add post above, or switch to a different filter.'}
               </p>
             </div>
           ) : (
@@ -1128,7 +1193,11 @@ export function WallPage() {
                     >
                       Shared from{' '}
                       <span style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                        {safePeerLabel(post.sharedFrom.authorPeerId, post.sharedFrom.authorName)}
+                        {safePeerLabel(
+                          post.sharedFrom.authorPeerId,
+                          undefined,
+                          post.sharedFrom.authorName,
+                        )}
                       </span>
                     </span>
                   </div>
@@ -1187,6 +1256,36 @@ export function WallPage() {
                           </span>
                         )}
                         <VisibilityBadge visibility={post.visibility} />
+                        {post.relayStatus !== 'relay_acknowledged' && (
+                          <span
+                            className="px-2 py-0.5 rounded-full text-xs"
+                            title={
+                              post.relayStatus === 'local_pending'
+                                ? 'Saved on this device and waiting for relay confirmation'
+                                : post.relayStatus === 'conflict'
+                                  ? 'The relay rejected a conflicting version'
+                                  : 'Relay delivery failed after repeated attempts'
+                            }
+                            style={{
+                              background:
+                                post.relayStatus === 'local_pending'
+                                  ? 'hsl(var(--harbor-warning) / 0.12)'
+                                  : 'hsl(var(--harbor-danger) / 0.12)',
+                              color:
+                                post.relayStatus === 'local_pending'
+                                  ? 'hsl(var(--harbor-warning))'
+                                  : 'hsl(var(--harbor-danger))',
+                            }}
+                          >
+                            {post.deletionPending
+                              ? 'Deleting'
+                              : post.relayStatus === 'local_pending'
+                                ? 'Publishing'
+                                : post.relayStatus === 'conflict'
+                                  ? 'Conflict'
+                                  : 'Publish failed'}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                         {formatDate(post.timestamp)}
@@ -1312,6 +1411,7 @@ export function WallPage() {
                             >
                               {safePeerLabel(
                                 post.sharedFrom.authorPeerId,
+                                undefined,
                                 post.sharedFrom.authorName,
                               )
                                 .split(' ')
@@ -1327,6 +1427,7 @@ export function WallPage() {
                               >
                                 {safePeerLabel(
                                   post.sharedFrom.authorPeerId,
+                                  undefined,
                                   post.sharedFrom.authorName,
                                 )}
                               </p>

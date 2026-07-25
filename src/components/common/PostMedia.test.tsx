@@ -75,7 +75,7 @@ describe('PostMedia lifecycle', () => {
     });
     expect(await screen.findByText(/40%/)).toBeTruthy();
 
-    vi.mocked(mediaService.getMediaUrl).mockResolvedValue('data:image/png;base64,AAAA');
+    vi.mocked(mediaService.getMediaUrl).mockResolvedValue('asset://localhost/photo.png');
     useMediaTransfersStore.getState().apply({
       ...baseState,
       status: 'ready',

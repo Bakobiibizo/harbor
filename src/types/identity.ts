@@ -61,9 +61,40 @@ export function qualifiedRelayName(
     : `@${claim.name}@${claim.namespace}`;
 }
 
+export type IdentityInitializationFailureSource =
+  | 'identityDatabase'
+  | 'identityCorruption'
+  | 'accountRegistry';
+
+export interface IdentityInitializationError {
+  code: string;
+  message: string;
+  details?: string;
+  recovery?: string;
+}
+
+/** Authoritative startup state returned by the desktop backend. */
+export type IdentityInitializationResult =
+  | { status: 'absent' }
+  | { status: 'locked'; identity: IdentityInfo }
+  | { status: 'unlocked'; identity: IdentityInfo }
+  | {
+      status: 'recoverableError';
+      source: IdentityInitializationFailureSource;
+      error: IdentityInitializationError;
+    }
+  | {
+      status: 'fatalError';
+      source: IdentityInitializationFailureSource;
+      error: IdentityInitializationError;
+    };
+
 /** Application state for identity */
 export type IdentityState =
   | { status: 'loading' }
-  | { status: 'no_identity' }
-  | { status: 'locked'; identity: IdentityInfo }
-  | { status: 'unlocked'; identity: IdentityInfo };
+  | IdentityInitializationResult
+  | {
+      status: 'recoverableError';
+      source: 'ipc' | 'profileStorage';
+      error: IdentityInitializationError;
+    };

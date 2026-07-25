@@ -61,6 +61,9 @@ pnpm tauri build
 # The executable will be in src-tauri/target/release/
 ```
 
+Cross-platform compilation runs on project-owned Windows, WSL, and ARM64 hosts instead of GitHub
+Actions runners. See [Project-owned cross-platform builds](docs/manual-cross-platform-builds.md).
+
 ## Usage Guide
 
 ### First Launch - Create Your Identity
@@ -298,10 +301,10 @@ Manual validation checklist for call networking changes:
 
 ```bash
 # Rust/Tauri release gate
-.dev/bin/dev ci --language rust
+dev ci --language rust
 
 # Frontend TypeScript release gate
-.dev/bin/dev ci --language typescript
+dev ci --language typescript
 
 # Relay release gate
 cargo fmt --manifest-path relay-server/Cargo.toml -- --check

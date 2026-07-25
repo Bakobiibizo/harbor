@@ -112,20 +112,21 @@ pub async fn get_wall_preview(
     )
     .map_err(|e| AppError::DatabaseString(e.to_string()))?;
 
+    let author_verified_qualified_name =
+        crate::services::name_claim_service::verified_qualified_name(
+            &crate::db::repositories::RelayNamesRepository::new(&db),
+            &identity.peer_id,
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|error| AppError::Crypto(error.to_string()))?;
+
     let filtered_posts: Vec<_> = posts
         .into_iter()
         .map(|post| FeedItemInfo {
             post_id: post.post_id,
             author_peer_id: post.author_peer_id,
             author_display_name: Some(identity.display_name.clone()),
-            author_verified_qualified_name: crate::db::repositories::RelayNamesRepository::new(&db)
-                .active_for_peer(&identity.peer_id, chrono::Utc::now().timestamp())
-                .ok()
-                .flatten()
-                .and_then(|bytes| {
-                    ciborium::de::from_reader::<crate::models::NameClaim, _>(bytes.as_slice()).ok()
-                })
-                .map(|claim| format!("@{}@{}", claim.request.local_name, claim.request.relay)),
+            author_verified_qualified_name: author_verified_qualified_name.clone(),
             content_type: post.content_type,
             content_text: post.content_text,
             visibility: post.visibility.as_str().to_string(),

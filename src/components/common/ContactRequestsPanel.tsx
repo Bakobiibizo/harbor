@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ContactRequest } from '../../types';
 import { safePeerLabel } from '../../utils/relayName';
 import { Button } from './Button';
@@ -18,6 +19,19 @@ interface Props {
 }
 
 export function ContactRequestsPanel({ requests, onDecision, onRetry }: Props) {
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const decide = async (requestId: string, decision: 'accepted' | 'declined') => {
+    if (pendingRequestId) return;
+    setPendingRequestId(requestId);
+    try {
+      await onDecision(requestId, decision);
+    } catch {
+      // The owning screen reports the command error. This component only owns
+      // pending interaction state and must always restore the review controls.
+    } finally {
+      setPendingRequestId(null);
+    }
+  };
   if (requests.length === 0) return null;
   return (
     <section
@@ -37,9 +51,7 @@ export function ContactRequestsPanel({ requests, onDecision, onRetry }: Props) {
         </span>
       </div>
       {requests.map((request) => {
-        const label = request.displayName
-          ? `${request.displayName} (unverified)`
-          : safePeerLabel(request.peerId);
+        const label = safePeerLabel(request.peerId, undefined, request.displayName);
         return (
           <article
             key={`${request.direction}:${request.requestId}`}
@@ -75,12 +87,17 @@ export function ContactRequestsPanel({ requests, onDecision, onRetry }: Props) {
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => onDecision(request.requestId, 'declined')}
+                  disabled={pendingRequestId !== null}
+                  onClick={() => void decide(request.requestId, 'declined')}
                 >
                   Decline
                 </Button>
-                <Button size="sm" onClick={() => onDecision(request.requestId, 'accepted')}>
-                  Accept
+                <Button
+                  size="sm"
+                  disabled={pendingRequestId !== null}
+                  onClick={() => void decide(request.requestId, 'accepted')}
+                >
+                  {pendingRequestId === request.requestId ? 'Saving...' : 'Accept'}
                 </Button>
               </div>
             )}

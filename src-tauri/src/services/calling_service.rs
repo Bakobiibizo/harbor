@@ -2,21 +2,20 @@
 
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub use crate::db::CallState;
 use crate::db::{
-    CallDirection, CallMediaKind, CallSession, CallsRepository, Capability, GroupCallRoom,
-    GroupCallsRepository, NewCallSession,
+    CallDirection, CallMediaKind, CallSession, CallSignalingReplayRepository, CallsRepository,
+    Capability, GroupCallRoom, GroupCallsRepository, NewCallSession, SignalingReplayRecord,
 };
 use crate::error::{AppError, Result};
 use crate::p2p::protocols::signaling::{
     GroupMembershipAction, GroupMembershipSignal, SignalingEnvelope, SignalingPayload,
 };
 use crate::services::{
-    verify, ContactsService, CryptoService, IdentityService, PermissionsService,
+    verify, ContactsService, CryptoService, IdentityService, PermissionsService, Signable,
     SignableGroupMembership, SignableSignalingAnswer, SignableSignalingHangup,
     SignableSignalingIce, SignableSignalingOffer,
 };
@@ -27,6 +26,12 @@ const MAX_SDP_BYTES: usize = 256 * 1024;
 const MAX_ICE_CANDIDATE_BYTES: usize = 16 * 1024;
 const GROUP_CALL_TOPOLOGY: &str = "relay_assisted_mesh_v1";
 const GROUP_CALL_MAX_PARTICIPANTS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncomingSignalingOutcome {
+    Applied,
+    Duplicate,
+}
 
 /// An active call
 #[derive(Debug, Clone)]
@@ -46,7 +51,6 @@ pub struct CallingService {
     identity_service: Arc<IdentityService>,
     contacts_service: Arc<ContactsService>,
     permissions_service: Arc<PermissionsService>,
-    seen_signaling: Mutex<HashSet<String>>,
 }
 
 /// An outgoing signaling offer
@@ -115,6 +119,8 @@ impl CallingService {
             GroupMembershipAction::Invite => "invite",
             GroupMembershipAction::Join => "join",
             GroupMembershipAction::Leave => "leave",
+            GroupMembershipAction::Decline => "decline",
+            GroupMembershipAction::Failed => "failed",
             GroupMembershipAction::Roster => "roster",
             GroupMembershipAction::Terminate => "terminate",
         }
@@ -200,6 +206,8 @@ impl CallingService {
                     GroupMembershipAction::Invite => "invited",
                     GroupMembershipAction::Terminate => "terminated",
                     GroupMembershipAction::Leave => "left",
+                    GroupMembershipAction::Decline => "active",
+                    GroupMembershipAction::Failed => "active",
                     _ => "active",
                 }
                 .to_string(),
@@ -281,7 +289,9 @@ impl CallingService {
                 ));
             }
             let valid_version = match signal.action {
-                GroupMembershipAction::Join => signal.roster_version == existing.roster_version,
+                GroupMembershipAction::Join
+                | GroupMembershipAction::Decline
+                | GroupMembershipAction::Failed => signal.roster_version == existing.roster_version,
                 GroupMembershipAction::Leave => {
                     signal.roster_version == existing.roster_version + 1
                 }
@@ -294,18 +304,24 @@ impl CallingService {
             }
             if matches!(
                 signal.action,
-                GroupMembershipAction::Join | GroupMembershipAction::Leave
+                GroupMembershipAction::Join
+                    | GroupMembershipAction::Leave
+                    | GroupMembershipAction::Decline
+                    | GroupMembershipAction::Failed
             ) && (!existing.participants.contains(&signal.sender_peer_id)
                 || canonical != existing.participants)
             {
                 return Err(AppError::PermissionDenied(
-                    "Only invited roster members may join or leave without a creator roster update"
+                        "Only invited roster members may join, fail, or leave without a creator roster update"
                         .to_string(),
                 ));
             }
             if !matches!(
                 signal.action,
-                GroupMembershipAction::Join | GroupMembershipAction::Leave
+                GroupMembershipAction::Join
+                    | GroupMembershipAction::Leave
+                    | GroupMembershipAction::Decline
+                    | GroupMembershipAction::Failed
             ) && signal.sender_peer_id != signal.creator_peer_id
             {
                 return Err(AppError::PermissionDenied(
@@ -338,6 +354,8 @@ impl CallingService {
                 state: match signal.action {
                     GroupMembershipAction::Invite => "invited",
                     GroupMembershipAction::Leave => "active",
+                    GroupMembershipAction::Decline => "active",
+                    GroupMembershipAction::Failed => "active",
                     GroupMembershipAction::Terminate => "terminated",
                     _ => "active",
                 }
@@ -361,7 +379,6 @@ impl CallingService {
             identity_service,
             contacts_service,
             permissions_service,
-            seen_signaling: Mutex::new(HashSet::new()),
         }
     }
 
@@ -414,7 +431,7 @@ impl CallingService {
 
     fn validate_hangup_reason(reason: &str) -> Result<()> {
         match reason {
-            "normal" | "busy" | "declined" | "error" => Ok(()),
+            "normal" | "busy" | "declined" | "error" | "timeout" => Ok(()),
             _ => Err(AppError::Validation(format!(
                 "Invalid hangup reason: {}",
                 reason
@@ -485,18 +502,221 @@ impl CallingService {
         Ok(hex::encode(digest))
     }
 
-    fn record_signaling_once(&self, envelope: &SignalingEnvelope) -> Result<()> {
+    fn record_signaling_once(&self, envelope: &SignalingEnvelope) -> Result<SignalingReplayRecord> {
         let fingerprint = Self::fingerprint_signaling(envelope)?;
-        let mut seen = self
-            .seen_signaling
-            .lock()
-            .map_err(|_| AppError::Internal("Signaling replay cache poisoned".to_string()))?;
-        if !seen.insert(fingerprint) {
-            return Err(AppError::AlreadyExists(
-                "Duplicate signaling message".to_string(),
-            ));
+        let now = chrono::Utc::now().timestamp();
+        // A signal cannot authenticate after its signed timestamp leaves the
+        // freshness window, so this durable expiry exactly matches the replay
+        // window across process restarts (including future-skewed timestamps).
+        let expires_at = envelope
+            .timestamp()
+            .saturating_add(MAX_SIGNALING_TIMESTAMP_SKEW_SECONDS + 1);
+        Ok(CallSignalingReplayRepository::check_and_record(
+            &self.db,
+            &fingerprint,
+            &envelope.sender_peer_id,
+            now,
+            expires_at,
+        )?)
+    }
+
+    fn require_valid_contact_signature(
+        &self,
+        peer_id: &str,
+        signable: &impl Signable,
+        signature: &[u8],
+        kind: &str,
+    ) -> Result<()> {
+        let public_key = self
+            .contacts_service
+            .get_public_key(peer_id)?
+            .ok_or_else(|| AppError::NotFound("Sender public key not found".to_string()))?;
+        let public_key: [u8; 32] = public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?;
+        let verifying_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|error| AppError::Crypto(format!("Invalid public key: {error}")))?;
+        if !verify(&verifying_key, signable, signature)? {
+            return Err(AppError::Crypto(format!("Invalid {kind} signature")));
         }
         Ok(())
+    }
+
+    /// Authenticate the complete nested signaling payload without mutating
+    /// call, group, frontend, or replay state. Replay commitment happens only
+    /// after this succeeds and before the payload's state transition runs.
+    fn authenticate_signaling_payload(&self, envelope: &SignalingEnvelope) -> Result<()> {
+        match &envelope.payload {
+            SignalingPayload::GroupMembership(signal) => {
+                if signal.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Group membership sender does not match envelope".to_string(),
+                    ));
+                }
+                if signal.topology != GROUP_CALL_TOPOLOGY {
+                    return Err(AppError::Validation(
+                        "Unsupported group-call topology".to_string(),
+                    ));
+                }
+                if signal.participants.is_empty()
+                    || signal.participants.len() > GROUP_CALL_MAX_PARTICIPANTS
+                {
+                    return Err(AppError::Validation(
+                        "Invalid group roster size".to_string(),
+                    ));
+                }
+                let mut canonical = signal.participants.clone();
+                canonical.sort();
+                canonical.dedup();
+                if canonical != signal.participants {
+                    return Err(AppError::Validation(
+                        "Group roster must be sorted and unique".to_string(),
+                    ));
+                }
+                if !canonical.contains(&signal.creator_peer_id)
+                    || !canonical.contains(&signal.sender_peer_id)
+                {
+                    return Err(AppError::PermissionDenied(
+                        "Group sender and creator must be roster members".to_string(),
+                    ));
+                }
+                let local_peer_id = self
+                    .identity_service
+                    .get_identity()?
+                    .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?
+                    .peer_id;
+                for peer_id in &canonical {
+                    if peer_id != &signal.sender_peer_id && peer_id != &local_peer_id {
+                        self.validate_contact_identity(peer_id)?;
+                        self.require_any_call_grant_with(peer_id)?;
+                    }
+                }
+                self.require_valid_contact_signature(
+                    &signal.sender_peer_id,
+                    &Self::group_signable(signal),
+                    &signal.signature,
+                    "group membership",
+                )
+            }
+            SignalingPayload::Offer(offer) => {
+                if offer.caller_peer_id != envelope.sender_peer_id
+                    || offer.callee_peer_id != envelope.recipient_peer_id
+                {
+                    return Err(AppError::Validation(
+                        "Offer routing fields do not match signaling envelope".to_string(),
+                    ));
+                }
+                Self::validate_sdp(&offer.sdp)?;
+                if !self
+                    .permissions_service
+                    .peer_has_capability(&offer.caller_peer_id, Capability::Call)?
+                {
+                    return Err(AppError::PermissionDenied(
+                        "Caller doesn't have call permission".to_string(),
+                    ));
+                }
+                self.require_valid_contact_signature(
+                    &offer.caller_peer_id,
+                    &SignableSignalingOffer {
+                        call_id: offer.call_id.clone(),
+                        caller_peer_id: offer.caller_peer_id.clone(),
+                        callee_peer_id: offer.callee_peer_id.clone(),
+                        sdp: offer.sdp.clone(),
+                        timestamp: offer.timestamp,
+                    },
+                    &offer.signature,
+                    "offer",
+                )
+            }
+            SignalingPayload::Answer(answer) => {
+                if answer.callee_peer_id != envelope.sender_peer_id
+                    || answer.caller_peer_id != envelope.recipient_peer_id
+                {
+                    return Err(AppError::Validation(
+                        "Answer routing fields do not match signaling envelope".to_string(),
+                    ));
+                }
+                Self::validate_sdp(&answer.sdp)?;
+                if !self
+                    .permissions_service
+                    .peer_has_capability(&answer.callee_peer_id, Capability::Call)?
+                {
+                    return Err(AppError::PermissionDenied(
+                        "Callee doesn't have call permission".to_string(),
+                    ));
+                }
+                self.require_valid_contact_signature(
+                    &answer.callee_peer_id,
+                    &SignableSignalingAnswer {
+                        call_id: answer.call_id.clone(),
+                        caller_peer_id: answer.caller_peer_id.clone(),
+                        callee_peer_id: answer.callee_peer_id.clone(),
+                        sdp: answer.sdp.clone(),
+                        timestamp: answer.timestamp,
+                    },
+                    &answer.signature,
+                    "answer",
+                )
+            }
+            SignalingPayload::Ice(ice) => {
+                if ice.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "ICE sender does not match signaling sender".to_string(),
+                    ));
+                }
+                Self::validate_ice_candidate(&ice.candidate)?;
+                self.require_any_call_grant_with(&ice.sender_peer_id)?;
+                self.require_valid_contact_signature(
+                    &ice.sender_peer_id,
+                    &SignableSignalingIce {
+                        call_id: ice.call_id.clone(),
+                        sender_peer_id: ice.sender_peer_id.clone(),
+                        candidate: ice.candidate.clone(),
+                        sdp_mid: ice.sdp_mid.clone(),
+                        sdp_mline_index: ice.sdp_mline_index,
+                        timestamp: ice.timestamp,
+                    },
+                    &ice.signature,
+                    "ICE candidate",
+                )
+            }
+            SignalingPayload::Hangup(hangup)
+            | SignalingPayload::Decline(hangup)
+            | SignalingPayload::Busy(hangup) => {
+                if hangup.sender_peer_id != envelope.sender_peer_id {
+                    return Err(AppError::Validation(
+                        "Hangup sender does not match signaling sender".to_string(),
+                    ));
+                }
+                match &envelope.payload {
+                    SignalingPayload::Decline(_) if hangup.reason != "declined" => {
+                        return Err(AppError::Validation(
+                            "Decline signaling must use declined reason".to_string(),
+                        ));
+                    }
+                    SignalingPayload::Busy(_) if hangup.reason != "busy" => {
+                        return Err(AppError::Validation(
+                            "Busy signaling must use busy reason".to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+                Self::validate_hangup_reason(&hangup.reason)?;
+                self.require_any_call_grant_with(&hangup.sender_peer_id)?;
+                self.require_valid_contact_signature(
+                    &hangup.sender_peer_id,
+                    &SignableSignalingHangup {
+                        call_id: hangup.call_id.clone(),
+                        sender_peer_id: hangup.sender_peer_id.clone(),
+                        reason: hangup.reason.clone(),
+                        timestamp: hangup.timestamp,
+                    },
+                    &hangup.signature,
+                    "hangup",
+                )
+            }
+        }
     }
 
     fn require_no_active_call_with_peer(&self, peer_id: &str) -> Result<()> {
@@ -1147,7 +1367,10 @@ impl CallingService {
     /// This is the production ingress path used before emitting frontend call
     /// events.  It verifies the contact key binding, target peer, timestamp
     /// freshness, signed payload, call grants, and replay cache.
-    pub fn process_incoming_signaling(&self, envelope: &SignalingEnvelope) -> Result<()> {
+    pub fn process_incoming_signaling(
+        &self,
+        envelope: &SignalingEnvelope,
+    ) -> Result<IncomingSignalingOutcome> {
         let identity = self
             .identity_service
             .get_identity()?
@@ -1161,6 +1384,10 @@ impl CallingService {
 
         Self::validate_recent_timestamp(envelope.timestamp())?;
         self.validate_contact_identity(&envelope.sender_peer_id)?;
+        self.authenticate_signaling_payload(envelope)?;
+        if self.record_signaling_once(envelope)? == SignalingReplayRecord::Duplicate {
+            return Ok(IncomingSignalingOutcome::Duplicate);
+        }
 
         match &envelope.payload {
             SignalingPayload::GroupMembership(signal) => {
@@ -1287,7 +1514,7 @@ impl CallingService {
             }
         }
 
-        self.record_signaling_once(envelope)
+        Ok(IncomingSignalingOutcome::Applied)
     }
 }
 
@@ -1718,7 +1945,7 @@ mod tests {
         let target = "12D3KooWPeer";
         add_peer_with_call_permission(&db, &permissions, target, &peer_verifying.to_bytes());
 
-        for reason in &["normal", "busy", "declined", "error"] {
+        for reason in &["normal", "busy", "declined", "error", "timeout"] {
             let call_id = format!("call-{}", reason);
             insert_outgoing_test_call(&service, &call_id, &peer_id, target);
             let hangup = service.create_hangup(&call_id, target, reason).unwrap();
@@ -1968,10 +2195,10 @@ mod tests {
     }
 
     #[test]
-    fn test_process_incoming_signaling_valid_offer_then_duplicate_rejected() {
+    fn test_process_incoming_signaling_deduplicates_before_db_effects_across_service_restart() {
         let (_caller_service, _caller_db, caller_identity, _caller_permissions, caller_peer_id) =
             create_test_env();
-        let (callee_service, callee_db, _callee_identity, _callee_permissions, callee_peer_id) =
+        let (callee_service, callee_db, callee_identity, callee_permissions, callee_peer_id) =
             create_test_env();
 
         add_peer_contact(
@@ -1988,9 +2215,24 @@ mod tests {
             chrono::Utc::now().timestamp(),
         );
 
-        assert!(callee_service.process_incoming_signaling(&envelope).is_ok());
-        let duplicate = callee_service.process_incoming_signaling(&envelope);
-        assert!(matches!(duplicate, Err(AppError::AlreadyExists(_))));
+        assert_eq!(
+            callee_service
+                .process_incoming_signaling(&envelope)
+                .unwrap(),
+            IncomingSignalingOutcome::Applied
+        );
+        let restarted = CallingService::new(
+            callee_db.clone(),
+            callee_identity.clone(),
+            Arc::new(ContactsService::new(callee_db.clone(), callee_identity)),
+            callee_permissions,
+        );
+        assert_eq!(
+            restarted.process_incoming_signaling(&envelope).unwrap(),
+            IncomingSignalingOutcome::Duplicate
+        );
+        assert_eq!(restarted.get_active_calls().unwrap().len(), 1);
+        assert_eq!(CallSignalingReplayRepository::count(&callee_db).unwrap(), 1);
     }
 
     #[test]
@@ -2062,6 +2304,7 @@ mod tests {
 
         let result = callee_service.process_incoming_signaling(&envelope);
         assert!(matches!(result, Err(AppError::Crypto(_))));
+        assert_eq!(CallSignalingReplayRepository::count(&callee_db).unwrap(), 0);
     }
 
     #[test]
@@ -2223,6 +2466,88 @@ mod tests {
         assert_eq!(room.roster_version, 1);
         assert_eq!(room.participants, roster);
         assert_eq!(room.state, "invited");
-        assert!(bob.process_incoming_signaling(&envelope).is_err());
+        assert_eq!(
+            bob.process_incoming_signaling(&envelope).unwrap(),
+            IncomingSignalingOutcome::Duplicate
+        );
+    }
+
+    #[test]
+    fn test_group_participant_failure_is_signed_and_does_not_remove_healthy_roster() {
+        let (alice, alice_db, alice_identity, alice_permissions, alice_peer) = create_test_env();
+        let (bob, bob_db, bob_identity, bob_permissions, bob_peer) = create_test_env();
+        add_peer_with_call_permission(
+            &alice_db,
+            &alice_permissions,
+            &bob_peer,
+            &identity_public_key(&bob_identity),
+        );
+        add_peer_with_call_permission(
+            &bob_db,
+            &bob_permissions,
+            &alice_peer,
+            &identity_public_key(&alice_identity),
+        );
+        let mut roster = vec![alice_peer.clone(), bob_peer.clone()];
+        roster.sort();
+        let invite = alice
+            .create_group_membership(
+                Some("room-failed-participant"),
+                None,
+                GroupMembershipAction::Invite,
+                1,
+                &roster,
+                "audio",
+            )
+            .unwrap();
+        bob.process_incoming_signaling(&SignalingEnvelope {
+            sender_peer_id: alice_peer.clone(),
+            recipient_peer_id: bob_peer.clone(),
+            payload: SignalingPayload::GroupMembership(invite),
+        })
+        .unwrap();
+
+        let failed = bob
+            .create_group_membership(
+                Some("room-failed-participant"),
+                Some(&alice_peer),
+                GroupMembershipAction::Failed,
+                1,
+                &roster,
+                "audio",
+            )
+            .unwrap();
+        alice
+            .process_incoming_signaling(&SignalingEnvelope {
+                sender_peer_id: bob_peer.clone(),
+                recipient_peer_id: alice_peer.clone(),
+                payload: SignalingPayload::GroupMembership(failed),
+            })
+            .unwrap();
+
+        let declined = bob
+            .create_group_membership(
+                Some("room-failed-participant"),
+                Some(&alice_peer),
+                GroupMembershipAction::Decline,
+                1,
+                &roster,
+                "audio",
+            )
+            .unwrap();
+        alice
+            .process_incoming_signaling(&SignalingEnvelope {
+                sender_peer_id: bob_peer,
+                recipient_peer_id: alice_peer,
+                payload: SignalingPayload::GroupMembership(declined),
+            })
+            .unwrap();
+
+        let room = GroupCallsRepository::get(&alice_db, "room-failed-participant")
+            .unwrap()
+            .unwrap();
+        assert_eq!(room.roster_version, 1);
+        assert_eq!(room.participants, roster);
+        assert_eq!(room.state, "active");
     }
 }

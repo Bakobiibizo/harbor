@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FeedIcon, EllipsisIcon } from '../components/icons';
+import { FeedIcon, EllipsisIcon, PlusIcon } from '../components/icons';
 import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
 import { ModalityFilter } from '../components/common/ModalityFilter';
 import { useFeedStore, useContactsStore, useWallStore, useSettingsStore } from '../stores';
@@ -12,6 +12,7 @@ import type { FeedItem } from '../types';
 import type { SharedFrom, Comment } from '../stores';
 import { useIdentityStore } from '../stores';
 import { matchesModalityFilter } from '../utils/postModality';
+import { HARBOR_SHORTCUT_EVENTS } from '../hooks';
 
 const log = createLogger('Feed');
 import { getInitials, getContactColor, formatDate } from '../utils/formatting';
@@ -185,7 +186,7 @@ function ShareModal({
             className="text-lg font-semibold"
             style={{ color: 'hsl(var(--harbor-text-primary))' }}
           >
-            Share to Wall
+            Repost to profile
           </h3>
           <button
             onClick={onClose}
@@ -283,7 +284,7 @@ function ShareModal({
               boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
             }}
           >
-            {isSharing ? 'Sharing...' : 'Share to Wall'}
+            {isSharing ? 'Reposting...' : 'Repost to profile'}
           </button>
         </div>
       </div>
@@ -372,7 +373,7 @@ function CommentsSection({
                     background: getContactColor(comment.authorPeerId),
                   }}
                 >
-                  {getInitials(safePeerLabel(comment.authorPeerId, comment.authorName))}
+                  {getInitials(safePeerLabel(comment.authorPeerId, undefined, comment.authorName))}
                 </div>
 
                 {/* Comment content */}
@@ -385,7 +386,7 @@ function CommentsSection({
                       className="font-semibold text-xs"
                       style={{ color: 'hsl(var(--harbor-text-primary))' }}
                     >
-                      {safePeerLabel(comment.authorPeerId, comment.authorName)}
+                      {safePeerLabel(comment.authorPeerId, undefined, comment.authorName)}
                     </span>
                     <p
                       className="text-sm leading-relaxed whitespace-pre-wrap mt-0.5"
@@ -484,6 +485,25 @@ interface UnifiedPost {
 }
 
 type FeedTab = 'all' | 'saved';
+
+export function FindContactsButton() {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/network')}
+      className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+      style={{
+        background:
+          'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+        color: 'white',
+        boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
+      }}
+    >
+      Find Contacts
+    </button>
+  );
+}
 
 export function FeedPage() {
   const navigate = useNavigate();
@@ -592,7 +612,11 @@ export function FeedPage() {
         likedByUser: item.likedByUser ?? false,
         author: {
           peerId: item.authorPeerId,
-          name: safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName),
+          name: safePeerLabel(
+            item.authorPeerId,
+            item.authorVerifiedQualifiedName,
+            item.authorDisplayName,
+          ),
           avatarGradient: getContactColor(item.authorPeerId),
         },
         isReal: true,
@@ -617,7 +641,11 @@ export function FeedPage() {
           likedByUser: item.likedByUser ?? false,
           author: {
             peerId: item.authorPeerId,
-            name: safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName),
+            name: safePeerLabel(
+              item.authorPeerId,
+              item.authorVerifiedQualifiedName,
+              item.authorDisplayName,
+            ),
             avatarGradient: getContactColor(item.authorPeerId),
           },
           isReal: true,
@@ -724,7 +752,7 @@ export function FeedPage() {
     try {
       await shareToWall(comment, sharedFromData);
       setSharingPost(null);
-      toast.success('Shared to your Wall!');
+      toast.success('Reposted to your profile');
     } catch {
       toast.error('Failed to share post');
     }
@@ -734,11 +762,11 @@ export function FeedPage() {
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       {/* Header */}
       <header
-        className="px-6 py-4 border-b flex-shrink-0"
+        className="harbor-page-gutter-x flex-shrink-0 border-b py-4"
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
         <div className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1
                 className="text-2xl font-bold"
@@ -781,6 +809,17 @@ export function FeedPage() {
                   </span>
                 </div>
               )}
+              <button
+                type="button"
+                onClick={() =>
+                  window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.newPost))
+                }
+                className="harbor-interactive flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
+                style={{ background: 'hsl(var(--harbor-primary))' }}
+              >
+                <PlusIcon className="h-4 w-4" />
+                Add post
+              </button>
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing || activeTab === 'saved'}
@@ -902,7 +941,7 @@ export function FeedPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="harbor-page-gutter flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto space-y-8">
           {posts.length === 0 ? (
             <div className="text-center py-16">
@@ -960,17 +999,7 @@ export function FeedPage() {
                   Browse Feed
                 </button>
               ) : (
-                <button
-                  className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-                  style={{
-                    background:
-                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                    color: 'white',
-                    boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
-                  }}
-                >
-                  Find Contacts
-                </button>
+                <FindContactsButton />
               )}
             </div>
           ) : (
@@ -1008,7 +1037,7 @@ export function FeedPage() {
                             }
                             className="font-semibold text-sm text-left hover:underline"
                             style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                            title={`Open ${post.author.name}'s wall`}
+                            title={`Open ${post.author.name}'s profile`}
                           >
                             {post.author.name}
                           </button>

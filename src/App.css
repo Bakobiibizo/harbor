@@ -43,6 +43,225 @@ html {
    Layout Helpers
    ============================================ */
 
+/*
+ * Application shell breakpoints
+ *   Wide:    1280px and above, full 18rem navigation
+ *   Desktop: 1024px to 1279px, full 15rem navigation
+ *   Compact: below 1024px, 5rem icon rail
+ *
+ * A short window also collapses the lower utility stack so the primary
+ * navigation remains usable at Harbor's 600px native minimum height.
+ */
+.harbor-app-shell {
+  --harbor-page-gutter: 1.5rem;
+}
+
+.harbor-main-content {
+  container-name: harbor-content;
+  container-type: inline-size;
+}
+
+.harbor-page-gutter {
+  padding: var(--harbor-page-gutter);
+}
+
+.harbor-page-gutter-x {
+  padding-inline: var(--harbor-page-gutter);
+}
+
+.harbor-sidebar {
+  position: relative;
+  width: 18rem;
+  min-width: 18rem;
+  transition:
+    width var(--transition-base),
+    min-width var(--transition-base);
+}
+
+.harbor-sidebar-compact-utilities {
+  display: none;
+  padding: 0.75rem;
+  border-top: 1px solid hsl(var(--harbor-border-subtle));
+}
+
+.harbor-sidebar-utility-popover {
+  max-width: calc(100vw - 6rem);
+}
+
+@media (max-width: 1279px) {
+  .harbor-app-shell {
+    --harbor-page-gutter: 1.25rem;
+  }
+
+  .harbor-sidebar {
+    width: 15rem;
+    min-width: 15rem;
+  }
+}
+
+@media (max-width: 1023px) {
+  .harbor-app-shell {
+    --harbor-page-gutter: 1rem;
+  }
+
+  .harbor-sidebar {
+    width: 5rem;
+    min-width: 5rem;
+  }
+
+  .harbor-sidebar-brand {
+    padding: 0.875rem;
+  }
+
+  .harbor-sidebar-brand button,
+  .harbor-sidebar-profile-card > div,
+  .harbor-sidebar-nav-item {
+    justify-content: center;
+  }
+
+  .harbor-sidebar-brand-copy,
+  .harbor-sidebar-brand-chevron,
+  .harbor-sidebar-profile-copy,
+  .harbor-sidebar-compose-label,
+  .harbor-sidebar-nav-copy,
+  .harbor-sidebar-nav-chevron {
+    display: none;
+  }
+
+  .harbor-sidebar-profile {
+    padding: 0.75rem;
+  }
+
+  .harbor-sidebar-profile-card {
+    padding: 0.375rem;
+  }
+
+  .harbor-sidebar-compose {
+    padding: 0 0.75rem 0.5rem;
+  }
+
+  .harbor-sidebar-compose-button {
+    height: 3rem;
+    padding: 0;
+  }
+
+  .harbor-sidebar-nav {
+    padding-inline: 0.75rem;
+  }
+
+  .harbor-sidebar-nav-item {
+    position: relative;
+    padding: 0.5rem;
+  }
+
+  .harbor-sidebar-request-badge {
+    position: absolute;
+    top: 0.125rem;
+    right: 0.125rem;
+  }
+
+  .harbor-sidebar-expanded-utilities,
+  .harbor-sidebar-network-footer {
+    display: none;
+  }
+
+  .harbor-sidebar-compact-utilities {
+    display: block;
+  }
+}
+
+@media (min-width: 1024px) and (max-height: 759px) {
+  .harbor-sidebar-expanded-utilities,
+  .harbor-sidebar-network-footer {
+    display: none;
+  }
+
+  .harbor-sidebar-compact-utilities {
+    display: block;
+  }
+}
+
+@media (max-width: 767px) {
+  .harbor-app-shell {
+    --harbor-page-gutter: 0.75rem;
+  }
+
+  .harbor-sidebar {
+    width: 4.5rem;
+    min-width: 4.5rem;
+  }
+
+  .harbor-sidebar-profile {
+    padding-inline: 0.5rem;
+  }
+
+  .harbor-sidebar-compose,
+  .harbor-sidebar-nav,
+  .harbor-sidebar-compact-utilities {
+    padding-inline: 0.5rem;
+  }
+
+  .harbor-sidebar-utility-popover {
+    width: min(18rem, calc(100vw - 5rem));
+  }
+
+  .harbor-verification-banner {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+}
+
+/* Page layouts respond to the actual content pane, not the outer window. */
+@container harbor-content (max-width: 46rem) {
+  .harbor-settings-layout {
+    flex-direction: column;
+  }
+
+  .harbor-settings-sidebar {
+    width: 100%;
+    max-width: none;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--harbor-border-subtle));
+  }
+
+  .harbor-settings-header,
+  .harbor-settings-desktop-nav,
+  .harbor-settings-version {
+    display: none;
+  }
+
+  .harbor-settings-mobile-nav {
+    display: block;
+  }
+
+  .harbor-settings-content {
+    min-height: 0;
+    padding: var(--harbor-page-gutter);
+  }
+
+  .harbor-boards-content {
+    flex-direction: column;
+  }
+
+  .harbor-boards-community-sidebar {
+    width: 100%;
+    max-height: 11rem;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--harbor-border-subtle));
+  }
+
+  .harbor-boards-community-list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .harbor-boards-community-list > * {
+    width: min(15rem, 75vw);
+    flex: 0 0 auto;
+  }
+}
+
 .hide-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;

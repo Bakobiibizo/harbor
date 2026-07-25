@@ -1,12 +1,17 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsStore } from '../../stores';
 import { clearProviderSessionConsent } from '../../utils/providerEmbeds';
-import { clearLinkPreviewCacheForTests, LinkPreviewCard } from './LinkPreviewCard';
+import {
+  clearLinkPreviewCache,
+  clearLinkPreviewCacheForTests,
+  LinkPreviewCard,
+} from './LinkPreviewCard';
+import { fetchLinkPreview } from '../../services/linkPreview';
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }));
+vi.mock('../../services/linkPreview', () => ({ fetchLinkPreview: vi.fn() }));
 
 const preview = {
   url: 'https://example.com/canonical',
@@ -26,16 +31,14 @@ describe('LinkPreviewCard', () => {
 
   it('shows an explicit loading state and then canonical metadata', async () => {
     let resolve!: (value: typeof preview) => void;
-    vi.mocked(invoke).mockReturnValueOnce(new Promise((done) => (resolve = done)));
+    vi.mocked(fetchLinkPreview).mockReturnValueOnce(new Promise((done) => (resolve = done)));
     render(<LinkPreviewCard url="https://example.com/post#fragment" />);
 
     expect(screen.getByRole('status', { name: 'Loading link preview' })).toHaveAttribute(
       'data-state',
       'loading',
     );
-    expect(invoke).toHaveBeenCalledWith('fetch_link_preview', {
-      url: 'https://example.com/post',
-    });
+    expect(fetchLinkPreview).toHaveBeenCalledWith('https://example.com/post');
 
     resolve(preview);
     expect(await screen.findByText('Example title')).toBeInTheDocument();
@@ -46,7 +49,7 @@ describe('LinkPreviewCard', () => {
   });
 
   it('opens only the canonical URL returned by the trusted backend', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce(preview);
+    vi.mocked(fetchLinkPreview).mockResolvedValueOnce(preview);
     render(<LinkPreviewCard url="https://example.com/tracked?utm_source=test" />);
 
     fireEvent.click(await screen.findByRole('link'));
@@ -54,7 +57,7 @@ describe('LinkPreviewCard', () => {
   });
 
   it('opens the safe card with standard keyboard activation', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce(preview);
+    vi.mocked(fetchLinkPreview).mockResolvedValueOnce(preview);
     render(<LinkPreviewCard url="https://example.com/post" />);
     const card = await screen.findByRole('link');
     fireEvent.keyDown(card, { key: ' ' });
@@ -62,7 +65,7 @@ describe('LinkPreviewCard', () => {
   });
 
   it('shows a distinct fallback when a safe link has no published metadata', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({
+    vi.mocked(fetchLinkPreview).mockResolvedValueOnce({
       ...preview,
       title: null,
       description: null,
@@ -75,7 +78,7 @@ describe('LinkPreviewCard', () => {
   });
 
   it('shows an explicit error fallback when backend fetching fails', async () => {
-    vi.mocked(invoke).mockRejectedValueOnce(new Error('blocked target'));
+    vi.mocked(fetchLinkPreview).mockRejectedValueOnce(new Error('blocked target'));
     render(<LinkPreviewCard url="https://example.com/private" />);
 
     expect(await screen.findByText(/Preview details are unavailable/i)).toBeInTheDocument();
@@ -87,11 +90,11 @@ describe('LinkPreviewCard', () => {
 
     expect(screen.getByText('This link is invalid.')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveAttribute('data-state', 'error');
-    expect(invoke).not.toHaveBeenCalled();
+    expect(fetchLinkPreview).not.toHaveBeenCalled();
   });
 
   it('rejects remote image URLs so the webview never contacts a tracking host', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({
+    vi.mocked(fetchLinkPreview).mockResolvedValueOnce({
       ...preview,
       image_url: 'https://tracker.example/pixel.png',
     });
@@ -102,22 +105,22 @@ describe('LinkPreviewCard', () => {
   });
 
   it('deduplicates concurrent requests and reuses the bounded cache', async () => {
-    vi.mocked(invoke).mockResolvedValue(preview);
+    vi.mocked(fetchLinkPreview).mockResolvedValue(preview);
     const first = render(<LinkPreviewCard url="https://example.com/post" />);
     const second = render(<LinkPreviewCard url="https://example.com/post" />);
 
     await waitFor(() => expect(screen.getAllByText('Example title')).toHaveLength(2));
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(fetchLinkPreview).toHaveBeenCalledTimes(1);
     first.unmount();
     second.unmount();
 
     render(<LinkPreviewCard url="https://example.com/post" />);
     expect(await screen.findByText('Example title')).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(fetchLinkPreview).toHaveBeenCalledTimes(1);
   });
 
   it('fetches fresh metadata when the normalized URL prop changes', async () => {
-    vi.mocked(invoke)
+    vi.mocked(fetchLinkPreview)
       .mockResolvedValueOnce(preview)
       .mockResolvedValueOnce({
         ...preview,
@@ -130,13 +133,31 @@ describe('LinkPreviewCard', () => {
 
     view.rerender(<LinkPreviewCard url="https://second.example/post" />);
     expect(await screen.findByText('Second title')).toBeInTheDocument();
-    expect(invoke).toHaveBeenLastCalledWith('fetch_link_preview', {
-      url: 'https://second.example/post',
-    });
+    expect(fetchLinkPreview).toHaveBeenLastCalledWith('https://second.example/post');
+  });
+
+  it('cannot publish or cache metadata resolved after a profile runtime reset', async () => {
+    let resolve!: (value: typeof preview) => void;
+    vi.mocked(fetchLinkPreview).mockReturnValueOnce(new Promise((done) => (resolve = done)));
+    const first = render(<LinkPreviewCard url="https://profile-a.example/post" />);
+
+    clearLinkPreviewCache();
+    resolve({ ...preview, title: 'Profile A private preview' });
+
+    expect(
+      await screen.findByText(/Preview was cleared when the active account changed/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Profile A private preview')).not.toBeInTheDocument();
+    first.unmount();
+
+    vi.mocked(fetchLinkPreview).mockResolvedValueOnce({ ...preview, title: 'Profile B preview' });
+    render(<LinkPreviewCard url="https://profile-a.example/post" />);
+    expect(await screen.findByText('Profile B preview')).toBeInTheDocument();
+    expect(fetchLinkPreview).toHaveBeenCalledTimes(2);
   });
 
   it('keeps provider content inert while showing the safe metadata card', async () => {
-    vi.mocked(invoke).mockResolvedValueOnce({
+    vi.mocked(fetchLinkPreview).mockResolvedValueOnce({
       ...preview,
       url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
       title: 'A YouTube video',

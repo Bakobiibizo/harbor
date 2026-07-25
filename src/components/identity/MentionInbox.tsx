@@ -4,6 +4,7 @@ import { mentionsService } from '../../services';
 import type { MentionReceipt } from '../../types';
 import { useContactsStore } from '../../stores';
 import { safePeerLabel } from '../../utils/relayName';
+import { getErrorMessage } from '../../utils/errors';
 
 export function MentionInbox() {
   const contacts = useContactsStore((state) => state.contacts);
@@ -14,7 +15,7 @@ export function MentionInbox() {
     mentionsService
       .listPending()
       .then(setItems)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err) => setError(getErrorMessage(err)));
   }, []);
   async function decide(
     id: string,
@@ -27,7 +28,7 @@ export function MentionInbox() {
       setItems((all) => all.filter((item) => item.mentionId !== id));
       toast.success('Mention preference saved');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setReviewing(null);
     }
@@ -48,11 +49,14 @@ export function MentionInbox() {
           style={{ border: '1px solid hsl(var(--harbor-border-subtle))' }}
         >
           <strong>
-            {safePeerLabel(
-              item.senderPeerId,
-              contacts.find((contact) => contact.peerId === item.senderPeerId)
-                ?.verifiedQualifiedName,
-            )}
+            {(() => {
+              const contact = contacts.find((entry) => entry.peerId === item.senderPeerId);
+              return safePeerLabel(
+                item.senderPeerId,
+                contact?.verifiedQualifiedName,
+                contact?.displayName,
+              );
+            })()}
           </strong>
           <p className="text-sm my-2">{item.preview}</p>
           <div className="flex flex-wrap gap-2">
@@ -67,7 +71,7 @@ export function MentionInbox() {
                 disabled={reviewing === item.mentionId}
                 onClick={() => decide(item.mentionId, 'accept-repost')}
               >
-                Repost on my wall
+                Repost on my profile
               </button>
             )}
             <button onClick={() => decide(item.mentionId, 'decline')}>Decline</button>

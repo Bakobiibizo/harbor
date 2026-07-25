@@ -23,7 +23,7 @@ describe('BugReportForm', () => {
     await waitFor(() => expect(mentionsService.publish).toHaveBeenCalled());
     expect(screen.getByText('Bug report submitted')).toBeInTheDocument();
     const trackingLink = screen.getByRole('link', {
-      name: 'Track this report on @bugs@harbor.social’s wall',
+      name: 'Track this report on @bugs@harbor.social’s profile',
     });
     expect(trackingLink).toHaveAttribute('href', '#/name/%40bugs%40harbor.social/wall');
     expect(trackingLink.getAttribute('href')).not.toContain('peer');
@@ -31,5 +31,27 @@ describe('BugReportForm', () => {
     expect(vi.mocked(mentionsService.publish).mock.calls[0][0].mentions[0].intent).toBe(
       'repost-request',
     );
+  });
+
+  it('keeps the report intact and shows a structured publish failure', async () => {
+    vi.mocked(mentionsService.resolve).mockResolvedValue({
+      qualifiedName: '@bugs@harbor.social',
+      status: 'private',
+      claimDigest: 'd',
+    });
+    vi.mocked(mentionsService.publish).mockRejectedValue({
+      code: 'NETWORK_TIMEOUT',
+      message: 'The relay did not respond',
+    });
+
+    render(<BugReportForm />);
+    fireEvent.change(screen.getByLabelText('Bug summary'), { target: { value: 'Crash' } });
+    fireEvent.change(screen.getByLabelText('Bug details'), { target: { value: 'It crashed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit signed bug report' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The relay did not respond');
+    expect(screen.getByLabelText('Bug summary')).toHaveValue('Crash');
+    expect(screen.getByLabelText('Bug details')).toHaveValue('It crashed');
+    expect(screen.queryByText('Bug report submitted')).not.toBeInTheDocument();
   });
 });

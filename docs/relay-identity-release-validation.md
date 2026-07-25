@@ -10,7 +10,7 @@ From the repository root on Linux or WSL:
 ./scripts/validate-relay-identity-release.sh 2>&1 | tee relay-identity-validation.log
 ```
 
-The script runs the complete frontend, client, and relay CI gates before named identity regressions. It tests canonical names, signed introduction and contact-card cryptography, sealed unknown-name delivery, wrong-recipient and tamper rejection, capability expiry and revocation, relay wall denial, challenge/session replay, bounded generic responses, persistent relay-key rotation, forged claims/posts, private mention review, and restart recovery.
+The script runs the complete frontend, client, relay, and deployment-template gates before named identity regressions. It tests canonical names, signed introduction and contact-card cryptography, sealed unknown-name delivery, wrong-recipient and tamper rejection, capability expiry and revocation, relay wall denial, challenge/session replay, bounded generic responses, persistent relay-key rotation, owner-only atomic identity-key storage, deployment-log sentinel non-disclosure, forged claims/posts, private mention review, and restart recovery.
 
 Retain the log with the release evidence. A command that selects zero tests is not evidence; confirm every invocation reports at least one test executed.
 
@@ -72,6 +72,7 @@ Record pass/fail and the evidence location for every row.
 | Registration replay and collision | `registration_nonce_replay_leaves_assignment_unchanged`, `concurrent_collision_has_exactly_one_winner_and_persists_after_reopen` |
 | Forged claim rejection | `every_forged_claim_field_is_rejected` |
 | Relay-key substitution/rotation | `relay_key_pin_survives_reopen_and_rejects_substitution`, `signed_rotation_persists_and_blocks_rollback_or_silent_replacement`, relay rotation rollback/compromise tests |
+| Relay private-key storage/disclosure | `identity_key` tests and `infrastructure/tests/relay-key-hardening.sh` |
 | Authentication replay/restart | `rejects_replay_expiry_wrong_key_and_tampering`, `relay_restart_invalidates_prior_session_epoch` |
 | Introduction mutation | `mutated_signed_introductions_never_create_decision_rows` |
 | Wrong-recipient/tamper/expiry | `contact_card_round_trip_and_tamper_rejection`, `unknown_name_sealed_delivery_round_trip_rejects_wrong_recipient_tamper_and_expiry` |

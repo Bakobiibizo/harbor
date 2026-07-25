@@ -72,7 +72,11 @@ describe('useContactsStore', () => {
     await useContactsStore.getState().sendRequest('peer-alice');
     expect(useContactsStore.getState().requests).toEqual([pending]);
 
-    vi.mocked(contactsService.respondContactRequest).mockResolvedValue();
+    vi.mocked(contactsService.respondContactRequest).mockResolvedValue({
+      peerId: 'peer-alice',
+      status: 'accepted',
+      delivery: 'offline',
+    });
     vi.mocked(contactsService.getActiveContacts).mockResolvedValue(mockContacts);
     await useContactsStore.getState().respondToRequest('r1', 'accepted');
     expect(contactsService.respondContactRequest).toHaveBeenCalledWith('r1', 'accepted');

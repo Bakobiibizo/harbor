@@ -45,7 +45,8 @@ export class ReactiveRefreshCoordinator {
   }
 
   start(): void {
-    if (this.fallbackHandle || this.stopped) return;
+    if (this.fallbackHandle) return;
+    this.stopped = false;
     this.fallbackHandle = setInterval(() => {
       this.enqueue({ domains: ['contacts', 'requests', 'messages', 'posts'] });
     }, this.fallbackMs);

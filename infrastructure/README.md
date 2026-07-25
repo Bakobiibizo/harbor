@@ -2,7 +2,7 @@
 
 ## Fast path for AWS Console users
 
-1. Decide whether you want a **Connection Relay** (network connectivity only) or a **Community Relay** (connectivity, named community, boards, and storage).
+1. Decide whether you want a **Lightweight Relay** (connectivity, names, introductions, and walls) or a **Community Relay** (the same services plus named community boards).
 2. Open the matching **Launch Stack** link below for your preferred region.
 3. Sign in to AWS and keep the generated template URL and stack name.
 4. For a community relay, enter the public community name people should see in Harbor.
@@ -14,7 +14,9 @@
 
 If creation fails, open the stack's **Events** tab. The first red event normally contains the useful error. Deleting the stack removes the deployment resources and stops ongoing compute charges.
 
-This directory contains AWS CloudFormation templates for deploying relay servers that support Harbor's P2P networking and optional community/wall-sync relay storage.
+This directory contains AWS CloudFormation templates for deploying relay servers that support Harbor's P2P networking, relay-scoped identity, introductions, and wall sync, with optional community boards.
+
+All templates expose the validated finite relay resource model documented in [`../docs/relay-resource-limits.md`](../docs/relay-resource-limits.md). The same defaults drive CLI/environment configuration and containers; startup logs the effective values for inspection.
 
 ## Choose the identity namespace first
 
@@ -31,12 +33,20 @@ The namespace is an identity authority. Changing it later changes users' qualifi
 
 Before replacing a relay identity key, follow the signed rotation and emergency recovery procedure in [`../docs/relay-key-rotation-operations.md`](../docs/relay-key-rotation-operations.md). Replacing `id.key` without that procedure changes the relay peer ID and is intentionally rejected by clients with an existing namespace pin.
 
+The current templates restore identity material through an owner-only temporary file, publish it atomically, and run the relay with `UMask=0077`. Startup fails when an existing key is a symlink, has a different owner, or grants group/other access. Validate the template disclosure boundary before deployment:
+
+```bash
+./infrastructure/tests/relay-key-hardening.sh
+```
+
+Deployments created with an older shell-tracing template require the operator-only exposure review and possible signed rotation described in the rotation runbook. Never paste cloud-init, console, or journal output into release evidence while checking for exposure.
+
 ## Two Templates
 
 | Template              | File                                  | Use Case                                             |
 | --------------------- | ------------------------------------- | ---------------------------------------------------- |
-| **Lightweight Relay** | `relay-cloudformation.yaml`           | NAT traversal only — minimal resource usage          |
-| **Community Relay**   | `community-relay-cloudformation.yaml` | NAT traversal + community boards with SQLite storage |
+| **Lightweight Relay** | `relay-cloudformation.yaml`           | NAT traversal, identity, introductions, and walls    |
+| **Community Relay**   | `community-relay-cloudformation.yaml` | Lightweight services plus community boards           |
 
 Both templates:
 
@@ -44,9 +54,10 @@ Both templates:
 - Write the relay address to **SSM Parameter Store** automatically
 - Run as a systemd service with automatic restarts
 - Use an **Elastic IP** for a stable address
+- Persist relay-scoped identity, introduction, and wall state in SQLite
 - Carry Harbor/libp2p traffic and call signaling only; they do **not** provide WebRTC TURN/SFU/MCU media relay behavior
 
-Community relay mode additionally stores community/wall data in SQLite and participates in wall-sync validation, including contacts-only `WallRead` enforcement. Production wall-sync claims still require the multi-profile evidence in `../docs/wall-sync-multi-profile-validation.md`.
+Community relay mode additionally enables named community boards. Both modes participate in wall-sync validation, including contacts-only `WallRead` enforcement. Production wall-sync claims still require the multi-profile evidence in `../docs/wall-sync-multi-profile-validation.md`.
 
 ## Harbor-operated community relay
 

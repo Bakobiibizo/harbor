@@ -178,7 +178,9 @@ fn two_relays_three_identities_collision_restart_and_cross_namespace_intro() {
     };
     alpha.with_connection(|c| {
         let mut service = IntroductionService::new(c, &auth, &mut abuse).unwrap();
-        let response = service.submit(&submit, "test-net", envelope, 100, false);
+        let response = service
+            .submit_with_outcome(&submit, "test-net", envelope, 100, false)
+            .response;
         assert_eq!(response.status, "accepted-for-processing");
         let queued = service.take(&read, 101, 10).unwrap();
         assert_eq!(queued.len(), 1);

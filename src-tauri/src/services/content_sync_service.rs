@@ -338,12 +338,17 @@ impl ContentSyncService {
         let posts =
             self.get_posts_after_cursor(&identity.peer_id, our_cursor, visibility_filter, limit)?;
 
+        let post_ids = posts
+            .iter()
+            .map(|post| post.post_id.clone())
+            .collect::<Vec<_>>();
+        let mut media_by_post = PostsRepository::get_media_hashes_batch(&self.db, &post_ids)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
         // Build post summaries
         let post_summaries: Vec<PostSummary> = posts
             .iter()
             .map(|post| {
-                let media_hashes =
-                    PostsRepository::get_media_hashes(&self.db, &post.post_id).unwrap_or_default();
+                let media_hashes = media_by_post.remove(&post.post_id).unwrap_or_default();
 
                 PostSummary {
                     post_id: post.post_id.clone(),

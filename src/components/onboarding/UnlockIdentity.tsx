@@ -3,6 +3,7 @@ import { Button, Input } from '../common';
 import { useIdentityStore } from '../../stores';
 import { HarborIcon, LockIcon, UnlockIcon, UsersIcon } from '../icons';
 import { safeIdentityLabel } from '../../utils/relayName';
+import { AvatarMedia } from '../common/AvatarMedia';
 
 interface UnlockIdentityProps {
   onSwitchAccount?: () => void;
@@ -130,9 +131,8 @@ export function UnlockIdentity({ onSwitchAccount }: UnlockIdentityProps) {
                   }}
                 >
                   {identity.avatarHash ? (
-                    <img
-                      src={`/media/${identity.avatarHash}`}
-                      alt=""
+                    <AvatarMedia
+                      hash={identity.avatarHash}
                       className="w-full h-full rounded-full object-cover"
                     />
                   ) : (

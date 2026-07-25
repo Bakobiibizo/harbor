@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { notifyHarborEvent } from './harborNotifications';
 import { useNotificationsStore } from '../stores/notifications';
+import { activateProfile, suspendProfile } from './profileSession';
 
 vi.mock('./nativeNotifications', () => ({ sendNativeHarborNotification: vi.fn() }));
 vi.mock('../stores/identity', () => ({
@@ -11,6 +12,9 @@ vi.mock('../stores/identity', () => ({
 
 describe('notifyHarborEvent', () => {
   beforeEach(() => {
+    suspendProfile();
+    activateProfile('notification-service-test');
+    localStorage.clear();
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'notice-1') });
     useNotificationsStore.getState().reset();
   });

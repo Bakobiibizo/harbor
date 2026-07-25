@@ -3,9 +3,12 @@ import toast from 'react-hot-toast';
 import { XIcon } from '../icons';
 import { Button } from './Button';
 import { addContactFromString } from '../../services/network';
+import { identityService } from '../../services/identity';
 import { safePeerLabel } from '../../utils/relayName';
 import { parseContactInvite } from '../../utils/contactInvite';
+import { qualifiedRelayName, type RelayNameClaim } from '../../types';
 import { HARBOR_SHORTCUT_EVENTS } from '../../hooks/useKeyboardNavigation';
+import { getErrorMessage } from '../../utils/errors';
 
 interface Props {
   contactString: string;
@@ -16,6 +19,7 @@ interface ContactPreview {
   displayName: string;
   peerId: string;
   bio?: string;
+  relayNameClaim?: RelayNameClaim;
 }
 
 function parseContactString(contactString: string): ContactPreview | null {
@@ -25,6 +29,7 @@ function parseContactString(contactString: string): ContactPreview | null {
       displayName: bundle.displayName,
       peerId: bundle.peerId,
       bio: bundle.bio ?? undefined,
+      relayNameClaim: bundle.relayNameClaim,
     };
   } catch {
     return null;
@@ -33,6 +38,7 @@ function parseContactString(contactString: string): ContactPreview | null {
 
 export function AddContactDialog({ contactString, onClose }: Props) {
   const [isLoading, setIsLoading] = useState(false);
+  const [verifiedQualifiedName, setVerifiedQualifiedName] = useState<string | null>(null);
   const preview = parseContactString(contactString);
 
   useEffect(() => {
@@ -40,14 +46,38 @@ export function AddContactDialog({ contactString, onClose }: Props) {
     return () => window.removeEventListener(HARBOR_SHORTCUT_EVENTS.escape, onClose);
   }, [onClose]);
 
+  useEffect(() => {
+    let current = true;
+    setVerifiedQualifiedName(null);
+    const claim = preview?.relayNameClaim;
+    if (!claim) {
+      return () => {
+        current = false;
+      };
+    }
+    void identityService.verifyNameClaim(claim).then(
+      (verified) => {
+        if (current && verified) setVerifiedQualifiedName(qualifiedRelayName(claim));
+      },
+      (error) => {
+        if (current) console.warn('Could not verify relay name claim from contact invite:', error);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [contactString]);
+
   async function handleConfirm() {
     setIsLoading(true);
     try {
       await addContactFromString(contactString);
-      // contact_added event in useTauriEvents handles refreshContacts() and success toast
+      toast.success(
+        'Contact request sent. Keys and sharing access will be added after acceptance.',
+      );
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add contact');
+      toast.error(`Failed to add contact: ${getErrorMessage(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -91,7 +121,7 @@ export function AddContactDialog({ contactString, onClose }: Props) {
         <div className="px-6 py-5 space-y-4">
           <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
             {preview
-              ? 'Do you want to add this person to your contacts?'
+              ? 'Send this person a contact request? Their keys and sharing access are added only after they accept.'
               : 'This contact invite is malformed or no longer supported.'}
           </p>
 
@@ -103,7 +133,9 @@ export function AddContactDialog({ contactString, onClose }: Props) {
               className="font-semibold text-base"
               style={{ color: 'hsl(var(--harbor-text-primary))' }}
             >
-              {preview ? safePeerLabel(preview.peerId) : 'Unknown contact'}
+              {preview
+                ? safePeerLabel(preview.peerId, verifiedQualifiedName, preview.displayName)
+                : 'Unknown contact'}
             </p>
             {preview?.bio && (
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
@@ -111,7 +143,9 @@ export function AddContactDialog({ contactString, onClose }: Props) {
               </p>
             )}
             <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-              Harbor will verify this person’s relay-qualified name before displaying it.
+              {verifiedQualifiedName
+                ? 'Relay-qualified name verified against your pinned relay key.'
+                : 'Harbor will verify this person’s relay-qualified name before displaying it.'}
             </p>
           </div>
         </div>
@@ -131,7 +165,7 @@ export function AddContactDialog({ contactString, onClose }: Props) {
             disabled={isLoading || !preview}
             onClick={handleConfirm}
           >
-            Add Contact
+            Send Request
           </Button>
         </div>
       </div>

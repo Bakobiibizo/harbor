@@ -1,4 +1,5 @@
 export { useTauriEvents } from './useTauriEvents';
+export { useHarborControlEvents } from './useHarborControlEvents';
 export { useAppVersion } from './useAppVersion';
 export {
   useKeyboardNavigation,

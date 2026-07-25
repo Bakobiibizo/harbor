@@ -1,6 +1,13 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { useIdentityStore, useNotificationsStore, useSettingsStore } from '../stores';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { open } from '@tauri-apps/plugin-dialog';
+import {
+  useAccountsStore,
+  useIdentityStore,
+  useNotificationsStore,
+  useSettingsStore,
+} from '../stores';
 import type { ThemeMode } from '../stores/settings';
 import {
   UserIcon,
@@ -13,7 +20,8 @@ import {
 import { checkForUpdate, downloadAndInstallUpdate } from '../services/updater';
 import type { UpdateInfo } from '../services/updater';
 import { useAppVersion } from '../hooks';
-import { BugReportForm, MentionInbox } from '../components/identity';
+import { useMediaUrl } from '../hooks/useMediaUrl';
+import { BugReportForm, MentionInbox, requestIdentityVerification } from '../components/identity';
 import { requestNativeNotificationPermission } from '../services/nativeNotifications';
 import {
   requestCallMediaAccess,
@@ -23,6 +31,11 @@ import {
 import { safeIdentityLabel } from '../utils/relayName';
 import { mediaService } from '../services/media';
 import type { MediaCacheDiagnostics, MediaCacheSettings } from '../types';
+import { getErrorMessage } from '../utils/errors';
+import { accountBackupService } from '../services';
+import { IdentityBackupActions } from '../components/account';
+import { suspendProfile } from '../services/profileSession';
+import { playMessageSound } from '../services/audioNotifications';
 
 // Sun icon for light mode
 function SunIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -90,13 +103,29 @@ function DownloadIcon(props: React.SVGProps<SVGSVGElement>) {
 }
 
 // Toggle component
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  enabled,
+  disabled = false,
+  label,
+  onChange,
+}: {
+  enabled: boolean;
+  disabled?: boolean;
+  label?: string;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={enabled}
+      disabled={disabled}
       onClick={() => onChange(!enabled)}
       className="w-12 h-6 rounded-full relative transition-colors duration-200"
       style={{
         background: enabled ? 'hsl(var(--harbor-primary))' : 'hsl(var(--harbor-surface-2))',
+        opacity: disabled ? 0.6 : 1,
       }}
     >
       <div
@@ -174,23 +203,25 @@ function PasswordInput({
 
 export function SettingsPage() {
   const installedVersion = useAppVersion();
-  const { state, updateBio } = useIdentityStore();
+  const { state, updateBio, updateProfileAvatar, changePassword } = useIdentityStore();
+  const activeAccount = useAccountsStore((store) => store.activeAccount);
+  const accounts = useAccountsStore((store) => store.accounts);
   const {
     showReadReceipts,
-    showOnlineStatus,
+    readReceiptsStatus,
+    readReceiptsError,
     defaultVisibility,
     providerEmbedConsent,
-    avatarUrl,
+    soundEnabled,
     theme,
     iceServers,
     addIceServer,
     removeIceServer,
     getRedactedIceServers,
     setShowReadReceipts,
-    setShowOnlineStatus,
     setDefaultVisibility,
     setProviderEmbedConsent,
-    setAvatarUrl,
+    setSoundEnabled,
     setTheme,
   } = useSettingsStore();
 
@@ -199,7 +230,7 @@ export function SettingsPage() {
   // Profile edit state
   const [bio, setBio] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [isSavingAvatar, setIsSavingAvatar] = useState(false);
 
   // Passphrase change state
   const [currentPass, setCurrentPass] = useState('');
@@ -214,13 +245,6 @@ export function SettingsPage() {
   const [deletePassphrase, setDeletePassphrase] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
-
-  // Import identity state
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [importError, setImportError] = useState('');
-  const [importPassphrase, setImportPassphrase] = useState('');
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [importFile, setImportFile] = useState<File | null>(null);
 
   // Calling ICE/STUN/TURN state
   const [iceUrls, setIceUrls] = useState('');
@@ -248,6 +272,7 @@ export function SettingsPage() {
   const [isSavingMediaCache, setIsSavingMediaCache] = useState(false);
 
   const identity = state.status === 'unlocked' ? state.identity : null;
+  const avatarMediaUrl = useMediaUrl(identity?.avatarHash);
   const notificationCount = storedNotifications.filter(
     (item) => item.ownerPeerId === identity?.peerId,
   ).length;
@@ -283,7 +308,7 @@ export function SettingsPage() {
     try {
       setMediaCache(await mediaService.updateCacheSettings(settings));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not update media cache');
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSavingMediaCache(false);
     }
@@ -298,38 +323,32 @@ export function SettingsPage() {
       .slice(0, 2);
   };
 
-  const handleAvatarUpload = () => {
-    avatarInputRef.current?.click();
-  };
-
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Check file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('Image must be less than 5MB');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      setAvatarUrl(String(reader.result));
-      toast.success('Profile photo updated!');
-    };
-    reader.onerror = () => toast.error('Could not read that image');
-    reader.readAsDataURL(file);
-
-    // Reset file input
-    if (avatarInputRef.current) {
-      avatarInputRef.current.value = '';
+  const handleAvatarUpload = async () => {
+    const path = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Profile photo', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+    });
+    if (typeof path !== 'string') return;
+    setIsSavingAvatar(true);
+    try {
+      await updateProfileAvatar(path);
+      toast.success('Profile photo updated for your contacts');
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setIsSavingAvatar(false);
     }
   };
 
-  const handleCopyHarborName = () => {
+  const handleCopyHarborName = async () => {
     if (identity?.relayNameVerified && identity.relayNameClaim) {
-      navigator.clipboard.writeText(safeIdentityLabel(identity));
-      toast.success('Harbor name copied to clipboard!');
+      try {
+        await navigator.clipboard.writeText(safeIdentityLabel(identity));
+        toast.success('Harbor name copied to clipboard!');
+      } catch (error) {
+        toast.error(`Could not copy Harbor name: ${getErrorMessage(error)}`);
+      }
     } else {
       toast.error('Claim a verified Harbor name before sharing this account.');
     }
@@ -368,93 +387,17 @@ export function SettingsPage() {
     }
 
     setIsChangingPass(true);
-
-    // Simulate passphrase change (in a real app, this would call the backend)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    setIsChangingPass(false);
-    setCurrentPass('');
-    setNewPass('');
-    setConfirmPass('');
-    toast.success('Password changed successfully!');
-  };
-
-  const handleExportIdentity = () => {
-    if (!identity) return;
-
-    // Create export data (encrypted identity blob)
-    const exportData = {
-      version: 1,
-      type: 'harbor-identity-backup',
-      peerId: identity.peerId,
-      displayName: identity.displayName,
-      bio: identity.bio,
-      createdAt: new Date().toISOString(),
-      encryptedKeys: 'ENCRYPTED_KEY_DATA_PLACEHOLDER',
-      note: "Keep this file safe. You'll need your password to restore it.",
-    };
-
-    // Create and download the file
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `harbor-backup-${identity.displayName.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    toast.success('Backup exported! Keep it safe.');
-  };
-
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setImportFile(file);
-      setShowImportModal(true);
-      setImportError('');
-      setImportPassphrase('');
+    try {
+      await changePassword(currentPass, newPass);
+      setCurrentPass('');
+      setNewPass('');
+      setConfirmPass('');
+      toast.success('Password changed successfully!');
+    } catch (error) {
+      setPassError(getErrorMessage(error));
+    } finally {
+      setIsChangingPass(false);
     }
-    // Reset the input
-    e.target.value = '';
-  };
-
-  const handleImportIdentity = async () => {
-    if (!importFile) return;
-
-    if (!importPassphrase) {
-      setImportError('Password is required to decrypt the backup');
-      return;
-    }
-
-    // Read and parse the file
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = JSON.parse(e.target?.result as string);
-
-        if (data.type !== 'harbor-identity-backup') {
-          setImportError('Invalid backup file format');
-          return;
-        }
-
-        // Simulate recovery process
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        toast.success(`Account recovered! Welcome back, ${data.displayName}`);
-        setShowImportModal(false);
-        setImportFile(null);
-        setImportPassphrase('');
-      } catch {
-        setImportError('Failed to parse backup file');
-      }
-    };
-    reader.readAsText(importFile);
   };
 
   const handleDeleteIdentity = () => {
@@ -475,21 +418,36 @@ export function SettingsPage() {
       return;
     }
 
+    const accountId =
+      activeAccount?.id ?? accounts.find((account) => account.peerId === identity?.peerId)?.id;
+    if (!accountId) {
+      setDeleteError('Harbor could not identify the active local account. Restart and try again.');
+      return;
+    }
+
+    setDeleteError('');
     setIsDeleting(true);
-
-    // Simulate deletion process
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    setIsDeleting(false);
-    toast.success('Account deleted. Goodbye!');
-    setShowDeleteModal(false);
-
-    // In a real app, this would clear all data and redirect to onboarding
+    try {
+      const result = await accountBackupService.deleteAccountProfile(accountId, deletePassphrase);
+      setShowDeleteModal(false);
+      toast.success('Account data was deleted from this device.');
+      suspendProfile();
+      if (result.restartRequired) await relaunch();
+      else window.location.reload();
+    } catch (error) {
+      setDeleteError(getErrorMessage(error));
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
-  const handleOnlineStatusChange = (value: boolean) => {
-    setShowOnlineStatus(value);
-    toast.success(value ? 'Online status visible to contacts' : 'Online status hidden');
+  const handleReadReceiptsChange = async (value: boolean) => {
+    try {
+      await setShowReadReceipts(value);
+      toast.success(value ? 'Read notifications enabled' : 'Read notifications disabled');
+    } catch (error) {
+      toast.error(`Could not update read notifications: ${getErrorMessage(error)}`);
+    }
   };
 
   const handleCheckForUpdate = async () => {
@@ -507,7 +465,7 @@ export function SettingsPage() {
         toast.success('You are running the latest version!');
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to check for updates';
+      const message = getErrorMessage(error);
       setUpdateError(message);
       toast.error(message);
     } finally {
@@ -522,7 +480,7 @@ export function SettingsPage() {
     try {
       await downloadAndInstallUpdate();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to install update';
+      const message = getErrorMessage(error);
       setUpdateError(message);
       toast.error(message);
     } finally {
@@ -544,8 +502,7 @@ export function SettingsPage() {
       setIceCredentialPersistence('session');
       toast.success('ICE server added');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Invalid ICE server configuration';
-      toast.error(message);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -589,7 +546,16 @@ export function SettingsPage() {
     const granted = await requestNativeNotificationPermission();
     setNativeNotificationsEnabled(granted);
     if (granted) toast.success('System notifications enabled');
-    else toast.error('Notification permission was not granted. In-app notifications remain available.');
+    else
+      toast.error(
+        'Notification permission was not granted. In-app notifications remain available.',
+      );
+  };
+
+  const handleSoundNotifications = (enabled: boolean) => {
+    setSoundEnabled(enabled);
+    if (enabled) playMessageSound();
+    toast.success(enabled ? 'Sound notifications enabled' : 'Sound notifications disabled');
   };
 
   const sections = [
@@ -597,33 +563,25 @@ export function SettingsPage() {
     { id: 'appearance', label: 'Appearance', icon: PaletteIcon, description: 'Theme and display' },
     { id: 'security', label: 'Security', icon: LockIcon, description: 'Password and keys' },
     { id: 'calls', label: 'Calls', icon: PhoneIcon, description: 'Connection help for calls' },
-    { id: 'notifications', label: 'Notifications', icon: ShieldIcon, description: 'Messages and calls' },
+    {
+      id: 'notifications',
+      label: 'Notifications',
+      icon: ShieldIcon,
+      description: 'Messages and calls',
+    },
     { id: 'privacy', label: 'Privacy', icon: ShieldIcon, description: 'Visibility controls' },
     { id: 'updates', label: 'Updates', icon: DownloadIcon, description: 'Check for new versions' },
     { id: 'support', label: 'Support', icon: ShieldIcon, description: 'Mentions and bug reports' },
   ];
 
   return (
-    <div className="h-full flex" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
-      {/* Hidden file inputs */}
-      <input
-        ref={avatarInputRef}
-        type="file"
-        accept="image/*"
-        onChange={handleAvatarChange}
-        className="hidden"
-      />
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json"
-        onChange={handleFileSelect}
-        className="hidden"
-      />
-
+    <div
+      className="harbor-settings-layout flex h-full"
+      style={{ background: 'hsl(var(--harbor-bg-primary))' }}
+    >
       {/* Settings sidebar - 33% width */}
       <div
-        className="md:w-1/3 md:max-w-xs flex flex-col border-b md:border-b-0 md:border-r flex-shrink-0"
+        className="harbor-settings-sidebar flex flex-shrink-0 flex-col border-b md:w-1/3 md:max-w-xs md:border-b-0 md:border-r"
         style={{
           borderColor: 'hsl(var(--harbor-border-subtle))',
           background: 'hsl(var(--harbor-bg-elevated))',
@@ -631,7 +589,7 @@ export function SettingsPage() {
       >
         {/* Header -- hidden on mobile to save space */}
         <div
-          className="hidden md:block p-4 border-b"
+          className="harbor-settings-header hidden border-b p-4 md:block"
           style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
         >
           <h2 className="text-lg font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
@@ -643,7 +601,7 @@ export function SettingsPage() {
         </div>
 
         {/* Mobile: horizontal scrollable tabs */}
-        <div className="md:hidden overflow-x-auto">
+        <div className="harbor-settings-mobile-nav overflow-x-auto md:hidden">
           <div className="flex p-2 gap-1 min-w-max">
             {sections.map((section) => {
               const Icon = section.icon;
@@ -682,7 +640,7 @@ export function SettingsPage() {
         </div>
 
         {/* Desktop: vertical nav list */}
-        <nav className="hidden md:block flex-1 p-2 space-y-1 overflow-y-auto">
+        <nav className="harbor-settings-desktop-nav hidden flex-1 space-y-1 overflow-y-auto p-2 md:block">
           {sections.map((section) => {
             const Icon = section.icon;
             const isActive = activeSection === section.id;
@@ -748,15 +706,18 @@ export function SettingsPage() {
         </nav>
 
         {/* Version info */}
-        <div className="p-4 border-t" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
+        <div
+          className="harbor-settings-version border-t p-4"
+          style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+        >
           <p className="text-xs text-center" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-            Harbor v1.0.0
+            Harbor {installedVersion}
           </p>
         </div>
       </div>
 
       {/* Settings content - 66% width */}
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="harbor-settings-content flex-1 overflow-y-auto p-8">
         <div className="max-w-2xl">
           {activeSection === 'profile' && (
             <div className="space-y-6">
@@ -785,14 +746,12 @@ export function SettingsPage() {
                     <div
                       className="w-24 h-24 rounded-full flex items-center justify-center text-2xl font-semibold text-white flex-shrink-0 overflow-hidden"
                       style={{
-                        background: avatarUrl ? 'transparent' : 'hsl(var(--harbor-surface-3))',
+                        background: avatarMediaUrl ? 'transparent' : 'hsl(var(--harbor-surface-3))',
                       }}
                     >
-                      {avatarUrl ? (
-                        <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                      ) : identity.avatarHash ? (
+                      {avatarMediaUrl ? (
                         <img
-                          src={`/media/${identity.avatarHash}`}
+                          src={avatarMediaUrl}
                           alt="Avatar"
                           className="w-full h-full object-cover"
                         />
@@ -817,6 +776,7 @@ export function SettingsPage() {
                     <div className="flex gap-2">
                       <button
                         onClick={handleAvatarUpload}
+                        disabled={isSavingAvatar}
                         className="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
                         style={{
                           background: 'hsl(var(--harbor-surface-1))',
@@ -824,13 +784,21 @@ export function SettingsPage() {
                           border: '1px solid hsl(var(--harbor-border-subtle))',
                         }}
                       >
-                        Upload Photo
+                        {isSavingAvatar ? 'Saving...' : 'Upload Photo'}
                       </button>
-                      {avatarUrl && (
+                      {identity?.avatarHash && (
                         <button
-                          onClick={() => {
-                            setAvatarUrl(null);
-                            toast.success('Photo removed');
+                          disabled={isSavingAvatar}
+                          onClick={async () => {
+                            setIsSavingAvatar(true);
+                            try {
+                              await updateProfileAvatar(null);
+                              toast.success('Photo removed for your contacts');
+                            } catch (error) {
+                              toast.error(getErrorMessage(error));
+                            } finally {
+                              setIsSavingAvatar(false);
+                            }
                           }}
                           className="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
                           style={{
@@ -935,8 +903,12 @@ export function SettingsPage() {
                     {identity ? safeIdentityLabel(identity) : 'No identity'}
                   </div>
                   <button
-                    onClick={handleCopyHarborName}
-                    disabled={!identity?.relayNameVerified}
+                    onClick={
+                      identity?.relayNameVerified
+                        ? handleCopyHarborName
+                        : requestIdentityVerification
+                    }
+                    disabled={!identity}
                     className="px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
                     style={{
                       background: 'hsl(var(--harbor-surface-1))',
@@ -944,11 +916,13 @@ export function SettingsPage() {
                       border: '1px solid hsl(var(--harbor-border-subtle))',
                     }}
                   >
-                    Copy
+                    {identity?.relayNameVerified ? 'Copy' : 'Verify name'}
                   </button>
                 </div>
                 <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                  This relay-qualified name is the public address people use to identify you.
+                  {identity?.relayNameVerified
+                    ? 'This relay-qualified name is the public address people use to identify you.'
+                    : 'Claim a relay-unique name so other people can verify this account is yours.'}
                 </p>
               </div>
 
@@ -1144,46 +1118,7 @@ export function SettingsPage() {
                   your account
                 </p>
 
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleExportIdentity}
-                    className="flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center justify-center gap-2"
-                    style={{
-                      background:
-                        'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                      color: 'white',
-                    }}
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                      />
-                    </svg>
-                    Export Backup
-                  </button>
-                  <button
-                    onClick={handleImportClick}
-                    className="flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center justify-center gap-2"
-                    style={{
-                      background: 'hsl(var(--harbor-surface-1))',
-                      color: 'hsl(var(--harbor-text-primary))',
-                      border: '1px solid hsl(var(--harbor-border-subtle))',
-                    }}
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                      />
-                    </svg>
-                    Recover Account
-                  </button>
-                </div>
+                <IdentityBackupActions allowExport identityLabel={identity?.displayName} />
 
                 <p className="text-xs mt-3" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                   Your backup file is encrypted with your password. Keep it safe and never share it.
@@ -1202,8 +1137,8 @@ export function SettingsPage() {
                   Delete Account
                 </h4>
                 <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Permanently delete your identity, messages, posts, and all associated data. This
-                  action cannot be undone.
+                  Permanently delete this account's identity, keys, messages, posts, and media from
+                  this device. Content already shared with contacts or relays cannot be recalled.
                 </p>
                 <button
                   onClick={handleDeleteIdentity}
@@ -1483,30 +1418,101 @@ export function SettingsPage() {
           {activeSection === 'notifications' && (
             <div className="space-y-6">
               <div>
-                <h3 className="text-xl font-semibold mb-1" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                <h3
+                  className="text-xl font-semibold mb-1"
+                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                >
                   Notifications
                 </h3>
                 <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                   Choose how Harbor alerts you to private messages and calls
                 </p>
               </div>
-              <div className="rounded-lg p-6" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>System notifications</h4>
-                    <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                      Show an operating-system alert when Harbor is in the background. Message text is never included.
+                    <h4
+                      className="font-medium"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      System notifications
+                    </h4>
+                    <p
+                      className="text-sm mt-0.5"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      Show an operating-system alert when Harbor is in the background. Message text
+                      is never included.
                     </p>
                   </div>
-                  <Toggle enabled={nativeNotificationsEnabled} onChange={(value) => void handleNativeNotifications(value)} />
+                  <Toggle
+                    label="System notifications"
+                    enabled={nativeNotificationsEnabled}
+                    onChange={(value) => void handleNativeNotifications(value)}
+                  />
                 </div>
               </div>
-              <div className="rounded-lg p-6" style={{ background: 'hsl(var(--harbor-bg-elevated))', border: '1px solid hsl(var(--harbor-border-subtle))' }}>
-                <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>Notification history</h4>
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h4
+                      className="font-medium"
+                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
+                    >
+                      Sound notifications
+                    </h4>
+                    <p
+                      className="text-sm mt-0.5"
+                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+                    >
+                      Play a sound for new messages, profile posts, and community board updates.
+                      Harbor suppresses sounds while you are already viewing the relevant content.
+                    </p>
+                  </div>
+                  <Toggle
+                    label="Sound notifications"
+                    enabled={soundEnabled}
+                    onChange={handleSoundNotifications}
+                  />
+                </div>
+              </div>
+              <div
+                className="rounded-lg p-6"
+                style={{
+                  background: 'hsl(var(--harbor-bg-elevated))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                }}
+              >
+                <h4 className="font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
+                  Notification history
+                </h4>
                 <p className="text-sm mt-1" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  {notificationCount} saved notification{notificationCount === 1 ? '' : 's'} · {mutedNotificationPeers} muted contact{mutedNotificationPeers === 1 ? '' : 's'}. History and read state remain on this profile.
+                  {notificationCount} saved notification{notificationCount === 1 ? '' : 's'} ·{' '}
+                  {mutedNotificationPeers} muted contact{mutedNotificationPeers === 1 ? '' : 's'}.
+                  History and read state remain on this profile.
                 </p>
-                <button type="button" onClick={() => identity && clearOwnerNotifications(identity.peerId)} disabled={notificationCount === 0} className="harbor-interactive mt-4 rounded-lg px-4 py-2 text-sm font-medium" style={{ background: 'hsl(var(--harbor-surface-2))', color: 'hsl(var(--harbor-text-primary))' }}>
+                <button
+                  type="button"
+                  onClick={() => identity && clearOwnerNotifications(identity.peerId)}
+                  disabled={notificationCount === 0}
+                  className="harbor-interactive mt-4 rounded-lg px-4 py-2 text-sm font-medium"
+                  style={{
+                    background: 'hsl(var(--harbor-surface-2))',
+                    color: 'hsl(var(--harbor-text-primary))',
+                  }}
+                >
                   Clear notification history
                 </button>
               </div>
@@ -1584,8 +1590,7 @@ export function SettingsPage() {
                   <Toggle
                     enabled={mediaCache?.settings.enabled ?? true}
                     onChange={(enabled) =>
-                      mediaCache &&
-                      void saveMediaCacheSettings({ ...mediaCache.settings, enabled })
+                      mediaCache && void saveMediaCacheSettings({ ...mediaCache.settings, enabled })
                     }
                   />
                 </div>
@@ -1720,34 +1725,29 @@ export function SettingsPage() {
                       Let others know when you've read their messages
                     </p>
                   </div>
-                  <Toggle enabled={showReadReceipts} onChange={setShowReadReceipts} />
+                  <Toggle
+                    label="Message read notifications"
+                    enabled={showReadReceipts}
+                    disabled={readReceiptsStatus === 'idle' || readReceiptsStatus === 'loading'}
+                    onChange={(value) => void handleReadReceiptsChange(value)}
+                  />
                 </div>
-              </div>
-
-              <div
-                className="rounded-lg p-6"
-                style={{
-                  background: 'hsl(var(--harbor-bg-elevated))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4
-                      className="font-medium"
-                      style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                    >
-                      Show online status
-                    </h4>
-                    <p
-                      className="text-sm mt-0.5"
-                      style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                    >
-                      Show when you're online to your contacts
-                    </p>
-                  </div>
-                  <Toggle enabled={showOnlineStatus} onChange={handleOnlineStatusChange} />
-                </div>
+                <p
+                  className="text-xs mt-3"
+                  role={readReceiptsStatus === 'error' ? 'alert' : undefined}
+                  style={{
+                    color:
+                      readReceiptsStatus === 'error'
+                        ? 'hsl(var(--harbor-error))'
+                        : 'hsl(var(--harbor-text-tertiary))',
+                  }}
+                >
+                  {readReceiptsStatus === 'loading'
+                    ? 'Loading the protocol policy…'
+                    : readReceiptsStatus === 'error'
+                      ? readReceiptsError || 'The protocol policy is unavailable.'
+                      : 'This setting is stored in your Harbor profile and controls signed read acknowledgements.'}
+                </p>
               </div>
             </div>
           )}
@@ -2135,7 +2135,7 @@ export function SettingsPage() {
                   Warning: This action is irreversible
                 </p>
                 <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Deleting your account will permanently remove:
+                  Deleting this account will permanently remove from this device:
                 </p>
                 <ul
                   className="text-sm mt-2 ml-4 space-y-1 list-disc"
@@ -2146,6 +2146,10 @@ export function SettingsPage() {
                   <li>All posts and media</li>
                   <li>Your contacts and permissions</li>
                 </ul>
+                <p className="text-sm mt-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                  Copies already delivered to contacts or published through a relay are not deleted
+                  from those other devices.
+                </p>
               </div>
 
               <div>
@@ -2216,150 +2220,6 @@ export function SettingsPage() {
                 }}
               >
                 {isDeleting ? 'Deleting...' : 'Delete Account Forever'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Import/Recover Modal */}
-      {showImportModal && (
-        <div
-          className="fixed inset-0 flex items-center justify-center z-50 p-4"
-          style={{ background: 'rgba(0, 0, 0, 0.6)' }}
-        >
-          <div
-            className="w-full max-w-md rounded-lg overflow-hidden"
-            style={{
-              background: 'hsl(var(--harbor-bg-elevated))',
-              border: '1px solid hsl(var(--harbor-border-subtle))',
-            }}
-          >
-            {/* Modal header */}
-            <div
-              className="px-6 py-4 flex items-center justify-between border-b"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
-              <h3
-                className="text-lg font-semibold"
-                style={{ color: 'hsl(var(--harbor-text-primary))' }}
-              >
-                Recover Account
-              </h3>
-              <button
-                onClick={() => {
-                  setShowImportModal(false);
-                  setImportFile(null);
-                }}
-                className="p-1 rounded-lg transition-colors duration-200"
-                style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-              >
-                <XIcon className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal body */}
-            <div className="p-6 space-y-4">
-              {/* Explanation section */}
-              <div
-                className="p-4 rounded-lg"
-                style={{
-                  background: 'hsl(var(--harbor-surface-1))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
-              >
-                <h4
-                  className="text-sm font-medium mb-2"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  What is account recovery?
-                </h4>
-                <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  If you previously exported a backup of your Harbor identity, you can use it to
-                  restore your account on this device. Your backup file contains your encrypted
-                  cryptographic keys.
-                </p>
-              </div>
-
-              <div
-                className="p-4 rounded-lg"
-                style={{
-                  background: 'hsl(var(--harbor-primary) / 0.1)',
-                  border: '1px solid hsl(var(--harbor-primary) / 0.2)',
-                }}
-              >
-                <p
-                  className="text-sm font-medium mb-1"
-                  style={{ color: 'hsl(var(--harbor-primary))' }}
-                >
-                  Selected backup file
-                </p>
-                <p
-                  className="text-sm truncate"
-                  style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                >
-                  {importFile?.name}
-                </p>
-              </div>
-
-              <div>
-                <label
-                  className="block text-sm font-medium mb-2"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  Enter backup password
-                </label>
-                <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-                  Enter the password you used when you created this backup. This will decrypt your
-                  identity keys.
-                </p>
-                <PasswordInput
-                  placeholder="Backup password"
-                  value={importPassphrase}
-                  onChange={setImportPassphrase}
-                />
-              </div>
-
-              {importError && (
-                <p className="text-sm" style={{ color: 'hsl(var(--harbor-error))' }}>
-                  {importError}
-                </p>
-              )}
-
-              <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-                Note: Recovering an account will replace your current identity if you have one.
-              </p>
-            </div>
-
-            {/* Modal footer */}
-            <div
-              className="px-6 py-4 flex gap-3 border-t"
-              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-            >
-              <button
-                onClick={() => {
-                  setShowImportModal(false);
-                  setImportFile(null);
-                }}
-                className="flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
-                style={{
-                  background: 'hsl(var(--harbor-surface-1))',
-                  color: 'hsl(var(--harbor-text-primary))',
-                  border: '1px solid hsl(var(--harbor-border-subtle))',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleImportIdentity}
-                className="flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors duration-200"
-                style={{
-                  background:
-                    'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                  color: 'white',
-                }}
-              >
-                Recover Account
               </button>
             </div>
           </div>

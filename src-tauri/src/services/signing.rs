@@ -152,29 +152,44 @@ impl Signable for SignablePermissionRevoke {}
 // MESSAGE TYPES
 // ============================================================
 
-/// Signable version of DirectMessage (excludes signature)
-///
-/// # Nonce Counter Field
-///
-/// The `nonce_counter` is included in the signed payload, which means:
-/// - Attacker cannot modify the counter without invalidating signature
-/// - Each message has a cryptographically bound nonce
-/// - Replay of exact message is detected via `check_and_record_nonce()`
+/// Signable version of a protocol-v2 direct-message create event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignableDirectMessage {
+pub struct SignableDirectMessageV2 {
+    pub protocol_version: u16,
     pub message_id: String,
+    pub event_id: String,
     pub conversation_id: String,
     pub sender_peer_id: String,
     pub recipient_peer_id: String,
+    pub nonce_id: [u8; 16],
     pub content_encrypted: Vec<u8>,
     pub content_type: String,
     pub reply_to: Option<String>,
-    pub nonce_counter: u64, // For replay protection - bound to signature
+    pub nonce_counter: u64,
     pub lamport_clock: u64,
     pub timestamp: i64,
 }
 
-impl Signable for SignableDirectMessage {}
+impl Signable for SignableDirectMessageV2 {}
+
+/// Signable version of a protocol-v2 encrypted immutable edit event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignableMessageEditV2 {
+    pub protocol_version: u16,
+    pub event_id: String,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub author_peer_id: String,
+    pub recipient_peer_id: String,
+    pub revision: u64,
+    pub nonce_id: [u8; 16],
+    pub content_encrypted: Vec<u8>,
+    pub nonce_counter: u64,
+    pub lamport_clock: u64,
+    pub authored_at: i64,
+}
+
+impl Signable for SignableMessageEditV2 {}
 
 /// Signable version of MessageAck (excludes signature)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +429,8 @@ impl Signable for SignableBoardListRequest {}
 pub struct SignableBoardPostsRequest {
     pub requester_peer_id: String,
     pub board_id: String,
+    pub after_timestamp: Option<i64>,
+    pub limit: u32,
     pub timestamp: i64,
 }
 
@@ -473,6 +490,8 @@ impl Signable for SignableWallPostDelete {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignableMediaFetchRequest {
     pub media_hash: String,
+    pub offset: u64,
+    pub max_bytes: u32,
     pub requester_peer_id: String,
     pub timestamp: i64,
 }
@@ -723,11 +742,14 @@ mod tests {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
 
-        let msg = SignableDirectMessage {
+        let msg = SignableDirectMessageV2 {
+            protocol_version: crate::services::MESSAGE_CRYPTO_VERSION,
             message_id: "msg-1".to_string(),
+            event_id: "msg-1".to_string(),
             conversation_id: "conv-1".to_string(),
             sender_peer_id: "12D3KooWSender".to_string(),
             recipient_peer_id: "12D3KooWRecipient".to_string(),
+            nonce_id: [7; 16],
             content_encrypted: vec![1, 2, 3, 4],
             content_type: "text".to_string(),
             reply_to: None,
@@ -740,7 +762,7 @@ mod tests {
         assert!(verify(&verifying_key, &msg, &signature).unwrap());
 
         // Tamper with nonce_counter
-        let tampered = SignableDirectMessage {
+        let tampered = SignableDirectMessageV2 {
             nonce_counter: 43,
             ..msg.clone()
         };

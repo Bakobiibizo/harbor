@@ -4,13 +4,15 @@ import { useIdentityStore, useAccountsStore } from '../../stores';
 import { HarborIcon, UserIcon, LockIcon, ShieldIcon, ChevronRightIcon } from '../icons';
 import { accountsService } from '../../services';
 import { configuredRelayNamespace, validateRelayLocalName } from '../../utils/relayNameInput';
+import { getErrorMessage } from '../../utils/errors';
+import { IdentityBackupActions } from '../account';
 
 interface CreateIdentityProps {
   onBack?: () => void;
 }
 
 export function CreateIdentity({ onBack }: CreateIdentityProps) {
-  const { completeOnboarding, error, clearError } = useIdentityStore();
+  const { completeOnboarding, initialize, error, clearError } = useIdentityStore();
   const { loadAccounts } = useAccountsStore();
 
   const [displayName, setDisplayName] = useState('');
@@ -84,7 +86,7 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
       }
     } catch (err) {
       setResumeAttempt(true);
-      setLocalError(err instanceof Error ? err.message : String(err));
+      setLocalError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -506,6 +508,21 @@ export function CreateIdentity({ onBack }: CreateIdentityProps) {
                 </div>
               )}
             </form>
+
+            <div
+              className="mt-6 pt-5 border-t"
+              style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+            >
+              <p className="text-sm mb-3" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
+                Already have an encrypted Harbor backup?
+              </p>
+              <IdentityBackupActions
+                onRestored={async () => {
+                  await loadAccounts();
+                  await initialize();
+                }}
+              />
+            </div>
 
             {/* Security notice */}
             {step === 2 && (

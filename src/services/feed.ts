@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
 import type { FeedItem } from '../types';
+import { invokeCommand } from './command';
 
 export type WallPreviewPerspective = 'guest' | 'contact' | 'owner';
 
@@ -22,7 +22,7 @@ export interface RssFeedConfig {
 export const feedService = {
   /** Get the user's feed (posts from contacts) */
   async getFeed(limit?: number, beforeTimestamp?: number): Promise<FeedItem[]> {
-    return invoke<FeedItem[]>('get_feed', { limit, beforeTimestamp });
+    return invokeCommand('get_feed', { limit, beforeTimestamp });
   },
 
   /** Get a specific user's wall */
@@ -31,7 +31,7 @@ export const feedService = {
     limit?: number,
     beforeTimestamp?: number,
   ): Promise<FeedItem[]> {
-    return invoke<FeedItem[]>('get_wall', {
+    return invokeCommand('get_wall', {
       authorPeerId,
       limit,
       beforeTimestamp,
@@ -40,27 +40,27 @@ export const feedService = {
 
   /** Sync all contact walls from the relay server into the local feed */
   async syncFromRelay(): Promise<void> {
-    return invoke<void>('sync_feed_from_relay');
+    return invokeCommand('sync_feed_from_relay');
   },
 
   /** Push the local wall to the relay server */
   async syncWallToRelay(): Promise<void> {
-    return invoke<void>('sync_wall_to_relay');
+    return invokeCommand('sync_wall_to_relay');
   },
 
   /** Fetch a specific contact's wall from the relay server */
   async fetchContactWall(authorPeerId: string): Promise<void> {
-    return invoke<void>('fetch_contact_wall_from_relay', { authorPeerId });
+    return invokeCommand('fetch_contact_wall_from_relay', { authorPeerId });
   },
 
   /** Push signed local wall comments/reactions to the relay server */
   async syncWallSocialEventsToRelay(): Promise<number> {
-    return invoke<number>('sync_wall_social_events_to_relay');
+    return invokeCommand('sync_wall_social_events_to_relay');
   },
 
   /** Fetch signed comments/reactions for visible wall posts from the relay server */
   async fetchWallSocialEvents(authorPeerId: string, postIds: string[]): Promise<void> {
-    return invoke<void>('fetch_wall_social_events_from_relay', { authorPeerId, postIds });
+    return invokeCommand('fetch_wall_social_events_from_relay', { authorPeerId, postIds });
   },
 
   /** Preview the local wall as a guest, contact, or owner */
@@ -69,7 +69,7 @@ export const feedService = {
     limit?: number,
     beforeTimestamp?: number,
   ): Promise<FeedItem[]> {
-    return invoke<FeedItem[]>('get_wall_preview', {
+    return invokeCommand('get_wall_preview', {
       perspective,
       limit,
       beforeTimestamp,
@@ -78,16 +78,16 @@ export const feedService = {
 
   /** Get persisted visibility counts for local wall preview summaries */
   async getWallVisibilityStats(): Promise<WallVisibilityStats> {
-    return invoke<WallVisibilityStats>('get_wall_visibility_stats');
+    return invokeCommand('get_wall_visibility_stats');
   },
 
   /** Generate RSS XML for public local wall posts only */
   async generateRssFeed(config?: RssFeedConfig): Promise<string> {
-    return invoke<string>('generate_rss_feed', { config });
+    return invokeCommand('generate_rss_feed', { config });
   },
 
   /** Get the Harbor app feed URI for sharing; this is not a hosted RSS URL. */
   async getRssFeedUrl(): Promise<string> {
-    return invoke<string>('get_rss_feed_url');
+    return invokeCommand('get_rss_feed_url');
   },
 };

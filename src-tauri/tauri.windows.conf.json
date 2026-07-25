@@ -9,6 +9,7 @@
         "minWidth": 800,
         "shadow": true,
         "title": "Harbor",
+        "useHttpsScheme": true,
         "width": 1200
       }
     ]

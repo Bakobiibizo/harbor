@@ -47,9 +47,11 @@ interface CallingState {
   declineIncomingGroupCall: () => Promise<void>;
   hangupActiveCall: (reason?: HangupReason) => Promise<void>;
   leaveGroupCall: (reason?: HangupReason) => Promise<void>;
+  retryGroupParticipant: (peerId: string) => Promise<void>;
   setCameraEnabled: (enabled: boolean) => Promise<void>;
   setGroupMuted: (muted: boolean) => Promise<void>;
   setGroupCameraEnabled: (enabled: boolean) => Promise<void>;
+  enableCallAudio: () => Promise<void>;
   switchCamera: (deviceId?: string) => Promise<void>;
   dismissCallUi: () => void;
   reset: () => void;
@@ -70,6 +72,7 @@ const idleRuntimeSnapshot: AudioCallRuntimeSnapshot = {
   localVideoStream: null,
   remoteVideoStream: null,
   remoteVideoAvailable: false,
+  remoteAudioBlocked: false,
   cameraError: null,
 };
 
@@ -110,19 +113,33 @@ let activeGroupCreatorPeerId: string | null = null;
 let activeGroupRosterVersion = 0;
 let pendingGroupInvite: GroupMembershipSignal | null = null;
 let pendingGroupOffers = new Map<string, SignalingEnvelope>();
+let lifecycleGeneration = 0;
+
+function clearGroupLifecycle(disposeState: 'idle' | 'ended' | 'failed' = 'idle') {
+  const currentGroupRuntime = groupRuntime;
+  groupRuntime = null;
+  pendingGroupInvite = null;
+  pendingGroupOffers.clear();
+  activeGroupCreatorPeerId = null;
+  activeGroupRosterVersion = 0;
+  currentGroupRuntime?.dispose(disposeState);
+}
 
 function getRuntime(set: (state: Partial<CallingState>) => void): AudioCallRuntime {
   if (!runtime) {
     const settings = useSettingsStore.getState();
+    const generation = lifecycleGeneration;
     runtime = new AudioCallRuntime({
       iceServers: settings.iceServers,
-      onStateChange: (runtimeSnapshot) =>
+      onStateChange: (runtimeSnapshot) => {
+        if (generation !== lifecycleGeneration) return;
         set({
           runtimeSnapshot,
           ...(runtimeSnapshot.error
             ? failureState(runtimeSnapshot.error, 'voice-video-call-runtime')
             : {}),
-        }),
+        });
+      },
     });
   }
   return runtime;
@@ -131,15 +148,28 @@ function getRuntime(set: (state: Partial<CallingState>) => void): AudioCallRunti
 function getGroupRuntime(set: (state: Partial<CallingState>) => void): GroupMeshCallRuntime {
   if (!groupRuntime) {
     const settings = useSettingsStore.getState();
+    const generation = lifecycleGeneration;
     groupRuntime = new GroupMeshCallRuntime({
       iceServers: settings.iceServers,
-      onStateChange: (groupRuntimeSnapshot) =>
+      onStateChange: (groupRuntimeSnapshot) => {
+        if (generation !== lifecycleGeneration) return;
         set({
           groupRuntimeSnapshot,
           ...(groupRuntimeSnapshot.error
             ? failureState(groupRuntimeSnapshot.error, 'group-call-runtime')
             : {}),
-        }),
+        });
+        if (groupRuntimeSnapshot.state === 'failed') {
+          clearGroupLifecycle();
+          set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+        } else if (
+          groupRuntimeSnapshot.state === 'ended' ||
+          (groupRuntimeSnapshot.state === 'idle' && groupRuntimeSnapshot.roomId !== null)
+        ) {
+          clearGroupLifecycle();
+          set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+        }
+      },
     });
   }
   return groupRuntime;
@@ -147,75 +177,52 @@ function getGroupRuntime(set: (state: Partial<CallingState>) => void): GroupMesh
 
 function disposeRuntime() {
   runtime?.dispose();
-  groupRuntime?.dispose();
   runtime = null;
-  groupRuntime = null;
   pendingIncomingEnvelope = null;
-  activeGroupCreatorPeerId = null;
-  activeGroupRosterVersion = 0;
-  pendingGroupInvite = null;
-  pendingGroupOffers.clear();
+  clearGroupLifecycle();
 }
 
 export const useCallingStore = create<CallingState>((set, get) => ({
   ...initialState,
 
   hydrateCalls: async () => {
+    const generation = lifecycleGeneration;
     set({ isLoading: true, error: null, failure: null });
     try {
-      const [activeCalls, callHistory, groupRooms] = await Promise.all([
+      const [activeCalls, callHistory] = await Promise.all([
         callingService.getActiveCalls(),
         callingService.getCallHistory(),
-        callingService.getActiveGroupCalls(),
       ]);
+      if (generation !== lifecycleGeneration) return;
       set({ activeCalls, callHistory, isLoading: false });
-      const identityState = useIdentityStore.getState().state;
-      const room = groupRooms[0];
-      if (room && identityState.status === 'unlocked' && !groupRuntime) {
-        pendingGroupInvite = {
-          roomId: room.roomId,
-          creatorPeerId: room.creatorPeerId,
-          senderPeerId: room.creatorPeerId,
-          action: 'invite',
-          topology: room.topology,
-          rosterVersion: room.rosterVersion,
-          participants: room.participants,
-          mediaMode: room.mediaMode,
-          nonce: 'persisted-room',
-          timestamp: room.updatedAt,
-          signature: [],
-        };
-        activeGroupCreatorPeerId = room.creatorPeerId;
-        activeGroupRosterVersion = room.rosterVersion;
-        getGroupRuntime(set).prepareIncomingGroupCall(
-          pendingGroupInvite,
-          identityState.identity.peerId,
-        );
-      }
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       set({ ...failureState(error, 'hydrate-calls'), isLoading: false });
     }
   },
 
   refreshActiveCalls: async () => {
+    const generation = lifecycleGeneration;
     try {
       const activeCalls = await callingService.getActiveCalls();
-      set({ activeCalls, error: null, failure: null });
+      if (generation === lifecycleGeneration) set({ activeCalls, error: null, failure: null });
     } catch (error) {
-      set(failureState(error, 'refresh-active-calls'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'refresh-active-calls'));
     }
   },
 
   refreshCallHistory: async (limit = 100) => {
+    const generation = lifecycleGeneration;
     try {
       const callHistory = await callingService.getCallHistory(limit);
-      set({ callHistory, error: null, failure: null });
+      if (generation === lifecycleGeneration) set({ callHistory, error: null, failure: null });
     } catch (error) {
-      set(failureState(error, 'refresh-call-history'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'refresh-call-history'));
     }
   },
 
   handleBackendEvent: async (event: NetworkEvent) => {
+    const generation = lifecycleGeneration;
     if (event.type !== 'call_signaling_received') {
       return;
     }
@@ -223,23 +230,46 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     set({ lastEventPeerId: event.peer_id });
     if (event.message.payload.type === 'group_membership') {
       const membership = event.message.payload.payload;
-      activeGroupCreatorPeerId = membership.creatorPeerId;
-      activeGroupRosterVersion = membership.rosterVersion;
       if (membership.action === 'terminate') {
-        groupRuntime?.dispose('ended');
-        groupRuntime = null;
+        clearGroupLifecycle('ended');
         set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
       } else if (membership.action === 'invite') {
         const identityState = useIdentityStore.getState().state;
         if (identityState.status !== 'unlocked') return;
+        clearGroupLifecycle();
         pendingGroupInvite = membership;
-        getGroupRuntime(set).prepareIncomingGroupCall(
-          membership,
-          identityState.identity.peerId,
-        );
+        activeGroupCreatorPeerId = membership.creatorPeerId;
+        activeGroupRosterVersion = membership.rosterVersion;
+        getGroupRuntime(set).prepareIncomingGroupCall(membership, identityState.identity.peerId);
       } else if (membership.action === 'leave') {
+        const identityState = useIdentityStore.getState().state;
+        const localPeerId =
+          identityState.status === 'unlocked' ? identityState.identity.peerId : null;
+        if (membership.senderPeerId === localPeerId) {
+          clearGroupLifecycle('ended');
+          set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+        } else {
+          activeGroupCreatorPeerId = membership.creatorPeerId;
+          activeGroupRosterVersion = membership.rosterVersion;
+          pendingGroupOffers.delete(membership.senderPeerId);
+          groupRuntime?.handleParticipantLeft(membership.senderPeerId);
+        }
+      } else if (membership.action === 'failed') {
+        activeGroupCreatorPeerId = membership.creatorPeerId;
+        activeGroupRosterVersion = membership.rosterVersion;
         pendingGroupOffers.delete(membership.senderPeerId);
-        groupRuntime?.handleParticipantLeft(membership.senderPeerId);
+        await groupRuntime?.handleParticipantFailed(
+          membership.senderPeerId,
+          'Participant could not establish call media.',
+        );
+      } else if (membership.action === 'decline') {
+        activeGroupCreatorPeerId = membership.creatorPeerId;
+        activeGroupRosterVersion = membership.rosterVersion;
+        pendingGroupOffers.delete(membership.senderPeerId);
+        await groupRuntime?.handleParticipantDeclined(membership.senderPeerId);
+      } else {
+        activeGroupCreatorPeerId = membership.creatorPeerId;
+        activeGroupRosterVersion = membership.rosterVersion;
       }
       return;
     }
@@ -249,6 +279,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     ) {
       if (groupRuntime && groupRuntime.getSnapshot().state !== 'ringing') {
         await groupRuntime.acceptParticipantOffer(event.message);
+        if (generation !== lifecycleGeneration) return;
         await get().hydrateCalls();
       } else {
         pendingGroupOffers.set(event.peer_id, event.message);
@@ -259,11 +290,15 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     const snapshot = callRuntime.getSnapshot();
 
     if (event.message.payload.type === 'offer') {
-      if (!['idle', 'ended', 'failed'].includes(snapshot.state)) {
-        await callingService.busyCall(
-          event.message.payload.payload.callId,
-          event.message.payload.payload.callerPeerId,
-        );
+      const offer = event.message.payload.payload;
+      const repeatsCurrentOffer =
+        snapshot.callId === offer.callId && snapshot.peerId === offer.callerPeerId;
+      if (repeatsCurrentOffer && snapshot.state !== 'incoming') {
+        return;
+      }
+      if (!repeatsCurrentOffer && !['idle', 'ended', 'failed'].includes(snapshot.state)) {
+        await callingService.busyCall(offer.callId, offer.callerPeerId);
+        if (generation !== lifecycleGeneration) return;
         await get().hydrateCalls();
         return;
       }
@@ -271,7 +306,9 @@ export const useCallingStore = create<CallingState>((set, get) => ({
     }
 
     await callRuntime.handleSignalingEvent(event);
+    if (generation !== lifecycleGeneration) return;
     await groupRuntime?.handleSignalingEnvelope(event.message);
+    if (generation !== lifecycleGeneration) return;
     await get().hydrateCalls();
   },
 
@@ -281,18 +318,21 @@ export const useCallingStore = create<CallingState>((set, get) => ({
   },
 
   startOutgoingCall: async (peerId: string, options = {}) => {
+    const generation = lifecycleGeneration;
     try {
       set({ error: null, failure: null });
       pendingIncomingEnvelope = null;
       await getRuntime(set).startOutgoingCall(peerId, options);
+      if (generation !== lifecycleGeneration) return;
       await get().hydrateCalls();
     } catch (error) {
-      set(failureState(error, 'start-outgoing-call'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'start-outgoing-call'));
       throw error;
     }
   },
 
   startOutgoingGroupCall: async (peerIds: string[], options = {}) => {
+    const generation = lifecycleGeneration;
     try {
       set({ error: null, failure: null });
       pendingIncomingEnvelope = null;
@@ -314,6 +354,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
         participants,
         mediaMode: options.video ? 'video' : 'audio',
       });
+      if (generation !== lifecycleGeneration) return;
       activeGroupCreatorPeerId = membership.creatorPeerId;
       activeGroupRosterVersion = membership.rosterVersion;
       await getGroupRuntime(set).startOutgoingGroupCall(peerIds, {
@@ -321,35 +362,45 @@ export const useCallingStore = create<CallingState>((set, get) => ({
         roomId: membership.roomId,
         localPeerId,
       });
+      if (generation !== lifecycleGeneration) return;
       await get().hydrateCalls();
     } catch (error) {
-      set(failureState(error, 'start-outgoing-group-call'));
+      if (generation === lifecycleGeneration) {
+        clearGroupLifecycle();
+        set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+        set(failureState(error, 'start-outgoing-group-call'));
+      }
       throw error;
     }
   },
 
   acceptIncomingCall: async () => {
+    const generation = lifecycleGeneration;
     if (!pendingIncomingEnvelope) {
-      set(failureState(new Error('No incoming call is available to answer.'), 'accept-call'));
-      return;
+      const error = new Error('No incoming call is available to answer.');
+      set(failureState(error, 'accept-call'));
+      throw error;
     }
 
     try {
       set({ error: null, failure: null });
       await getRuntime(set).acceptIncomingCall(pendingIncomingEnvelope);
+      if (generation !== lifecycleGeneration) return;
       pendingIncomingEnvelope = null;
       await get().hydrateCalls();
     } catch (error) {
-      set(failureState(error, 'accept-incoming-call'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'accept-incoming-call'));
       throw error;
     }
   },
 
   acceptIncomingGroupCall: async () => {
+    const generation = lifecycleGeneration;
     const membership = pendingGroupInvite;
     if (!membership) {
-      set(failureState(new Error('No incoming group call is available to answer.'), 'accept-group-call'));
-      return;
+      const error = new Error('No incoming group call is available to answer.');
+      set(failureState(error, 'accept-group-call'));
+      throw error;
     }
     try {
       set({ error: null, failure: null });
@@ -361,27 +412,49 @@ export const useCallingStore = create<CallingState>((set, get) => ({
         participants: membership.participants,
         mediaMode: membership.mediaMode,
       });
+      if (generation !== lifecycleGeneration) return;
       activeGroupRosterVersion = membership.rosterVersion;
-      await getGroupRuntime(set).acceptIncomingGroupCall(
-        membership,
-        [...pendingGroupOffers.values()],
-      );
+      await getGroupRuntime(set).acceptIncomingGroupCall(membership, [
+        ...pendingGroupOffers.values(),
+      ]);
+      if (generation !== lifecycleGeneration) return;
       pendingGroupOffers.clear();
       await get().hydrateCalls();
     } catch (error) {
-      set(failureState(error, 'accept-incoming-group-call'));
+      if (generation === lifecycleGeneration) {
+        try {
+          await callingService.sendGroupMembership({
+            roomId: membership.roomId,
+            creatorPeerId: membership.creatorPeerId,
+            action: 'failed',
+            rosterVersion: membership.rosterVersion,
+            participants: membership.participants,
+            mediaMode: membership.mediaMode,
+          });
+        } catch (signalError) {
+          console.warn(
+            '[Call] Failed to publish terminal group participant state:',
+            callFailureFrom(signalError, 'group-failure-signal').message,
+          );
+        }
+        clearGroupLifecycle();
+        set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+        set(failureState(error, 'accept-incoming-group-call'));
+      }
       throw error;
     }
   },
 
   declineIncomingCall: async () => {
+    const generation = lifecycleGeneration;
     const envelope = pendingIncomingEnvelope;
     if (envelope?.payload.type === 'offer') {
       const offer = envelope.payload.payload;
       try {
         await callingService.declineCall(offer.callId, offer.callerPeerId);
+        if (generation !== lifecycleGeneration) return;
       } catch (error) {
-        set(failureState(error, 'decline-incoming-call'));
+        if (generation === lifecycleGeneration) set(failureState(error, 'decline-incoming-call'));
         throw error;
       }
     }
@@ -393,25 +466,45 @@ export const useCallingStore = create<CallingState>((set, get) => ({
   },
 
   declineIncomingGroupCall: async () => {
-    pendingGroupInvite = null;
-    pendingGroupOffers.clear();
-    groupRuntime?.dispose();
-    groupRuntime = null;
+    const generation = lifecycleGeneration;
+    const membership = pendingGroupInvite;
+    if (membership) {
+      try {
+        await callingService.sendGroupMembership({
+          roomId: membership.roomId,
+          creatorPeerId: membership.creatorPeerId,
+          action: 'decline',
+          rosterVersion: membership.rosterVersion,
+          participants: membership.participants,
+          mediaMode: membership.mediaMode,
+        });
+        if (generation !== lifecycleGeneration) return;
+      } catch (error) {
+        if (generation === lifecycleGeneration) {
+          set(failureState(error, 'decline-incoming-group-call'));
+        }
+        throw error;
+      }
+    }
+    clearGroupLifecycle();
     set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
   },
 
   hangupActiveCall: async (reason = 'normal') => {
+    const generation = lifecycleGeneration;
     try {
       await runtime?.hangup(reason);
+      if (generation !== lifecycleGeneration) return;
       pendingIncomingEnvelope = null;
       await get().hydrateCalls();
     } catch (error) {
-      set(failureState(error, 'hangup-call'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'hangup-call'));
       throw error;
     }
   },
 
   leaveGroupCall: async (reason = 'normal') => {
+    const generation = lifecycleGeneration;
     try {
       const snapshot = groupRuntime?.getSnapshot();
       if (snapshot?.roomId && snapshot.localPeerId && activeGroupCreatorPeerId) {
@@ -419,56 +512,119 @@ export const useCallingStore = create<CallingState>((set, get) => ({
           snapshot.localPeerId,
           ...snapshot.participants.map((participant) => participant.peerId),
         ].sort();
-        await callingService.sendGroupMembership({
-          roomId: snapshot.roomId,
-          creatorPeerId: activeGroupCreatorPeerId,
-          action: snapshot.localPeerId === activeGroupCreatorPeerId ? 'terminate' : 'leave',
-          rosterVersion: activeGroupRosterVersion + 1,
-          participants,
-          mediaMode: snapshot.mediaMode,
-        });
+        try {
+          await callingService.sendGroupMembership({
+            roomId: snapshot.roomId,
+            creatorPeerId: activeGroupCreatorPeerId,
+            action: snapshot.localPeerId === activeGroupCreatorPeerId ? 'terminate' : 'leave',
+            rosterVersion: activeGroupRosterVersion + 1,
+            participants,
+            mediaMode: snapshot.mediaMode,
+          });
+        } catch (error) {
+          console.warn(
+            '[Call] Group leave notification was only partially delivered:',
+            callFailureFrom(error, 'group-leave-signal').message,
+          );
+        }
+        if (generation !== lifecycleGeneration) return;
         activeGroupRosterVersion += 1;
       }
       await groupRuntime?.leave(reason);
+      if (generation !== lifecycleGeneration) return;
+      clearGroupLifecycle('ended');
+      await get().hydrateCalls();
+      if (generation !== lifecycleGeneration) return;
+      clearGroupLifecycle();
+      set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+    } catch (error) {
+      if (generation === lifecycleGeneration) {
+        clearGroupLifecycle();
+        set({ groupRuntimeSnapshot: idleGroupRuntimeSnapshot });
+        set(failureState(error, 'leave-group-call'));
+      }
+      throw error;
+    }
+  },
+
+  retryGroupParticipant: async (peerId: string) => {
+    const generation = lifecycleGeneration;
+    if (!groupRuntime) {
+      const error = new Error('No active group call is available to retry.');
+      set(failureState(error, 'retry-group-participant'));
+      throw error;
+    }
+    try {
+      set({ error: null, failure: null });
+      await groupRuntime.retryParticipant(peerId);
+      if (generation !== lifecycleGeneration) return;
       await get().hydrateCalls();
     } catch (error) {
-      set(failureState(error, 'leave-group-call'));
+      if (generation === lifecycleGeneration) {
+        set(failureState(error, 'retry-group-participant'));
+      }
       throw error;
     }
   },
 
   setCameraEnabled: async (enabled: boolean) => {
+    const generation = lifecycleGeneration;
     try {
       await runtime?.setCameraEnabled(enabled);
     } catch (error) {
-      set(failureState(error, 'set-camera'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'set-camera'));
       throw error;
     }
   },
 
   setGroupMuted: async (muted: boolean) => {
+    const generation = lifecycleGeneration;
     try {
       await groupRuntime?.setLocalMuted(muted);
     } catch (error) {
-      set(failureState(error, 'set-group-muted'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'set-group-muted'));
       throw error;
     }
   },
 
   setGroupCameraEnabled: async (enabled: boolean) => {
+    const generation = lifecycleGeneration;
     try {
       await groupRuntime?.setCameraEnabled(enabled);
     } catch (error) {
-      set(failureState(error, 'set-group-camera'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'set-group-camera'));
+      throw error;
+    }
+  },
+
+  enableCallAudio: async () => {
+    const generation = lifecycleGeneration;
+    try {
+      const groupBlocked = groupRuntime
+        ?.getSnapshot()
+        .participants.some((participant) => participant.remoteAudioBlocked);
+      const enabled = groupBlocked
+        ? await groupRuntime?.enableRemoteAudio()
+        : await runtime?.enableRemoteAudio();
+      if (generation !== lifecycleGeneration) return;
+      if (!enabled) {
+        throw new Error(
+          'Audio is still blocked. Check the app volume and Windows or macOS audio permissions, then try again.',
+        );
+      }
+      set({ error: null, failure: null });
+    } catch (error) {
+      if (generation === lifecycleGeneration) set(failureState(error, 'enable-call-audio'));
       throw error;
     }
   },
 
   switchCamera: async (deviceId?: string) => {
+    const generation = lifecycleGeneration;
     try {
       await runtime?.switchCamera(deviceId);
     } catch (error) {
-      set(failureState(error, 'switch-camera'));
+      if (generation === lifecycleGeneration) set(failureState(error, 'switch-camera'));
       throw error;
     }
   },
@@ -484,6 +640,7 @@ export const useCallingStore = create<CallingState>((set, get) => ({
   },
 
   reset: () => {
+    lifecycleGeneration += 1;
     disposeRuntime();
     set(initialState);
   },

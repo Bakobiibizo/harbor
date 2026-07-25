@@ -7,13 +7,18 @@ import type { LikeSummary } from '../services/likes';
 import * as networkService from '../services/network';
 import { mediaService } from '../services/media';
 import { createLogger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 import type { FeedItem } from '../types';
+import { migrateLegacyProfileValue, profileStorageKey } from '../services/profileStorage';
 
 const log = createLogger('FeedStore');
 
 export type { Comment } from '../services/comments';
 
 const FEED_PREFS_STORAGE_KEY = 'harbor-feed-local-preferences-v1';
+const FEED_PROFILE_NAMESPACE = 'feed-preferences';
+const FEED_PROFILE_VERSION = 1;
+let lifecycleGeneration = 0;
 
 export interface SnoozedAuthor {
   peerId: string;
@@ -58,8 +63,12 @@ function readPreferences(): Required<PersistedFeedPreferences> {
     return { savedPostIds: [], hiddenPostIds: [], snoozedAuthors: [] };
   }
 
+  const raw = migrateLegacyProfileValue(
+    FEED_PREFS_STORAGE_KEY,
+    FEED_PROFILE_NAMESPACE,
+    FEED_PROFILE_VERSION,
+  );
   try {
-    const raw = localStorage.getItem(FEED_PREFS_STORAGE_KEY);
     if (!raw) return { savedPostIds: [], hiddenPostIds: [], snoozedAuthors: [] };
     return sanitizePreferences(JSON.parse(raw) as PersistedFeedPreferences);
   } catch (error) {
@@ -71,7 +80,10 @@ function readPreferences(): Required<PersistedFeedPreferences> {
 function writePreferences(prefs: PersistedFeedPreferences): Required<PersistedFeedPreferences> {
   const sanitized = sanitizePreferences(prefs);
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(FEED_PREFS_STORAGE_KEY, JSON.stringify(sanitized));
+    localStorage.setItem(
+      profileStorageKey(FEED_PROFILE_NAMESPACE, FEED_PROFILE_VERSION),
+      JSON.stringify(sanitized),
+    );
   }
   return sanitized;
 }
@@ -202,12 +214,14 @@ export const useFeedStore = create<FeedState>((set, get) => ({
   },
 
   toggleLike: async (postId: string) => {
+    const generation = lifecycleGeneration;
     const existing = [...get().rawFeedItems, ...get().feedItems].find(
       (item) => item.postId === postId,
     );
     const summary = existing?.likedByUser
       ? await likesService.unlikePost(postId)
       : await likesService.likePost(postId);
+    if (generation !== lifecycleGeneration) return;
 
     set((state) => {
       const update = (item: FeedItem) =>
@@ -327,10 +341,12 @@ export const useFeedStore = create<FeedState>((set, get) => ({
 
   // Load initial feed
   loadFeed: async (limit: number = 50) => {
+    const generation = lifecycleGeneration;
     set({ isLoading: true, error: null });
     try {
       const prefs = readPreferences();
       const rawFeedItems = await decorateFeedItems(await feedService.getFeed(limit));
+      if (generation !== lifecycleGeneration) return;
       set({
         ...prefs,
         ...applyFeedState(rawFeedItems, prefs.hiddenPostIds, prefs.snoozedAuthors),
@@ -345,15 +361,19 @@ export const useFeedStore = create<FeedState>((set, get) => ({
       }
 
       // Trigger background media preloader for any missing media
-      mediaService.preloadMissingMedia().catch(() => {});
+      mediaService
+        .preloadMissingMedia()
+        .catch((error) => log.warn('Background feed media preload is degraded', error));
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to load feed', error);
-      set({ error: String(error), isLoading: false });
+      set({ error: getErrorMessage(error), isLoading: false });
     }
   },
 
   // Load more items (pagination)
   loadMore: async (limit: number = 50) => {
+    const generation = lifecycleGeneration;
     const { rawFeedItems, feedItems, isLoading, hasMore } = get();
     if (isLoading || !hasMore) return;
 
@@ -363,6 +383,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
       const lastItem = existingRawFeedItems[existingRawFeedItems.length - 1];
       const beforeTimestamp = lastItem?.createdAt;
       const newItems = await decorateFeedItems(await feedService.getFeed(limit, beforeTimestamp));
+      if (generation !== lifecycleGeneration) return;
       const mergedRawFeedItems = [...existingRawFeedItems, ...newItems];
       const prefs = readPreferences();
 
@@ -379,18 +400,22 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         get().loadCommentCounts(postIds);
       }
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to load more feed items', error);
-      set({ error: String(error), isLoading: false });
+      set({ error: getErrorMessage(error), isLoading: false });
     }
   },
 
   // Refresh feed (reload from beginning)
   refreshFeed: async () => {
+    const generation = lifecycleGeneration;
     set({ isLoading: true, error: null, syncStatus: 'in_progress', syncError: null });
     try {
       await networkService.syncFeed(50);
+      if (generation !== lifecycleGeneration) return;
       const prefs = readPreferences();
       const rawFeedItems = await decorateFeedItems(await feedService.getFeed(50));
+      if (generation !== lifecycleGeneration) return;
       set({
         ...prefs,
         ...applyFeedState(rawFeedItems, prefs.hiddenPostIds, prefs.snoozedAuthors),
@@ -407,28 +432,32 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         get().loadCommentCounts(postIds);
       }
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to refresh feed', error);
       set({
-        error: String(error),
+        error: getErrorMessage(error),
         isLoading: false,
         lastSyncAt: nowSeconds(),
         syncStatus: 'partial_failure',
-        syncError: String(error),
+        syncError: getErrorMessage(error),
       });
     }
   },
 
   // Sync feed from relay server (fetches contact walls via relay)
   syncFromRelay: async () => {
+    const generation = lifecycleGeneration;
     const { isSyncingRelay } = get();
     if (isSyncingRelay) return; // Avoid concurrent syncs
 
     set({ isSyncingRelay: true, syncStatus: 'in_progress', syncError: null });
     try {
       await feedService.syncFromRelay();
+      if (generation !== lifecycleGeneration) return;
       // Reload local feed to pick up any new posts from the relay
       const prefs = readPreferences();
       const rawFeedItems = await decorateFeedItems(await feedService.getFeed(50));
+      if (generation !== lifecycleGeneration) return;
       set({
         ...prefs,
         ...applyFeedState(rawFeedItems, prefs.hiddenPostIds, prefs.snoozedAuthors),
@@ -439,14 +468,17 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         hasMore: rawFeedItems.length === 50,
       });
       // Trigger background media preloader (best-effort, no error handling)
-      mediaService.preloadMissingMedia().catch(() => {});
+      mediaService
+        .preloadMissingMedia()
+        .catch((error) => log.warn('Background relay media preload is degraded', error));
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       log.warn('Failed to sync feed from relay', error);
       set({
         isSyncingRelay: false,
         lastSyncAt: nowSeconds(),
         syncStatus: 'partial_failure',
-        syncError: String(error),
+        syncError: getErrorMessage(error),
       });
       // Don't set error state — relay sync is best-effort
     }
@@ -454,6 +486,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
 
   // Load comments for a specific post
   loadComments: async (postId: string) => {
+    const generation = lifecycleGeneration;
     const { loadingComments } = get();
     if (loadingComments.has(postId)) return;
 
@@ -463,6 +496,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
 
     try {
       const comments = await commentsService.getComments(postId);
+      if (generation !== lifecycleGeneration) return;
       set((state) => {
         const newLoading = new Set(state.loadingComments);
         newLoading.delete(postId);
@@ -473,6 +507,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         };
       });
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to load comments', error);
       set((state) => {
         const newLoading = new Set(state.loadingComments);
@@ -484,8 +519,10 @@ export const useFeedStore = create<FeedState>((set, get) => ({
 
   // Add a comment to a post
   addComment: async (postId: string, content: string) => {
+    const generation = lifecycleGeneration;
     try {
       const comment = await commentsService.addComment(postId, content);
+      if (generation !== lifecycleGeneration) return;
 
       set((state) => {
         const existingComments = state.comments[postId] || [];
@@ -496,15 +533,20 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         };
       });
     } catch (error) {
-      log.error('Failed to add comment', error);
+      if (generation === lifecycleGeneration) {
+        log.error('Failed to add comment', error);
+        set({ error: getErrorMessage(error) });
+      }
       throw error;
     }
   },
 
   // Delete a comment
   deleteComment: async (postId: string, commentId: string) => {
+    const generation = lifecycleGeneration;
     try {
       await commentsService.deleteComment(commentId);
+      if (generation !== lifecycleGeneration) return;
 
       set((state) => {
         const existingComments = state.comments[postId] || [];
@@ -518,7 +560,10 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         };
       });
     } catch (error) {
-      log.error('Failed to delete comment', error);
+      if (generation === lifecycleGeneration) {
+        log.error('Failed to delete comment', error);
+        set({ error: getErrorMessage(error) });
+      }
       throw error;
     }
   },
@@ -542,8 +587,10 @@ export const useFeedStore = create<FeedState>((set, get) => ({
 
   // Load comment counts for multiple posts
   loadCommentCounts: async (postIds: string[]) => {
+    const generation = lifecycleGeneration;
     try {
       const counts = await commentsService.getCommentCounts(postIds);
+      if (generation !== lifecycleGeneration) return;
       set((state) => {
         const newCounts = { ...state.commentCounts };
         for (const c of counts) {
@@ -552,7 +599,34 @@ export const useFeedStore = create<FeedState>((set, get) => ({
         return { commentCounts: newCounts };
       });
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to load comment counts', error);
     }
   },
 }));
+
+export function hydrateFeedProfile(): void {
+  useFeedStore.getState().hydratePreferences();
+}
+
+export function resetFeedProfileMemory(): void {
+  lifecycleGeneration += 1;
+  useFeedStore.setState({
+    rawFeedItems: [],
+    feedItems: [],
+    savedPostIds: [],
+    hiddenPostIds: [],
+    snoozedAuthors: [],
+    isLoading: false,
+    isSyncingRelay: false,
+    lastSyncAt: null,
+    syncError: null,
+    syncStatus: 'idle',
+    error: null,
+    hasMore: true,
+    comments: {},
+    commentCounts: {},
+    expandedComments: new Set<string>(),
+    loadingComments: new Set<string>(),
+  });
+}

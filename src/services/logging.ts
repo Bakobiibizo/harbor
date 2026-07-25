@@ -1,15 +1,15 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand } from './command';
 
 export async function exportLogs(): Promise<string> {
-  return invoke<string>('export_logs');
+  return invokeCommand('export_logs');
 }
 
 export async function getLogPath(): Promise<string> {
-  return invoke<string>('get_log_path');
+  return invokeCommand('get_log_path');
 }
 
 export async function cleanupLogs(maxFiles: number = 5): Promise<void> {
-  return invoke('cleanup_logs', { maxFiles });
+  return invokeCommand('cleanup_logs', { maxFiles });
 }
 
 export async function downloadLogs(): Promise<void> {

@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { invoke } from '@tauri-apps/api/core';
 import toast from 'react-hot-toast';
 import { isVerifiedQualifiedName, safePeerLabel } from '../utils/relayName';
 import { useIdentityStore, useNetworkStore, useContactsStore, useSettingsStore } from '../stores';
+import type { RelayStatus } from '../stores/network';
 import { contactsService } from '../services/contacts';
 import * as networkService from '../services/network';
+import { captureProfile, isCurrentProfile } from '../services/profileSession';
+import { getErrorMessage } from '../utils/errors';
+import { saveTextToDownloads } from '../services/downloads';
+import { contactInviteToWebUrl } from '../utils/contactInvite';
 import {
   NetworkIcon,
   UsersIcon,
@@ -19,6 +23,7 @@ import {
   TrashIcon,
 } from '../components/icons';
 import { ContactRequestsPanel } from '../components/common';
+import { AvatarMedia } from '../components/common/AvatarMedia';
 import {
   RELAY_CLOUDFORMATION_TEMPLATE,
   COMMUNITY_RELAY_CLOUDFORMATION_TEMPLATE,
@@ -67,14 +72,20 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (value: boo
 }
 
 // Copy button helper
-function CopyButton({ text, label }: { text: string; label?: string }) {
+export function CopyButton({ text, label }: { text: string; label?: string }) {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(label || 'Copied!');
+    } catch (error) {
+      toast.error(`Could not copy: ${getErrorMessage(error)}`);
+    }
+  };
+
   return (
     <button
       className="p-1.5 rounded hover:bg-white/10 flex-shrink-0"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        toast.success(label || 'Copied!');
-      }}
+      onClick={() => void handleCopy()}
       title="Copy"
     >
       <svg
@@ -93,6 +104,42 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
       </svg>
     </button>
   );
+}
+
+export function useShareableContactInvite(
+  isRunning: boolean,
+  relayStatus: RelayStatus,
+  profileEpoch: number | null,
+): string | null {
+  const [contactString, setContactString] = useState<string | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    const profile = captureProfile();
+    setContactString(null);
+    if (relayStatus !== 'connected' || !isRunning || profile?.epoch !== profileEpoch) {
+      return () => {
+        current = false;
+      };
+    }
+
+    networkService
+      .getShareableContactString()
+      .then((value) => {
+        if (current && isCurrentProfile(profile)) setContactString(value);
+      })
+      .catch((error) => {
+        if (!current || !isCurrentProfile(profile)) return;
+        console.warn('Could not get shareable contact string:', error);
+        setContactString(null);
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [isRunning, relayStatus, profileEpoch]);
+
+  return contactString;
 }
 
 export function NetworkPage() {
@@ -139,7 +186,12 @@ export function NetworkPage() {
   const [isConnectingPeer, setIsConnectingPeer] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [natDetectionTimedOut, setNatDetectionTimedOut] = useState(false);
-  const [shareableContactString, setShareableContactString] = useState<string | null>(null);
+  const shareableContactString = useShareableContactInvite(
+    isRunning,
+    relayStatus,
+    captureProfile()?.epoch ?? null,
+  );
+  const [removingContactPeerId, setRemovingContactPeerId] = useState<string | null>(null);
   const relayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check network status on mount and set up refresh interval
@@ -180,21 +232,6 @@ export function NetworkPage() {
 
     return () => clearTimeout(timeout);
   }, [isRunning, stats.natStatus]);
-
-  // Fetch shareable contact string when relay is connected
-  useEffect(() => {
-    if (relayStatus === 'connected' && isRunning) {
-      networkService
-        .getShareableContactString()
-        .then(setShareableContactString)
-        .catch((err) => {
-          console.warn('Could not get shareable contact string:', err);
-          setShareableContactString(null);
-        });
-    } else {
-      setShareableContactString(null);
-    }
-  }, [relayStatus, isRunning]);
 
   // Fix 3: Relay "Connecting..." spinner timeout (30s)
   useEffect(() => {
@@ -251,7 +288,7 @@ export function NetworkPage() {
       toast.success('Connecting to relay...');
       setRelayInput('');
     } catch (err) {
-      toast.error(`Failed to connect to relay: ${err}`);
+      toast.error(`Failed to connect to relay: ${getErrorMessage(err)}`);
     } finally {
       setIsConnectingRelay(false);
     }
@@ -263,7 +300,7 @@ export function NetworkPage() {
       await connectToPublicRelays();
       toast.success('Connecting to Harbor relay...');
     } catch (err) {
-      toast.error(`Failed to connect to public relays: ${err}`);
+      toast.error(`Failed to connect to public relays: ${getErrorMessage(err)}`);
     } finally {
       setIsConnectingRelay(false);
     }
@@ -280,8 +317,12 @@ export function NetworkPage() {
     try {
       // Official web links and native deep links normalize to the same bounded invite.
       if (input.startsWith('harbor://') || /^https:\/\//i.test(input)) {
-        await networkService.addContactFromString(input);
-        toast.success('Contact added successfully!');
+        const result = await networkService.addContactFromString(input);
+        toast.success(
+          result.delivery === 'connected'
+            ? 'Contact added and connected.'
+            : 'Contact added. They appear to be offline, so Harbor will connect when available.',
+        );
         refreshContacts();
         setPeerAddress('');
       } else if (input.includes('/p2p/')) {
@@ -293,7 +334,7 @@ export function NetworkPage() {
         toast.error('Invalid address format. Paste a Harbor contact link or a /p2p/ address.');
       }
     } catch (err) {
-      toast.error(`Failed: ${err}`);
+      toast.error(`Failed: ${getErrorMessage(err)}`);
     } finally {
       setIsConnectingPeer(false);
     }
@@ -322,7 +363,11 @@ export function NetworkPage() {
     if (!query) return true;
     const contact = contacts.find((item) => item.peerId === peer.peerId);
     const contactName = contact
-      ? safePeerLabel(contact.peerId, contact.verifiedQualifiedName).toLowerCase()
+      ? safePeerLabel(
+          contact.peerId,
+          contact.verifiedQualifiedName,
+          contact.displayName,
+        ).toLowerCase()
       : '';
     return (
       contactName.includes(query) ||
@@ -337,8 +382,9 @@ export function NetworkPage() {
     const query = searchQuery.toLowerCase();
     if (!query) return true;
     return (
-      safePeerLabel(contact.peerId, contact.verifiedQualifiedName).toLowerCase().includes(query) ||
-      contact.peerId.toLowerCase().includes(query)
+      safePeerLabel(contact.peerId, contact.verifiedQualifiedName, contact.displayName)
+        .toLowerCase()
+        .includes(query) || contact.peerId.toLowerCase().includes(query)
     );
   });
 
@@ -354,7 +400,7 @@ export function NetworkPage() {
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       {/* Section A: Header + Control */}
       <header
-        className="px-6 py-4 border-b flex-shrink-0"
+        className="harbor-page-gutter-x flex-shrink-0 border-b py-4"
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
         <div className="flex items-center justify-between">
@@ -399,7 +445,7 @@ export function NetworkPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="harbor-page-gutter flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto space-y-6">
           {/* Error banner */}
           {error && (
@@ -755,10 +801,17 @@ export function NetworkPage() {
                       color: 'white',
                       boxShadow: '0 2px 8px hsl(var(--harbor-primary) / 0.3)',
                     }}
-                    onClick={() => {
-                      const webLink = `${HARBOR_SITE_URL}/add-friend/${shareableContactString.replace('harbor://', '')}`;
-                      navigator.clipboard.writeText(webLink);
-                      toast.success('Link copied! Share it with your friends.');
+                    onClick={async () => {
+                      const webLink = contactInviteToWebUrl(
+                        shareableContactString,
+                        HARBOR_SITE_URL,
+                      );
+                      try {
+                        await navigator.clipboard.writeText(webLink);
+                        toast.success('Link copied! Share it with your friends.');
+                      } catch (error) {
+                        toast.error(`Could not copy link: ${getErrorMessage(error)}`);
+                      }
                     }}
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -773,7 +826,7 @@ export function NetworkPage() {
                   </button>
                   <p className="text-xs mt-2" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                     Copy this link and send it to the person you want to connect with. They can
-                    paste it below to instantly add you.
+                    paste it below to send you a signed contact request.
                   </p>
                 </div>
               ) : circuitAddress ? (
@@ -901,10 +954,16 @@ export function NetworkPage() {
             requests={requests}
             onDecision={async (requestId, decision) => {
               try {
-                await respondToRequest(requestId, decision);
-                toast.success(decision === 'accepted' ? 'Contact accepted' : 'Request declined');
+                const result = await respondToRequest(requestId, decision);
+                toast.success(
+                  decision === 'declined'
+                    ? 'Request declined'
+                    : result.delivery === 'connected'
+                      ? 'Contact accepted and notified.'
+                      : 'Contact accepted. They appear to be offline and will be notified when available.',
+                );
               } catch (error) {
-                toast.error(`Could not update request: ${error}`);
+                toast.error(`Could not update request: ${getErrorMessage(error)}`);
               }
             }}
             onRetry={async (requestId) => {
@@ -912,7 +971,7 @@ export function NetworkPage() {
                 await retryRequest(requestId);
                 toast.success('Contact request queued again');
               } catch (error) {
-                toast.error(`Retry failed: ${error}`);
+                toast.error(`Retry failed: ${getErrorMessage(error)}`);
               }
             }}
           />
@@ -1100,6 +1159,7 @@ export function NetworkPage() {
                               ? safePeerLabel(
                                   knownContact.peerId,
                                   knownContact.verifiedQualifiedName,
+                                  knownContact.displayName,
                                 )
                               : undefined
                           }
@@ -1111,7 +1171,7 @@ export function NetworkPage() {
                                 await connectToPeer(peer.addresses[0]);
                                 toast.success('Connecting...');
                               } catch (err) {
-                                toast.error(`Failed: ${err}`);
+                                toast.error(`Failed: ${getErrorMessage(err)}`);
                               }
                             } else {
                               toast.error('No address available for this peer');
@@ -1154,7 +1214,11 @@ export function NetworkPage() {
                         (contact) => contact.peerId === peer.peerId,
                       );
                       const displayName = knownContact
-                        ? safePeerLabel(knownContact.peerId, knownContact.verifiedQualifiedName)
+                        ? safePeerLabel(
+                            knownContact.peerId,
+                            knownContact.verifiedQualifiedName,
+                            knownContact.displayName,
+                          )
                         : undefined;
                       const contactRequest = requests.find(
                         (request) =>
@@ -1182,7 +1246,7 @@ export function NetworkPage() {
                             try {
                               await sendRequest(peer.peerId);
                             } catch (err) {
-                              toast.error(`Failed to add contact: ${err}`);
+                              toast.error(`Failed to add contact: ${getErrorMessage(err)}`);
                             }
                           }}
                         />
@@ -1223,22 +1287,38 @@ export function NetworkPage() {
                       style={{ background: 'hsl(var(--harbor-surface-1))' }}
                     >
                       <div
-                        className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
-                        style={{ background: getPeerColor(contact.peerId) }}
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0 overflow-hidden"
+                        style={{
+                          background: contact.avatarHash
+                            ? 'transparent'
+                            : getPeerColor(contact.peerId),
+                        }}
                       >
-                        {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)
-                          .split(' ')
-                          .map((word) => word[0])
-                          .join('')
-                          .toUpperCase()
-                          .slice(0, 2)}
+                        {contact.avatarHash ? (
+                          <AvatarMedia hash={contact.avatarHash} />
+                        ) : (
+                          safePeerLabel(
+                            contact.peerId,
+                            contact.verifiedQualifiedName,
+                            contact.displayName,
+                          )
+                            .split(' ')
+                            .map((word) => word[0])
+                            .join('')
+                            .toUpperCase()
+                            .slice(0, 2)
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p
                           className="font-medium text-sm"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
+                          {safePeerLabel(
+                            contact.peerId,
+                            contact.verifiedQualifiedName,
+                            contact.displayName,
+                          )}
                         </p>
                         <p
                           className="text-xs"
@@ -1258,30 +1338,41 @@ export function NetworkPage() {
                       <button
                         className="px-3 py-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 text-xs font-medium"
                         style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-                        title={`Open ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}'s wall`}
+                        title={`Open ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName, contact.displayName)}'s profile`}
                         onClick={() =>
                           navigate(`/contacts/${encodeURIComponent(contact.peerId)}/wall`)
                         }
                       >
-                        View wall
+                        View profile
                       </button>
                       <button
-                        className="p-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0"
+                        className="p-2 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0 disabled:cursor-wait disabled:opacity-60"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                        title="Remove contact"
+                        title={
+                          removingContactPeerId === contact.peerId
+                            ? 'Securely removing contact…'
+                            : 'Remove contact'
+                        }
+                        disabled={removingContactPeerId !== null}
+                        aria-busy={removingContactPeerId === contact.peerId}
                         onClick={async () => {
+                          setRemovingContactPeerId(contact.peerId);
                           try {
                             await contactsService.removeContact(contact.peerId);
                             await refreshContacts();
                             toast.success(
-                              `Removed ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName)} from contacts`,
+                              `Removed ${safePeerLabel(contact.peerId, contact.verifiedQualifiedName, contact.displayName)}. Harbor will notify them when they are next online.`,
                             );
                           } catch (err) {
-                            toast.error(`Failed to remove contact: ${err}`);
+                            toast.error(`Failed to remove contact: ${getErrorMessage(err)}`);
+                          } finally {
+                            setRemovingContactPeerId(null);
                           }
                         }}
                       >
-                        <TrashIcon className="w-4 h-4" />
+                        <TrashIcon
+                          className={`w-4 h-4 ${removingContactPeerId === contact.peerId ? 'animate-pulse' : ''}`}
+                        />
                       </button>
                     </div>
                   ))}
@@ -1417,21 +1508,20 @@ function PeerRow({
   );
 }
 
-function DeployRelayContent() {
+export function DeployRelayContent() {
   const handleDownloadTemplate = async (filename: string, content: string, label: string) => {
     try {
-      const savedPath = await invoke<string>('save_to_downloads', {
-        filename,
-        content,
-      });
+      const savedPath = await saveTextToDownloads(filename, content);
       toast.success(`${label} saved to ${savedPath}`);
     } catch (error) {
       console.error('Failed to save template via Tauri:', error);
       try {
         await navigator.clipboard.writeText(content);
         toast.success(`${label} copied to clipboard! Paste it into a .yaml file.`);
-      } catch {
-        toast.error(`Save failed: ${error}`);
+      } catch (clipboardError) {
+        toast.error(
+          `Could not save the template or copy the fallback: ${getErrorMessage(clipboardError)}`,
+        );
       }
     }
   };

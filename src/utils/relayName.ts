@@ -1,7 +1,13 @@
 import type { IdentityInfo, RelayNameClaim, RelayNamePresentation } from '../types';
 import { qualifiedRelayName } from '../types';
 
-export const UNVERIFIED_HARBOR_USER = 'Unverified Harbor user';
+export const UNVERIFIED_HARBOR_USER = 'Harbor user@unverified';
+
+export function unverifiedIdentityLabel(label?: string | null): string {
+  const trimmed = label?.trim();
+  if (!trimmed) return UNVERIFIED_HARBOR_USER;
+  return trimmed.endsWith('@unverified') ? trimmed : `${trimmed}@unverified`;
+}
 
 export function isVerifiedQualifiedName(value: string | null | undefined): value is string {
   return !!value && /^@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?@[a-z0-9.-]+$/.test(value);
@@ -13,7 +19,13 @@ export function presentRelayName(
   verified: boolean,
   now = Math.floor(Date.now() / 1000),
 ): RelayNamePresentation {
-  if (!claim) return { label: UNVERIFIED_HARBOR_USER, qualifiedName: null, trust: 'unverified' };
+  if (!claim) {
+    return {
+      label: unverifiedIdentityLabel(_legacyName),
+      qualifiedName: null,
+      trust: 'unverified',
+    };
+  }
   const label = qualifiedRelayName(claim);
   if (claim.notAfter <= now) return { label, qualifiedName: label, trust: 'expired' };
   return { label, qualifiedName: label, trust: verified ? 'verified' : 'untrusted' };
@@ -30,10 +42,14 @@ export function safeIdentityLabel(identity: IdentityInfo): string {
   const presentation = presentIdentityName(identity);
   return presentation.trust === 'verified' && isVerifiedQualifiedName(presentation.qualifiedName)
     ? presentation.qualifiedName
-    : UNVERIFIED_HARBOR_USER;
+    : unverifiedIdentityLabel(identity.displayName);
 }
-export function safePeerLabel(_peerId: string, verifiedQualifiedName?: string | null): string {
+export function safePeerLabel(
+  _peerId: string,
+  verifiedQualifiedName?: string | null,
+  unverifiedLabel?: string | null,
+): string {
   return isVerifiedQualifiedName(verifiedQualifiedName)
     ? verifiedQualifiedName
-    : UNVERIFIED_HARBOR_USER;
+    : unverifiedIdentityLabel(unverifiedLabel);
 }

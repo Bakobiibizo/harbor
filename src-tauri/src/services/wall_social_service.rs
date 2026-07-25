@@ -38,6 +38,20 @@ pub struct IncomingWallSocialEventParams<'a> {
     pub signature: &'a [u8],
 }
 
+fn validate_unverified_author_label(label: &str) -> Result<&str> {
+    if label.is_empty()
+        || label.trim() != label
+        || label.chars().count() > 128
+        || label.chars().any(char::is_control)
+    {
+        return Err(AppError::Validation(
+            "Unverified author label must be 1-128 visible characters without surrounding whitespace"
+                .into(),
+        ));
+    }
+    Ok(label)
+}
+
 impl WallSocialService {
     pub fn new(
         db: Arc<Database>,
@@ -63,10 +77,13 @@ impl WallSocialService {
         }
         self.ensure_current_user_can_read_post(post_id)?;
         let identity = self.current_identity()?;
-        let author_name = self
+        let author_name = match self
             .contacts_service
             .verified_qualified_name(&identity.peer_id)?
-            .unwrap_or_default();
+        {
+            Some(verified_name) => verified_name,
+            None => validate_unverified_author_label(&identity.display_name)?.to_string(),
+        };
         let event_id = Uuid::new_v4().to_string();
         let comment_id = Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().timestamp();
@@ -251,10 +268,14 @@ impl WallSocialService {
                 .contacts_service
                 .verified_qualified_name(params.actor_peer_id)?;
             let supplied_name = params.author_name.unwrap_or_default();
-            if verified_name.as_deref().unwrap_or_default() != supplied_name {
-                return Err(AppError::Validation(
-                    "Comment author name does not match the verified relay claim".into(),
-                ));
+            if let Some(verified_name) = verified_name {
+                if verified_name != supplied_name {
+                    return Err(AppError::Validation(
+                        "Comment author name does not match the verified relay claim".into(),
+                    ));
+                }
+            } else {
+                validate_unverified_author_label(supplied_name)?;
             }
         }
         if WallSocialEventsRepository::get_by_event_id(&self.db, params.event_id)
@@ -527,7 +548,7 @@ mod tests {
             .unwrap();
         db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                "INSERT INTO identity_publishing_state(peer_id, mode, updated_at) VALUES(?, 'unverified', 1)",
                 [&identity.peer_id],
             )
             .map(|_| ())
@@ -569,12 +590,45 @@ mod tests {
             .expect("comment should be created");
 
         assert_eq!(comment.content, "great post");
+        assert_eq!(comment.author_name, "Social Tester");
         let events = service.list_events_for_post("post-social-1").unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, WallSocialEventType::CommentCreate);
         assert_eq!(events[0].actor_peer_id, peer_id);
         assert!(!events[0].payload_cbor.is_empty());
         assert!(!events[0].signature.is_empty());
+
+        let event = &events[0];
+        assert!(!service
+            .process_incoming_event(&IncomingWallSocialEventParams {
+                event_id: &event.event_id,
+                event_type: event.event_type,
+                post_id: &event.post_id,
+                actor_peer_id: &event.actor_peer_id,
+                author_name: event.author_name.as_deref(),
+                comment_id: event.comment_id.as_deref(),
+                content: event.content.as_deref(),
+                reaction_type: event.reaction_type.as_deref(),
+                timestamp: event.timestamp,
+                signature: &event.signature,
+            })
+            .unwrap());
+
+        let tampered = service
+            .process_incoming_event(&IncomingWallSocialEventParams {
+                event_id: &event.event_id,
+                event_type: event.event_type,
+                post_id: &event.post_id,
+                actor_peer_id: &event.actor_peer_id,
+                author_name: Some("@verified-looking@relay.test"),
+                comment_id: event.comment_id.as_deref(),
+                content: event.content.as_deref(),
+                reaction_type: event.reaction_type.as_deref(),
+                timestamp: event.timestamp,
+                signature: &event.signature,
+            })
+            .unwrap_err();
+        assert!(matches!(tampered, AppError::Crypto(_)));
     }
 
     #[test]

@@ -31,7 +31,8 @@ const COPY: Record<CallFailureCode, Pick<CallFailure, 'message' | 'recovery'>> =
   },
   missing_media_api: {
     message: 'This Harbor build cannot access the system audio or video API.',
-    recovery: 'Restart Harbor. If this continues, update Harbor and include diagnostics in a bug report.',
+    recovery:
+      'Restart Harbor. If this continues, update Harbor and include diagnostics in a bug report.',
   },
   missing_device: {
     message: 'No usable microphone or camera was found.',
@@ -96,36 +97,51 @@ function source(error: unknown): { message: string; code?: string; name?: string
   return { message: '' };
 }
 
-function classify(message: string, code = '', name = ''): CallFailureCode {
-  const value = `${code} ${name} ${message}`.toLowerCase();
-  if (/notallowed|securityerror|permission.?denied|permission denied/.test(value)) {
-    return 'permission_denied';
-  }
-  if (/not supported|notsupported|media.?devices|media capture api|audio api|getusermedia/.test(value)) {
-    return 'missing_media_api';
-  }
-  if (/notfounderror|devicesnotfound|missing.?device|no (usable )?(microphone|camera|audio device)/.test(value)) {
-    return 'missing_device';
-  }
-  if (/turn.*(required|missing|unavailable)|(?:without|no).*turn|relay-only/.test(value)) {
-    return 'turn_required';
-  }
-  if (/ice.*(failed|failure)|media path/.test(value)) return 'ice_failed';
-  if (/network_timeout|timeout|timed out/.test(value)) return 'timeout';
-  if (/busy|already in another call/.test(value)) return 'busy';
-  if (/declin|reject/.test(value)) return 'rejected';
-  if (/incompatib|unsupported (peer|version|offer)|webrtc is unavailable/.test(value)) {
-    return 'incompatible_peer';
-  }
-  if (/network|signaling|signal|peer.?unreachable|offline|could not reach|connection failed/.test(value)) {
-    return 'signaling_failed';
-  }
-  return 'unknown';
+const CALL_CODES = new Set<CallFailureCode>([
+  'permission_denied',
+  'missing_media_api',
+  'missing_device',
+  'signaling_failed',
+  'timeout',
+  'ice_failed',
+  'turn_required',
+  'busy',
+  'rejected',
+  'incompatible_peer',
+  'unknown',
+]);
+
+const BACKEND_CODES: Readonly<Record<string, CallFailureCode>> = {
+  PERMISSION_DENIED: 'permission_denied',
+  NETWORK_TIMEOUT: 'timeout',
+  NETWORK_ERROR: 'signaling_failed',
+  NETWORK_CONNECTION_FAILED: 'signaling_failed',
+  NETWORK_NOT_INITIALIZED: 'signaling_failed',
+  NETWORK_SERVICE_UNAVAILABLE: 'signaling_failed',
+  NETWORK_PEER_UNREACHABLE: 'signaling_failed',
+};
+
+const DOM_EXCEPTION_NAMES: Readonly<Record<string, CallFailureCode>> = {
+  NotAllowedError: 'permission_denied',
+  SecurityError: 'permission_denied',
+  NotSupportedError: 'missing_media_api',
+  NotFoundError: 'missing_device',
+  DevicesNotFoundError: 'missing_device',
+  TimeoutError: 'timeout',
+};
+
+/**
+ * Classification is deliberately code-only. User-facing or localized prose is
+ * never an API contract and changing it must not alter call state transitions.
+ */
+function classify(code = '', name = ''): CallFailureCode {
+  if (CALL_CODES.has(code as CallFailureCode)) return code as CallFailureCode;
+  return BACKEND_CODES[code] ?? DOM_EXCEPTION_NAMES[name] ?? 'unknown';
 }
 
 export function callFailureFrom(error: unknown, context?: string): CallFailure {
   const raw = source(error);
-  const code = classify(raw.message, raw.code, raw.name);
+  const code = classify(raw.code, raw.name);
   return {
     code,
     ...COPY[code],

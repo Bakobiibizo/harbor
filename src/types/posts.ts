@@ -10,7 +10,10 @@ export interface Post {
   updatedAt: number;
   deletedAt: number | null;
   isLocal: boolean;
+  relayStatus: PostRelayStatus;
 }
+
+export type PostRelayStatus = 'local_pending' | 'relay_acknowledged' | 'conflict' | 'failed';
 
 /** Post visibility setting */
 export type PostVisibility = 'contacts' | 'public';
@@ -48,4 +51,10 @@ export interface CreatePostMediaInput {
 export interface CreatePostResult {
   postId: string;
   createdAt: number;
+  relayStatus: PostRelayStatus;
+}
+
+export interface PostMutationResult {
+  postId: string;
+  relayStatus: PostRelayStatus;
 }

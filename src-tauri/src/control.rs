@@ -1,6 +1,7 @@
 //! Opt-in loopback control plane for validation and automation.
 
 use crate::commands;
+use crate::db::Capability;
 use crate::models::CreateIdentityRequest;
 use crate::services::{
     AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
@@ -20,7 +21,7 @@ use tokio::sync::oneshot;
 
 use crate::commands::network::NetworkState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlRequest {
     pub id: String,
@@ -29,7 +30,7 @@ pub struct ControlRequest {
     pub command: ControlCommand,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ControlCommand {
     Status,
@@ -45,9 +46,22 @@ pub enum ControlCommand {
     NetworkStart,
     NetworkStop,
     NetworkPeers,
+    NetworkAddresses,
+    NetworkConnect {
+        multiaddr: String,
+    },
     ContactString,
     ContactAdd {
         contact_string: String,
+    },
+    ContactRequest {
+        peer_id: String,
+    },
+    ContactAccept {
+        peer_id: String,
+    },
+    ContactStatus {
+        peer_id: String,
     },
     PermissionGrantAll {
         peer_id: String,
@@ -88,7 +102,7 @@ impl ControlResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FrontendControlEvent {
     id: String,
@@ -198,7 +212,7 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
                 Ok(info) => Ok(json!({
                     "identity": info,
                     "identityUnlocked": identity.is_unlocked(),
-                    "networkRunning": network.handle.read().await.is_some(),
+                    "networkRunning": network.is_running().await,
                 })),
                 Err(error) => Err(error),
             }
@@ -227,15 +241,19 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
                 .map(|identity| json!(identity))
                 .map_err(|error| error.to_string())
         }
-        ControlCommand::IdentityLock => {
-            commands::lock_identity(app.state::<Arc<IdentityService>>())
-                .await
-                .map(|_| json!({}))
-                .map_err(|error| error.to_string())
-        }
+        ControlCommand::IdentityLock => commands::lock_identity(
+            app.state::<Arc<IdentityService>>(),
+            app.state::<NetworkState>(),
+        )
+        .await
+        .map(|_| json!({}))
+        .map_err(|error| error.to_string()),
         ControlCommand::NetworkStart => commands::start_network(
             app.clone(),
             app.state::<NetworkState>(),
+            app.state::<Arc<Database>>(),
+            None,
+            None,
             app.state::<Arc<IdentityService>>(),
             app.state::<Arc<MessagingService>>(),
             app.state::<Arc<CallingService>>(),
@@ -259,9 +277,22 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
             .await
             .map(|peers| json!(peers))
             .map_err(|error| error.to_string()),
+        ControlCommand::NetworkAddresses => {
+            commands::get_listening_addresses(app.state::<NetworkState>())
+                .await
+                .map(|addresses| json!(addresses))
+                .map_err(|error| error.to_string())
+        }
+        ControlCommand::NetworkConnect { multiaddr } => {
+            commands::connect_to_peer(app.state::<NetworkState>(), multiaddr)
+                .await
+                .map(|_| json!({}))
+                .map_err(|error| error.to_string())
+        }
         ControlCommand::ContactString => commands::get_shareable_contact_string(
             app.state::<NetworkState>(),
             app.state::<Arc<IdentityService>>(),
+            app.state::<Arc<Database>>(),
         )
         .await
         .map(|contact| json!({ "contactString": contact }))
@@ -269,12 +300,56 @@ async fn execute(request: ControlRequest, app: &AppHandle) -> ControlResponse {
         ControlCommand::ContactAdd { contact_string } => commands::add_contact_from_string(
             app.state::<NetworkState>(),
             app.state::<Arc<ContactsService>>(),
-            app.state::<Arc<PermissionsService>>(),
+            app.state::<Arc<IdentityService>>(),
             contact_string,
         )
         .await
-        .map(|peer_id| json!({ "peerId": peer_id }))
+        .map(|result| json!(result))
         .map_err(|error| error.to_string()),
+        ControlCommand::ContactRequest { peer_id } => commands::request_peer_identity(
+            app.state::<NetworkState>(),
+            app.state::<Arc<ContactsService>>(),
+            peer_id,
+        )
+        .await
+        .map(|request_id| json!({ "requestId": request_id }))
+        .map_err(|error| error.to_string()),
+        ControlCommand::ContactAccept { peer_id } => {
+            let contacts = app.state::<Arc<ContactsService>>();
+            let request = contacts
+                .contact_request_for_peer(&peer_id, "incoming")
+                .map_err(|error| error.to_string())
+                .and_then(|request| {
+                    request
+                        .filter(|request| matches!(request.status.as_str(), "review" | "failed"))
+                        .ok_or_else(|| "No pending contact request from that profile".to_string())
+                });
+            match request {
+                Ok(request) => commands::respond_contact_request(
+                    app.state::<NetworkState>(),
+                    contacts,
+                    app.state::<Arc<PermissionsService>>(),
+                    request.request_id,
+                    "accepted".into(),
+                )
+                .await
+                .map(|result| json!(result))
+                .map_err(|error| error.to_string()),
+                Err(error) => Err(error),
+            }
+        }
+        ControlCommand::ContactStatus { peer_id } => {
+            let contacts = app.state::<Arc<ContactsService>>();
+            let permissions = app.state::<Arc<PermissionsService>>();
+            let status = (|| {
+                Ok::<_, crate::error::AppError>(json!({
+                    "isContact": contacts.is_contact(&peer_id)?,
+                    "issuedCallGrant": permissions.peer_has_capability(&peer_id, Capability::Call)?,
+                    "receivedCallGrant": permissions.we_have_capability(&peer_id, Capability::Call)?,
+                }))
+            })();
+            status.map_err(|error| error.to_string())
+        }
         ControlCommand::PermissionGrantAll { peer_id } => {
             commands::grant_all_permissions(app.state::<Arc<PermissionsService>>(), peer_id)
                 .await

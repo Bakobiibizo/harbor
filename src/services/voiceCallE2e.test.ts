@@ -107,6 +107,8 @@ class SyntheticPeerConnection {
 
   async setLocalDescription(description: RTCSessionDescriptionInit) {
     this.localDescription = description;
+    this.iceGatheringState = 'complete';
+    this.emit('icegatheringstatechange');
   }
 
   async setRemoteDescription(description: RTCSessionDescriptionInit) {
@@ -438,7 +440,7 @@ describe('deterministic isolated-profile calling harness', () => {
     });
     expect(caller.runtime.getSnapshot()).toMatchObject({
       state: 'ended',
-      terminalReason: 'remote_hangup',
+      terminalReason: 'declined',
     });
   });
 

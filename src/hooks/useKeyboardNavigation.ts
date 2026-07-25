@@ -247,7 +247,13 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
     description: 'Go to Messages',
     category: 'Navigation',
   },
-  { id: 'wall', key: '2', modifier: 'mod', description: 'Go to My Wall', category: 'Navigation' },
+  {
+    id: 'wall',
+    key: '2',
+    modifier: 'mod',
+    description: 'Go to My Profile',
+    category: 'Navigation',
+  },
   { id: 'feed', key: '3', modifier: 'mod', description: 'Go to Feed', category: 'Navigation' },
   { id: 'boards', key: '4', modifier: 'mod', description: 'Go to Boards', category: 'Navigation' },
   {

@@ -14,12 +14,12 @@ const PAGE_SIZE = 20;
 
 export function publicOnlyText(canReadContactsOnly: boolean | null): string {
   if (canReadContactsOnly) {
-    return 'WallRead grant active: public and contacts-only posts stored locally are visible.';
+    return 'Contact access is active: public and contacts-only posts are visible.';
   }
   if (canReadContactsOnly === false) {
     return 'Contacts-only access is not active: it may be ungranted, expired, or revoked. New private posts are not served; previously downloaded posts may remain on this device.';
   }
-  return 'Checking WallRead access. Public posts remain available while Harbor verifies the current grant.';
+  return 'Checking contact access. Public posts remain available while Harbor verifies permission.';
 }
 
 interface ContactWallPageProps {
@@ -61,6 +61,7 @@ export function ContactWallPage({
     toggleComments,
     addComment,
     deleteComment,
+    reset,
   } = useContactWallStore();
   const [postMediaMap, setPostMediaMap] = useState<Record<string, PostMediaItem[]>>({});
   const [newComments, setNewComments] = useState<Record<string, string>>({});
@@ -72,8 +73,11 @@ export function ContactWallPage({
   useEffect(() => {
     if (peerId) {
       loadWall(peerId, PAGE_SIZE).catch((err) => log.error('Failed to load contact wall', err));
+    } else {
+      reset();
     }
-  }, [peerId, loadWall]);
+    return () => reset();
+  }, [peerId, loadWall, reset]);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,15 +120,16 @@ export function ContactWallPage({
   const displayName = safePeerLabel(
     peerId || 'unknown',
     verifiedQualifiedNameOverride || wallItems[0]?.authorVerifiedQualifiedName,
+    wallItems[0]?.authorDisplayName,
   );
   const authorPeerId = peerId || '';
 
   const handleRefresh = useCallback(async () => {
     try {
       await refreshWall(PAGE_SIZE);
-      toast.success('Wall refreshed');
+      toast.success('Posts refreshed');
     } catch {
-      toast.error('Failed to refresh wall');
+      toast.error('Failed to refresh posts');
     }
   }, [refreshWall]);
 
@@ -158,7 +163,7 @@ export function ContactWallPage({
         className="h-full flex items-center justify-center"
         style={{ background: 'hsl(var(--harbor-bg-primary))' }}
       >
-        <p style={{ color: 'hsl(var(--harbor-text-secondary))' }}>Missing contact wall link.</p>
+        <p style={{ color: 'hsl(var(--harbor-text-secondary))' }}>Missing profile link.</p>
       </div>
     );
   }
@@ -166,7 +171,7 @@ export function ContactWallPage({
   return (
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       <header
-        className="px-6 py-4 border-b flex-shrink-0"
+        className="harbor-page-gutter-x flex-shrink-0 border-b py-4"
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
         <div className="max-w-3xl mx-auto flex items-start justify-between gap-4">
@@ -197,7 +202,7 @@ export function ContactWallPage({
                 className="text-2xl font-bold truncate"
                 style={{ color: 'hsl(var(--harbor-text-primary))' }}
               >
-                {displayName}'s Wall
+                {displayName}'s profile
               </h1>
               <p className="text-sm mt-2" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {publicOnlyText(canReadContactsOnly)}
@@ -212,10 +217,10 @@ export function ContactWallPage({
                 }}
               >
                 {isSyncing
-                  ? 'Sync in progress… local wall data remains available.'
+                  ? 'Sync in progress… local posts remain available.'
                   : lastSyncAt
                     ? `Last synced ${formatDate(new Date(lastSyncAt * 1000))}${syncError ? ' · Partial sync failure, retry available.' : ''}`
-                    : 'Not synced yet. Refresh to request this wall from the relay.'}
+                    : 'Not synced yet. Refresh to request these posts from the relay.'}
               </p>
             </div>
           </div>
@@ -235,7 +240,7 @@ export function ContactWallPage({
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="harbor-page-gutter flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto space-y-6">
           {error && (
             <div
@@ -271,7 +276,7 @@ export function ContactWallPage({
                 style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
               >
                 This contact has no public posts available locally. Refresh to target the relay, or
-                ask for WallRead access if you expect contacts-only posts.
+                ask them to approve contact access if you expect contacts-only posts.
               </p>
             </div>
           ) : (
@@ -300,7 +305,11 @@ export function ContactWallPage({
                         className="font-semibold text-sm truncate"
                         style={{ color: 'hsl(var(--harbor-text-primary))' }}
                       >
-                        {safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName)}
+                        {safePeerLabel(
+                          item.authorPeerId,
+                          item.authorVerifiedQualifiedName,
+                          item.authorDisplayName,
+                        )}
                       </p>
                       <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
                         {formatDate(new Date(item.createdAt * 1000))} ·{' '}
@@ -395,7 +404,7 @@ export function ContactWallPage({
                                 className="text-xs font-medium"
                                 style={{ color: 'hsl(var(--harbor-text-secondary))' }}
                               >
-                                {safePeerLabel(comment.authorPeerId, comment.authorName)}
+                                {safePeerLabel(comment.authorPeerId, undefined, comment.authorName)}
                               </p>
                               <p
                                 className="text-sm mt-1"

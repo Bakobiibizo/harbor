@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { WallPage } from './Wall';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { profilePostedMilestoneKey, WallPage } from './Wall';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import { postsService } from '../services/posts';
 import { feedService } from '../services/feed';
@@ -105,6 +105,7 @@ const contactsPreviewPost = {
 describe('WallPage visibility controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
       configurable: true,
@@ -214,7 +215,7 @@ describe('WallPage visibility controls', () => {
     });
     expect(await screen.findByText('Contacts-only preview post')).toBeInTheDocument();
     expect(
-      screen.getByText(/Contacts with WallRead see public and contacts-only posts/i),
+      screen.getByText(/Approved contacts see public and contacts-only posts/i),
     ).toBeInTheDocument();
   });
 
@@ -226,9 +227,9 @@ describe('WallPage visibility controls', () => {
     await waitFor(() => {
       expect(feedService.generateRssFeed).toHaveBeenCalledWith({
         base_url: 'harbor://peer/peer-me',
-        title: "@tester@relay.test's Public Harbor Wall",
+        title: "@tester@relay.test's Public Harbor Posts",
         description:
-          'Locally generated RSS XML containing only posts marked Public on this Harbor wall.',
+          'Locally generated RSS XML containing only posts marked Public on this Harbor profile.',
         max_items: 50,
       });
     });
@@ -262,5 +263,50 @@ describe('WallPage visibility controls', () => {
       .mocked(navigator.clipboard.writeText)
       .mock.calls.map(([value]) => value);
     expect(copiedValues.join('\n')).not.toMatch(/private|backup|passphrase/i);
+  });
+
+  it('opens the post composer from the profile header action', () => {
+    const openComposer = vi.fn();
+    window.addEventListener('harbor:new-post', openComposer);
+    render(<WallPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add post' }));
+    expect(openComposer).toHaveBeenCalledOnce();
+
+    window.removeEventListener('harbor:new-post', openComposer);
+  });
+
+  it('shows the empty-profile placeholder only until the account has had its first post', async () => {
+    render(<WallPage />);
+
+    expect(await screen.findByTestId('empty-profile-placeholder')).toBeInTheDocument();
+
+    act(() => {
+      useWallStore.setState({
+        posts: [
+          {
+            postId: 'first-post',
+            content: 'First post',
+            contentType: 'post',
+            timestamp: new Date(),
+            likes: 0,
+            comments: 0,
+            liked: false,
+            authorPeerId: 'peer-me',
+            visibility: 'public',
+            lamportClock: 1,
+            relayStatus: 'local',
+          } as never,
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('empty-profile-placeholder')).not.toBeInTheDocument();
+      expect(localStorage.getItem(profilePostedMilestoneKey('peer-me'))).toBe('1');
+    });
+
+    act(() => useWallStore.setState({ posts: [] }));
+    expect(screen.queryByTestId('empty-profile-placeholder')).not.toBeInTheDocument();
   });
 });

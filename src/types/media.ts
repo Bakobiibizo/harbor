@@ -1,11 +1,5 @@
 export type MediaTransferStatus =
-  | 'queued'
-  | 'discovering'
-  | 'transferring'
-  | 'ready'
-  | 'unavailable'
-  | 'retrying'
-  | 'failed';
+  'queued' | 'discovering' | 'transferring' | 'ready' | 'unavailable' | 'retrying' | 'failed';
 
 export interface MediaTransferState {
   mediaHash: string;
@@ -44,4 +38,17 @@ export interface MediaCacheDiagnostics {
   pendingCount: number;
   cachedBytes: number;
   evictedLastRun: number;
+}
+
+export interface StoredMediaInfo {
+  mediaHash: string;
+  mimeType: string;
+  fileName: string;
+  totalBytes: number;
+}
+
+export interface MediaAssetInfo {
+  filePath: string;
+  mimeType: string;
+  totalBytes: number;
 }

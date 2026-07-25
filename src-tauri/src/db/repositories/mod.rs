@@ -1,5 +1,6 @@
 pub mod boards_repo;
 pub mod bootstrap_repo;
+pub mod call_signaling_replay_repo;
 pub mod calls_repo;
 pub mod comments_repo;
 pub mod contact_requests_repo;
@@ -8,6 +9,7 @@ pub mod group_calls_repo;
 pub mod identity_repo;
 pub mod likes_repo;
 pub mod mentions_repo;
+pub mod message_outbox_repo;
 pub mod messages_repo;
 pub mod permissions_repo;
 pub mod posts_repo;
@@ -17,6 +19,9 @@ pub mod wall_social_repo;
 
 pub use boards_repo::{Board, BoardPost, BoardsRepository, RelayCommunity, UpsertBoardPostParams};
 pub use bootstrap_repo::{AddBootstrapNodeInput, BootstrapNodeConfig, BootstrapNodesRepo};
+pub use call_signaling_replay_repo::{
+    CallSignalingReplayRepository, SignalingReplayRecord, MAX_CALL_SIGNALING_REPLAYS,
+};
 pub use calls_repo::{
     CallDirection, CallMediaKind, CallSession, CallState, CallsRepository, NewCallSession,
 };
@@ -27,16 +32,22 @@ pub use group_calls_repo::{GroupCallRoom, GroupCallsRepository};
 pub use identity_repo::IdentityRepository;
 pub use likes_repo::{LikeData, LikeSummary, LikesRepository, PostLike};
 pub use mentions_repo::{MentionsRepository, QueuedMentionEnvelope, StoredMention};
+pub use message_outbox_repo::{
+    EnqueueOutboxMessage, EnqueueOutcome, MessageOutboxRepository, OutboxEntry, OutboxError,
+    OutboxLimits, OutboxState, RecoveryOutcome, TransitionOutcome,
+};
 pub use messages_repo::{
-    Conversation, Message, MessageData, MessageStatus, MessagesRepository, RecordMessageEventParams,
+    Conversation, EditEventApplyOutcome, IncomingMessageCommit, IncomingMessageCommitOutcome,
+    IncomingMessagePersistenceError, Message, MessageData, MessageEditEvent, MessageEditEventData,
+    MessageEditPersistenceError, MessageStatus, MessagesRepository, RecordMessageEventParams,
 };
 pub use permissions_repo::{
     Capability, GrantData, Permission, PermissionEvent, PermissionsRepository,
     RecordPermissionEventParams,
 };
 pub use posts_repo::{
-    Post, PostData, PostMedia, PostMediaData, PostVisibility, PostsRepository,
-    RecordPostEventParams, VisibilityCounts,
+    EnqueuePostRelayMutation, Post, PostData, PostMedia, PostMediaData, PostRelayOutboxEntry,
+    PostRelayOutboxState, PostVisibility, PostsRepository, RecordPostEventParams, VisibilityCounts,
 };
 pub use private_introductions_repo::{IntroductionDecision, PrivateIntroductionsRepository};
 pub use relay_names_repo::RelayNamesRepository;

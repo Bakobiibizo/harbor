@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { mentionsService } from '../../services';
 import { Button } from '../common';
 import { namedWallPath } from '../../utils/namedWall';
+import { getErrorMessage } from '../../utils/errors';
 
 export const HARBOR_BUGS_NAME = import.meta.env.VITE_HARBOR_BUGS_NAME || '@bugs@harbor.social';
 
@@ -38,7 +39,7 @@ export function BugReportForm() {
       setSummary('');
       setDetails('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -54,7 +55,7 @@ export function BugReportForm() {
           or private content.
         </p>
         <a className="underline" href={`#${trackingPath}`}>
-          Track this report on {HARBOR_BUGS_NAME}’s wall
+          Track this report on {HARBOR_BUGS_NAME}’s profile
         </a>
         <button className="block mt-4 text-sm underline" onClick={() => setSubmitted(false)}>
           Report another bug
@@ -73,7 +74,7 @@ export function BugReportForm() {
       <div>
         <h4 className="font-medium">Report a bug</h4>
         <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-          This publishes a signed report tagging {HARBOR_BUGS_NAME}. Nothing is posted to its wall
+          This publishes a signed report tagging {HARBOR_BUGS_NAME}. Nothing appears on its profile
           unless that account approves the repost.
         </p>
       </div>

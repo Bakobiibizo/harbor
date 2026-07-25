@@ -1,11 +1,11 @@
 use clap::Parser;
 use ed25519_dalek::VerifyingKey;
+use harbor_relay_server::identity_key::{load_identity_key, load_or_generate_identity};
 use libp2p::identity::Keypair;
 use serde::Serialize;
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Parser)]
@@ -56,24 +56,8 @@ struct SignedRelayKeyRotation {
     previous_key_signature: Vec<u8>,
 }
 
-fn load_or_generate_successor(path: &PathBuf) -> Result<Keypair, Box<dyn std::error::Error>> {
-    if path.exists() {
-        return Ok(Keypair::from_protobuf_encoding(&fs::read(path)?)?);
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let key = Keypair::generate_ed25519();
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(&key.to_protobuf_encoding()?)?;
-    Ok(key)
+fn load_or_generate_successor(path: &Path) -> Result<Keypair, Box<dyn std::error::Error>> {
+    Ok(load_or_generate_identity(path)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "successor Ed25519 public key must decode to exactly 32 bytes")?;
     VerifyingKey::from_bytes(&next_raw)?;
 
-    let current = Keypair::from_protobuf_encoding(&fs::read(&args.current_key)?)?;
+    let current = load_identity_key(&args.current_key)?;
     current
         .clone()
         .try_into_ed25519()

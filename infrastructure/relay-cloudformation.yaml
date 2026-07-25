@@ -15,7 +15,37 @@ Metadata:
           - RelayPort
           - IdentityNamespace
           - MaxReservations
+          - MaxReservationsPerPeer
           - MaxCircuits
+          - MaxCircuitsPerPeer
+          - ReservationDurationSecs
+          - MaxCircuitDurationSecs
+          - MaxCircuitBytes
+          - IdleConnectionTimeoutSecs
+          - ReservationAdmissionPerPeer
+          - ReservationAdmissionPerIp
+          - CircuitAdmissionPerPeer
+          - CircuitAdmissionPerIp
+          - AdmissionWindowSecs
+          - RateLimitMaxRequests
+          - RateLimitWindowSecs
+          - RateLimiterCleanupIntervalSecs
+          - AbusePeerLimit
+          - AbuseNetworkLimit
+          - AbuseTargetLimit
+          - AbuseActionLimit
+          - AbuseGlobalLimit
+          - AbuseWindowSecs
+          - MaxStorageBytes
+          - MaxEphemeralEntries
+          - EphemeralRetentionSecs
+          - MaxAdmissionSources
+          - RecordRetentionSecs
+          - MaxKnownPeers
+          - MaxPosts
+          - MaxGrants
+          - MaxIntroductions
+          - MaxSocialEvents
 
 Parameters:
   IdentityNamespace:
@@ -51,12 +81,226 @@ Parameters:
   MaxReservations:
     Type: Number
     Default: 128
-    Description: 'Maximum number of relay reservations (peers that can use this relay)'
+    MinValue: 1
+    MaxValue: 100000
+    Description: 'Maximum concurrent relay reservations'
+
+  MaxReservationsPerPeer:
+    Type: Number
+    Default: 4
+    MinValue: 1
+    MaxValue: 100000
+    Description: 'Maximum concurrent reservations per peer'
 
   MaxCircuits:
     Type: Number
+    Default: 512
+    MinValue: 1
+    MaxValue: 100000
+    Description: 'Maximum concurrent relay circuits'
+
+  MaxCircuitsPerPeer:
+    Type: Number
     Default: 16
-    Description: 'Maximum number of active relay circuits per peer'
+    MinValue: 1
+    MaxValue: 100000
+    Description: 'Maximum concurrent circuits per peer'
+
+  ReservationDurationSecs:
+    Type: Number
+    Default: 3600
+    MinValue: 60
+    MaxValue: 86400
+    Description: 'Reservation lease duration in seconds'
+
+  MaxCircuitDurationSecs:
+    Type: Number
+    Default: 3600
+    MinValue: 30
+    MaxValue: 86400
+    Description: 'Maximum circuit lifetime in seconds'
+
+  MaxCircuitBytes:
+    Type: Number
+    Default: 67108864
+    MinValue: 1048576
+    MaxValue: 17179869184
+    Description: 'Maximum bytes forwarded by one circuit'
+
+  IdleConnectionTimeoutSecs:
+    Type: Number
+    Default: 300
+    MinValue: 15
+    MaxValue: 3600
+    Description: 'Idle swarm connection timeout in seconds'
+
+  ReservationAdmissionPerPeer:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Reservation admissions per peer per admission window'
+
+  ReservationAdmissionPerIp:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Reservation admissions per source IP per admission window'
+
+  CircuitAdmissionPerPeer:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Circuit admissions per peer per admission window'
+
+  CircuitAdmissionPerIp:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Circuit admissions per source IP per admission window'
+
+  AdmissionWindowSecs:
+    Type: Number
+    Default: 120
+    MinValue: 1
+    MaxValue: 86400
+    Description: 'Relay admission-rate window in seconds'
+
+  RateLimitMaxRequests:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Identity and optional community protocol requests per peer per window'
+
+  RateLimitWindowSecs:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 86400
+    Description: 'Identity and optional community protocol rate-limit window in seconds'
+
+  RateLimiterCleanupIntervalSecs:
+    Type: Number
+    Default: 300
+    MinValue: 1
+    MaxValue: 86400
+    Description: 'Stale admission counter cleanup interval in seconds'
+
+  AbusePeerLimit:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Introduction admissions per peer per abuse window'
+
+  AbuseNetworkLimit:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Introduction admissions per network prefix per abuse window'
+
+  AbuseTargetLimit:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Introduction admissions per target per abuse window'
+
+  AbuseActionLimit:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Introduction admissions per action per abuse window'
+
+  AbuseGlobalLimit:
+    Type: Number
+    Default: 1000
+    MinValue: 1
+    MaxValue: 1000000
+    Description: 'Global introduction admissions per abuse window'
+
+  AbuseWindowSecs:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 86400
+    Description: 'Introduction abuse-control window in seconds'
+
+  MaxStorageBytes:
+    Type: Number
+    Default: 1073741824
+    MinValue: 16777216
+    MaxValue: 1099511627776
+    Description: 'Maximum bytes for persistent relay SQLite state'
+
+  MaxEphemeralEntries:
+    Type: Number
+    Default: 10000
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum entries in each bounded in-memory state collection'
+
+  EphemeralRetentionSecs:
+    Type: Number
+    Default: 600
+    MinValue: 1
+    MaxValue: 315360000
+    Description: 'Maximum retention for expired in-memory state in seconds'
+
+  MaxAdmissionSources:
+    Type: Number
+    Default: 4096
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum concurrently tracked network-source admission buckets'
+
+  RecordRetentionSecs:
+    Type: Number
+    Default: 31536000
+    MinValue: 1
+    MaxValue: 315360000
+    Description: 'Maximum retained age for expirable relay records in seconds'
+
+  MaxKnownPeers:
+    Type: Number
+    Default: 100000
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum retained peer records'
+
+  MaxPosts:
+    Type: Number
+    Default: 1000000
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum retained wall and community post records'
+
+  MaxGrants:
+    Type: Number
+    Default: 500000
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum retained wall-access grant records'
+
+  MaxIntroductions:
+    Type: Number
+    Default: 100000
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum retained introduction records'
+
+  MaxSocialEvents:
+    Type: Number
+    Default: 1000000
+    MinValue: 1
+    MaxValue: 1000000000
+    Description: 'Maximum retained social-event records'
 
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
@@ -233,7 +477,9 @@ Resources:
             Encrypted: true
       UserData:
         Fn::Base64: !Sub |
-          #!/bin/bash -xe
+          #!/bin/bash
+          set -euo pipefail
+          umask 077
           exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
           echo "=== Starting Harbor Relay Setup ==="
@@ -245,6 +491,7 @@ Resources:
           BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
           EXPECTED_SHA256="b6d3a64b27c818ca67b1d9cccbb8a0629da641b5d10438e93001f751221eba40"
           IDENTITY_SSM_PARAM="/harbor/${AWS::StackName}/identity-key"
+          IDENTITY_KEY_PATH="/root/.config/harbor-relay/id.key"
           EIP_SSM_PARAM="/harbor/${AWS::StackName}/eip-allocation-id"
           REGION="${AWS::Region}"
 
@@ -278,24 +525,51 @@ Resources:
           # ---------------------------------------------------------------
           # 2. Restore identity key from SSM (or generate on first boot)
           # ---------------------------------------------------------------
-          mkdir -p /root/.config/harbor-relay
-
+          # HARBOR_KEY_RESTORE_BEGIN
+          install -d -m 0700 "$(dirname "$IDENTITY_KEY_PATH")"
+          if [ -e "$IDENTITY_KEY_PATH" ] || [ -L "$IDENTITY_KEY_PATH" ]; then
+            echo "ERROR: Refusing to overwrite an existing relay identity path"
+            exit 1
+          fi
+          IDENTITY_ENCODED=$(mktemp "$IDENTITY_KEY_PATH.encoded.XXXXXX")
+          IDENTITY_RESTORE=$(mktemp "$IDENTITY_KEY_PATH.restore.XXXXXX")
+          IDENTITY_FETCH_ERROR=$(mktemp "$IDENTITY_KEY_PATH.fetch-error.XXXXXX")
+          IDENTITY_EXPORT=""
+          cleanup_identity_material() {
+            rm -f "$IDENTITY_ENCODED"
+            rm -f "$IDENTITY_RESTORE"
+            rm -f "$IDENTITY_FETCH_ERROR"
+            if [ -n "$IDENTITY_EXPORT" ]; then rm -f "$IDENTITY_EXPORT"; fi
+          }
+          trap cleanup_identity_material EXIT HUP INT TERM
           echo "Checking SSM for existing identity key..."
-          EXISTING_KEY=$(aws ssm get-parameter \
-            --name "$IDENTITY_SSM_PARAM" \
-            --with-decryption \
-            --query 'Parameter.Value' \
-            --output text \
-            --region $REGION 2>/dev/null || true)
-
-          if [ -n "$EXISTING_KEY" ] && [ "$EXISTING_KEY" != "None" ]; then
+          if aws ssm get-parameter \
+              --name "$IDENTITY_SSM_PARAM" \
+              --with-decryption \
+              --query 'Parameter.Value' \
+              --output text \
+              --region "$REGION" > "$IDENTITY_ENCODED" 2> "$IDENTITY_FETCH_ERROR"; then
+            if ! base64 --decode "$IDENTITY_ENCODED" > "$IDENTITY_RESTORE"; then
+              echo "ERROR: Stored relay identity key is not valid base64"
+              exit 1
+            fi
+            if [ ! -s "$IDENTITY_RESTORE" ]; then
+              echo "ERROR: Stored relay identity key is empty"
+              exit 1
+            fi
             echo "Found existing identity key in SSM — restoring for consistent peer ID"
-            echo "$EXISTING_KEY" | base64 -d > /root/.config/harbor-relay/id.key
+            chmod 0600 "$IDENTITY_RESTORE"
+            mv -T "$IDENTITY_RESTORE" "$IDENTITY_KEY_PATH"
             KEY_IS_NEW=false
-          else
+          elif grep -q 'ParameterNotFound' "$IDENTITY_FETCH_ERROR"; then
             echo "No existing identity key — relay will generate a new one on first start"
             KEY_IS_NEW=true
+          else
+            echo "ERROR: Unable to determine whether an identity key exists in SSM"
+            exit 1
           fi
+          rm -f "$IDENTITY_ENCODED" "$IDENTITY_FETCH_ERROR"
+          # HARBOR_KEY_RESTORE_END
 
           # ---------------------------------------------------------------
           # 3. Restore or allocate Elastic IP
@@ -365,6 +639,7 @@ Resources:
           # ---------------------------------------------------------------
           # 4. Create and start systemd service
           # ---------------------------------------------------------------
+          mkdir -p /var/lib/harbor-relay/data
           echo "Creating systemd service: $SERVICE_NAME"
           cat > /etc/systemd/system/$SERVICE_NAME.service << SERVICEEOF
           [Unit]
@@ -375,8 +650,41 @@ Resources:
           Type=simple
           Restart=always
           RestartSec=10
+          UMask=0077
           Environment=RUST_LOG=info
-          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --max-reservations ${MaxReservations} --max-circuits-per-peer ${MaxCircuits} --identity-namespace ${IdentityNamespace}
+          Environment=HARBOR_RELAY_MAX_RESERVATIONS=${MaxReservations}
+          Environment=HARBOR_RELAY_MAX_RESERVATIONS_PER_PEER=${MaxReservationsPerPeer}
+          Environment=HARBOR_RELAY_MAX_CIRCUITS=${MaxCircuits}
+          Environment=HARBOR_RELAY_MAX_CIRCUITS_PER_PEER=${MaxCircuitsPerPeer}
+          Environment=HARBOR_RELAY_RESERVATION_DURATION_SECS=${ReservationDurationSecs}
+          Environment=HARBOR_RELAY_MAX_CIRCUIT_DURATION_SECS=${MaxCircuitDurationSecs}
+          Environment=HARBOR_RELAY_MAX_CIRCUIT_BYTES=${MaxCircuitBytes}
+          Environment=HARBOR_RELAY_IDLE_CONNECTION_TIMEOUT_SECS=${IdleConnectionTimeoutSecs}
+          Environment=HARBOR_RELAY_RESERVATION_ADMISSION_PER_PEER=${ReservationAdmissionPerPeer}
+          Environment=HARBOR_RELAY_RESERVATION_ADMISSION_PER_IP=${ReservationAdmissionPerIp}
+          Environment=HARBOR_RELAY_CIRCUIT_ADMISSION_PER_PEER=${CircuitAdmissionPerPeer}
+          Environment=HARBOR_RELAY_CIRCUIT_ADMISSION_PER_IP=${CircuitAdmissionPerIp}
+          Environment=HARBOR_RELAY_ADMISSION_WINDOW_SECS=${AdmissionWindowSecs}
+          Environment=HARBOR_RELAY_RATE_LIMIT_MAX_REQUESTS=${RateLimitMaxRequests}
+          Environment=HARBOR_RELAY_RATE_LIMIT_WINDOW_SECS=${RateLimitWindowSecs}
+          Environment=HARBOR_RELAY_RATE_LIMITER_CLEANUP_INTERVAL_SECS=${RateLimiterCleanupIntervalSecs}
+          Environment=HARBOR_RELAY_ABUSE_PEER_LIMIT=${AbusePeerLimit}
+          Environment=HARBOR_RELAY_ABUSE_NETWORK_LIMIT=${AbuseNetworkLimit}
+          Environment=HARBOR_RELAY_ABUSE_TARGET_LIMIT=${AbuseTargetLimit}
+          Environment=HARBOR_RELAY_ABUSE_ACTION_LIMIT=${AbuseActionLimit}
+          Environment=HARBOR_RELAY_ABUSE_GLOBAL_LIMIT=${AbuseGlobalLimit}
+          Environment=HARBOR_RELAY_ABUSE_WINDOW_SECS=${AbuseWindowSecs}
+          Environment=HARBOR_RELAY_MAX_STORAGE_BYTES=${MaxStorageBytes}
+          Environment=HARBOR_RELAY_MAX_EPHEMERAL_ENTRIES=${MaxEphemeralEntries}
+          Environment=HARBOR_RELAY_EPHEMERAL_RETENTION_SECS=${EphemeralRetentionSecs}
+          Environment=HARBOR_RELAY_MAX_ADMISSION_SOURCES=${MaxAdmissionSources}
+          Environment=HARBOR_RELAY_RECORD_RETENTION_SECS=${RecordRetentionSecs}
+          Environment=HARBOR_RELAY_MAX_KNOWN_PEERS=${MaxKnownPeers}
+          Environment=HARBOR_RELAY_MAX_POSTS=${MaxPosts}
+          Environment=HARBOR_RELAY_MAX_GRANTS=${MaxGrants}
+          Environment=HARBOR_RELAY_MAX_INTRODUCTIONS=${MaxIntroductions}
+          Environment=HARBOR_RELAY_MAX_SOCIAL_EVENTS=${MaxSocialEvents}
+          ExecStart=/usr/local/bin/harbor-relay --port ${RelayPort} --announce-ip $PUBLIC_IP --identity-namespace ${IdentityNamespace} --data-dir /var/lib/harbor-relay/data
           StandardOutput=journal
           StandardError=journal
 
@@ -425,17 +733,31 @@ Resources:
           # ---------------------------------------------------------------
           # 6. Persist identity key and relay address to SSM
           # ---------------------------------------------------------------
+          # HARBOR_KEY_PERSIST_BEGIN
+          if [ ! -f "$IDENTITY_KEY_PATH" ] || [ -L "$IDENTITY_KEY_PATH" ]; then
+            echo "ERROR: Relay identity key is not a regular non-symlink file"
+            exit 1
+          fi
+          EXPECTED_KEY_UID=$(id -u)
+          if [ "$(stat -c '%u:%a' "$IDENTITY_KEY_PATH")" != "$EXPECTED_KEY_UID:600" ]; then
+            echo "ERROR: Relay identity key must be owned by the service user with mode 0600"
+            exit 1
+          fi
           if [ "$KEY_IS_NEW" = "true" ]; then
             echo "Saving new identity key to SSM..."
-            IDENTITY_KEY_B64=$(base64 -w0 /root/.config/harbor-relay/id.key)
+            IDENTITY_EXPORT=$(mktemp "$(dirname "$IDENTITY_KEY_PATH")/.identity-export.XXXXXX")
+            base64 -w0 "$IDENTITY_KEY_PATH" > "$IDENTITY_EXPORT"
             aws ssm put-parameter \
               --name "$IDENTITY_SSM_PARAM" \
-              --value "$IDENTITY_KEY_B64" \
+              --value "file://$IDENTITY_EXPORT" \
               --type SecureString \
               --overwrite \
-              --region $REGION
+              --region "$REGION"
+            rm -f "$IDENTITY_EXPORT"
+            IDENTITY_EXPORT=""
             echo "Identity key saved to SSM"
           fi
+          # HARBOR_KEY_PERSIST_END
 
           RELAY_ADDRESS="/ip4/$PUBLIC_IP/tcp/${RelayPort}/p2p/$RELAY_PEER_ID"
 

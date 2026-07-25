@@ -1,16 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_CONTACT_INVITE_INPUT_LENGTH,
+  contactInviteToWebUrl,
   normalizeContactInvite,
   parseContactInvite,
 } from './contactInvite';
 
+const peerId = '12D3KooWEKyPsvgm7g8vyRA59466ph3t9VLxEUFzNqTXHJdfY2Wq';
 const bundle = {
-  multiaddr: '/dns4/relay.social-harbor.com/tcp/443/wss/p2p/12D3KooWExample',
-  display_name: 'José',
-  public_key: 'QUJDRA==',
-  x25519_public: 'RUZHSA==',
+  version: 1,
+  peerId,
+  multiaddr: `/dns4/relay.social-harbor.com/tcp/443/wss/p2p/${peerId}`,
+  displayName: 'José',
+  publicKey: 'QwRr/kCSs+lJlOraFdzCDYqqB7ZY/TlU644O+4vcpd4=',
+  x25519Public: 'CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=',
   bio: 'Hello',
+};
+
+const relayNameClaim = {
+  request: {
+    domain: 'harbor/name-claim-request/1',
+    version: 1,
+    localName: 'jose',
+    relay: 'harbor.social',
+    peerId,
+    ed25519PublicKey: Array.from(atob(bundle.publicKey), (character) => character.charCodeAt(0)),
+    x25519PublicKey: Array.from(atob(bundle.x25519Public), (character) =>
+      character.charCodeAt(0),
+    ),
+    sequence: 1,
+    issuedAt: 1_800_000_000,
+    nonce: Array(16).fill(7),
+  },
+  userSignature: Array(64).fill(8),
+  status: 'active',
+  notBefore: 1_800_000_000,
+  notAfter: 1_900_000_000,
+  relayKeyId: 'relay-key-1',
+  relaySignature: Array(64).fill(9),
 };
 
 function payload(value: unknown = bundle): string {
@@ -20,43 +47,95 @@ function payload(value: unknown = bundle): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-describe('contact invite normalization', () => {
-  it('normalizes native, native handoff, and official HTTPS forms', () => {
+describe('canonical contact invite', () => {
+  it('normalizes the native and official HTTPS v1 forms', () => {
     const encoded = payload();
-    const canonical = `harbor://${encoded}`;
+    const canonical = `harbor://contact/v1/${encoded}`;
     expect(normalizeContactInvite(canonical)).toBe(canonical);
-    expect(normalizeContactInvite(`harbor://add-friend/${encoded}`)).toBe(canonical);
-    expect(normalizeContactInvite(`https://social-harbor.com/add-friend/${encoded}`)).toBe(
+    expect(normalizeContactInvite(`https://social-harbor.com/add-friend/v1/${encoded}`)).toBe(
       canonical,
     );
-    expect(normalizeContactInvite(`https://www.social-harbor.com/add-friend/${encoded}/`)).toBe(
+    expect(normalizeContactInvite(`https://social-harbor.com/add-friend?c=${encoded}`)).toBe(
       canonical,
+    );
+    expect(contactInviteToWebUrl(canonical)).toBe(
+      `https://social-harbor.com/add-friend?c=${encoded}`,
     );
   });
 
-  it('decodes UTF-8 and the backend snake_case bundle fields for previews', () => {
-    expect(parseContactInvite(`harbor://${payload()}`)).toMatchObject({
+  it('validates UTF-8, exact keys, address, and Ed25519 key-to-peer binding', () => {
+    expect(parseContactInvite(`harbor://contact/v1/${payload()}`)).toMatchObject({
+      version: 1,
       displayName: 'José',
-      peerId: '12D3KooWExample',
+      peerId,
       bio: 'Hello',
     });
   });
 
+  it('preserves a structurally bound relay name claim for authoritative verification', () => {
+    expect(
+      parseContactInvite(
+        `harbor://contact/v1/${payload({ ...bundle, relayNameClaim })}`,
+      ).relayNameClaim,
+    ).toEqual(relayNameClaim);
+  });
+
   it.each([
-    'http://social-harbor.com/add-friend/abc',
-    'https://evil.example/add-friend/abc',
-    'https://social-harbor.com.evil.example/add-friend/abc',
-    'https://social-harbor.com/other/abc',
-    'https://social-harbor.com/add-friend/abc?next=evil',
-    'harbor://not/base64!',
-  ])('rejects an untrusted or malformed form: %s', (input) => {
+    'harbor://legacy',
+    'harbor://contact/v1/not+base64',
+    'http://social-harbor.com/add-friend/v1/abc',
+    'https://evil.example/add-friend/v1/abc',
+    'https://social-harbor.com.evil.example/add-friend/v1/abc',
+    'https://social-harbor.com/add-friend/v1/abc?next=evil',
+    'https://social-harbor.com/add-friend/v1/abc/extra',
+    'https://social-harbor.com/add-friend?c=abc&next=evil',
+  ])('rejects an untrusted, legacy, or malformed form: %s', (input) => {
     expect(() => normalizeContactInvite(input)).toThrow(/Invalid contact invite/);
   });
 
-  it('rejects malformed bundles and oversized input before invoking the backend', () => {
+  it('rejects tampering, mismatches, double-base64 keys, and unknown fields', () => {
+    const anotherPeer = '12D3KooWMEo4jDyz9hGAVEcZhiGkjRH4A73FXRpk8MwJkhnSqy7z';
     expect(() =>
-      normalizeContactInvite(`harbor://${payload({ display_name: 'No keys' })}`),
-    ).toThrow(/network address is malformed/);
+      normalizeContactInvite(
+        `harbor://contact/v1/${payload({
+          ...bundle,
+          peerId: anotherPeer,
+          multiaddr: `/ip4/127.0.0.1/tcp/1/p2p/${anotherPeer}`,
+        })}`,
+      ),
+    ).toThrow(/public key and peer ID do not match/);
+    expect(() =>
+      normalizeContactInvite(
+        `harbor://contact/v1/${payload({ ...bundle, multiaddr: `${bundle.multiaddr}x` })}`,
+      ),
+    ).toThrow(/network address and peer ID do not match/);
+    expect(() =>
+      normalizeContactInvite(
+        `harbor://contact/v1/${payload({
+          ...bundle,
+          publicKey: btoa(bundle.publicKey),
+        })}`,
+      ),
+    ).toThrow(/public key/);
+    expect(() =>
+      normalizeContactInvite(
+        `harbor://contact/v1/${payload({ ...bundle, display_name: 'alias' })}`,
+      ),
+    ).toThrow(/unsupported fields/);
+    expect(() =>
+      normalizeContactInvite(
+        `harbor://contact/v1/${payload({
+          ...bundle,
+          relayNameClaim: {
+            ...relayNameClaim,
+            request: { ...relayNameClaim.request, peerId: anotherPeer },
+          },
+        })}`,
+      ),
+    ).toThrow(/does not match the invited identity/);
+  });
+
+  it('rejects oversized input before decoding', () => {
     expect(() => normalizeContactInvite('x'.repeat(MAX_CONTACT_INVITE_INPUT_LENGTH + 1))).toThrow(
       /too large/,
     );

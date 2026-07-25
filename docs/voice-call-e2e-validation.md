@@ -11,7 +11,7 @@ For final packaged Windows to macOS hardware acceptance, use [Packaged Windows a
 - No production relay credentials are required. The default LAN/mDNS path is acceptable; an operator-provided test TURN server may be added in Settings when validating strict NAT behavior.
 - Use a machine with microphone permission available to both app windows, or a controlled virtual audio device.
 - For headless Linux/Xvfb/WebKitGTK validation only, launch Harbor with `HARBOR_HEADLESS_MEDIA_CAPTURE=1` after provisioning a virtual PulseAudio source. This opt-in flag enables WebKitGTK WebRTC/media-stream settings, mirrors frontend WebRTC availability to stdout, and auto-allows WebKitGTK permission requests in the validation environment. It is not needed for normal desktop use.
-- The validation host's WebKitGTK build must expose `RTCPeerConnection` to JavaScript. On Ubuntu/WebKitGTK hosts this may also require GStreamer WebRTC packages such as `gstreamer1.0-plugins-bad`, `gstreamer1.0-nice`, and `gstreamer1.0-libav`; if Harbor logs `hasRTCPeerConnection:false`, record the runtime as unsupported and use a WebKitGTK build/display stack that exposes WebRTC before continuing the manual scenario.
+- The validation host's WebKitGTK build must expose `RTCPeerConnection` to JavaScript. On Ubuntu/WebKitGTK hosts this also requires the GStreamer WebRTC, libnice, and codec plugins. If Harbor logs `hasRTCPeerConnection:false`, record the runtime as unsupported and do not attempt signaling. ARM64 release validation must use the private packaged runtime described in [ARM64 Linux WebRTC runtime](linux-arm64-webrtc-runtime.md), not an unverified distro WebKitGTK build.
 
 ## Automated regression gates
 

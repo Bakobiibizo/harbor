@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { publishingPolicy } from './publishingPolicy';
 
 describe('publishingPolicy', () => {
-  it('tracks explicit verified and compatibility modes', () => {
+  it('tracks explicit verified and unverified modes', () => {
     publishingPolicy.setMode('verified');
     expect(publishingPolicy.getMode()).toBe('verified');
-    publishingPolicy.setMode('compatibility');
-    expect(publishingPolicy.getMode()).toBe('compatibility');
+    publishingPolicy.setMode('unverified');
+    expect(publishingPolicy.getMode()).toBe('unverified');
   });
   it('retains required mode as a distinct release gate', () => {
     publishingPolicy.setMode('required');

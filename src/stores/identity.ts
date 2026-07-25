@@ -1,42 +1,23 @@
 import { create } from 'zustand';
 import type { IdentityState, CreateIdentityRequest } from '../types';
 import { identityService, networkService } from '../services';
+import { suspendProfile } from '../services/profileSession';
+import { getErrorMessage, HarborError } from '../utils/errors';
 
 export type IdentityClaimProgress =
   'preparing' | 'connecting' | 'waiting-for-relay' | 'registering' | 'verifying' | 'saving';
 
-/** Extract error message from various error types (including Tauri errors) */
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === 'string') {
-    return err;
-  }
-  if (err && typeof err === 'object') {
-    // Tauri errors might have a message property
-    if ('message' in err && typeof err.message === 'string') {
-      return err.message;
-    }
-    // Or an error property
-    if ('error' in err && typeof err.error === 'string') {
-      return err.error;
-    }
-    // Try to stringify for debugging, but provide a fallback
-    try {
-      const str = JSON.stringify(err);
-      if (str && str !== '{}') {
-        return str;
-      }
-    } catch {
-      // Ignore stringify errors
-    }
-  }
-  return 'An unknown error occurred';
+function transportInitializationError(err: unknown) {
+  return {
+    status: 'recoverableError' as const,
+    source: 'ipc' as const,
+    error: {
+      code: 'IPC_ERROR',
+      message: getErrorMessage(err),
+      recovery: 'Retry. If the problem continues, restart Harbor.',
+    },
+  };
 }
-
-const relayRetryPattern =
-  /NO_ACTIVE_RELAY|no active relay|offline|unavailable|not initialized|network service|old relay|timed out/i;
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -66,7 +47,7 @@ async function restoreVerifiedIdentity(
   }
   if (entry.mode !== 'verified') {
     await withTimeout(
-      identityService.setMigrationMode('verified'),
+      identityService.setPublishingMode('verified'),
       10_000,
       'Harbor verified your saved name but could not save its restored state. Please retry.',
     );
@@ -89,6 +70,18 @@ async function waitForActiveRelay(): Promise<void> {
   throw new Error(`Harbor connected to the network, but the relay is not ready yet.${detail}`);
 }
 
+const RETRYABLE_RELAY_CODES = new Set([
+  'NETWORK_NOT_INITIALIZED',
+  'NETWORK_SERVICE_UNAVAILABLE',
+  'NETWORK_CONNECTION_FAILED',
+  'NETWORK_PEER_UNREACHABLE',
+  'NETWORK_TIMEOUT',
+]);
+
+function isRetryableRelayFailure(error: unknown): boolean {
+  return RETRYABLE_RELAY_CODES.has(HarborError.fromUnknown(error).code);
+}
+
 interface IdentityStore {
   state: IdentityState;
   error: string | null;
@@ -103,70 +96,76 @@ interface IdentityStore {
     onProgress?: (progress: IdentityClaimProgress) => void,
   ) => Promise<import('../types').IdentityInfo>;
   unlock: (passphrase: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   lock: () => Promise<void>;
   updateDisplayName: (displayName: string) => Promise<void>;
   updateBio: (bio: string | null) => Promise<void>;
+  updateProfileAvatar: (filePath: string | null) => Promise<void>;
   updatePassphraseHint: (hint: string | null) => Promise<void>;
   clearError: () => void;
   attachVerifiedRelayName: (claim: import('../types').RelayNameClaim) => void;
+  resetRuntimeSession: () => void;
 }
+
+let lifecycleGeneration = 0;
 
 export const useIdentityStore = create<IdentityStore>((set, get) => ({
   state: { status: 'loading' },
   error: null,
 
   initialize: async () => {
+    const generation = lifecycleGeneration;
+    set({ state: { status: 'loading' }, error: null });
     try {
-      set({ state: { status: 'loading' }, error: null });
+      const initialization = await identityService.getInitializationState();
+      if (generation !== lifecycleGeneration) return;
 
-      const hasIdentity = await identityService.hasIdentity();
-
-      if (!hasIdentity) {
-        set({ state: { status: 'no_identity' } });
-        return;
-      }
-
-      const identity = await identityService.getIdentityInfo();
-      if (!identity) {
-        set({ state: { status: 'no_identity' } });
-        return;
-      }
-
-      const isUnlocked = await identityService.isUnlocked();
-
-      if (isUnlocked) {
-        let restoredIdentity = identity;
+      if (initialization.status === 'unlocked') {
+        let restoredIdentity = initialization.identity;
         try {
-          restoredIdentity = await restoreVerifiedIdentity(identity);
+          restoredIdentity = await restoreVerifiedIdentity(initialization.identity);
         } catch (restoreError) {
+          if (generation !== lifecycleGeneration) return;
           // Unlocking and legacy migration must remain available even if a saved claim is damaged
           // or temporarily unreadable. The migration gate will show the actionable recovery UI.
           set({ error: getErrorMessage(restoreError) });
         }
+        if (generation !== lifecycleGeneration) return;
         set({ state: { status: 'unlocked', identity: restoredIdentity } });
-      } else {
-        set({ state: { status: 'locked', identity } });
+        return;
       }
-    } catch (err) {
+
       set({
-        state: { status: 'no_identity' },
-        error: getErrorMessage(err),
+        state: initialization,
+        error:
+          initialization.status === 'recoverableError' || initialization.status === 'fatalError'
+            ? initialization.error.message
+            : null,
+      });
+    } catch (err) {
+      if (generation !== lifecycleGeneration) return;
+      const failure = transportInitializationError(err);
+      set({
+        state: failure,
+        error: failure.error.message,
       });
     }
   },
 
   createIdentity: async (request: CreateIdentityRequest) => {
+    const generation = lifecycleGeneration;
     try {
       set({ error: null });
       const identity = await identityService.createIdentity(request);
-      set({ state: { status: 'unlocked', identity } });
+      if (generation === lifecycleGeneration) set({ state: { status: 'unlocked', identity } });
       return identity;
     } catch (err) {
-      set({ error: getErrorMessage(err) });
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
       throw err;
     }
   },
   completeOnboarding: async (request, name, namespace, onProgress) => {
+    const generation = lifecycleGeneration;
     set({ error: null });
     try {
       onProgress?.('preparing');
@@ -193,7 +192,7 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
       onProgress?.('waiting-for-relay');
       await waitForActiveRelay();
       let claim;
-      for (let attempt = 0; ; attempt++) {
+      for (let attempt = 0; ; attempt += 1) {
         try {
           onProgress?.('registering');
           claim = await withTimeout(
@@ -202,9 +201,9 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
             'Name registration timed out. Check your relay connection and retry.',
           );
           break;
-        } catch (err) {
-          if (attempt >= 1 || !relayRetryPattern.test(getErrorMessage(err))) throw err;
-          await new Promise((r) => setTimeout(r, 300));
+        } catch (error) {
+          if (attempt >= 1 || !isRetryableRelayFailure(error)) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
       }
       onProgress?.('verifying');
@@ -219,53 +218,78 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         throw new Error('Harbor could not verify the relay name claim.');
       onProgress?.('saving');
       await withTimeout(
-        identityService.setMigrationMode('verified'),
+        identityService.setPublishingMode('verified'),
         10_000,
         'Harbor verified your name but could not save it in time. Please retry.',
       );
       const complete = { ...identity, relayNameClaim: claim, relayNameVerified: true };
-      set({ state: { status: 'unlocked', identity: complete } });
+      if (generation === lifecycleGeneration)
+        set({ state: { status: 'unlocked', identity: complete } });
       return complete;
     } catch (err) {
       const message = getErrorMessage(err);
-      set({ error: message });
-      throw new Error(message);
+      if (generation === lifecycleGeneration) set({ error: message });
+      throw err;
     }
   },
 
   unlock: async (passphrase: string) => {
+    const generation = lifecycleGeneration;
     try {
       set({ error: null });
       const identity = await identityService.unlock(passphrase);
+      if (generation !== lifecycleGeneration) return;
       let restoredIdentity = identity;
       try {
         restoredIdentity = await restoreVerifiedIdentity(identity);
       } catch (restoreError) {
+        if (generation !== lifecycleGeneration) return;
         // The identity is still securely unlocked. Preserve access to the migration recovery gate.
         set({ error: getErrorMessage(restoreError) });
       }
+      if (generation !== lifecycleGeneration) return;
       set({ state: { status: 'unlocked', identity: restoredIdentity } });
     } catch (err) {
-      set({ error: getErrorMessage(err) });
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
+      throw err;
+    }
+  },
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const generation = lifecycleGeneration;
+    try {
+      set({ error: null });
+      await identityService.changePassword(currentPassword, newPassword);
+    } catch (err) {
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
       throw err;
     }
   },
 
   lock: async () => {
     try {
+      const current = get().state;
+      const lockedIdentity =
+        current.status === 'unlocked' || current.status === 'locked' ? current.identity : null;
       await identityService.lock();
-      const { state } = get();
-      if (state.status === 'unlocked') {
-        set({ state: { status: 'locked', identity: state.identity } });
-      }
+      suspendProfile();
+      set({
+        state: lockedIdentity
+          ? { status: 'locked', identity: lockedIdentity }
+          : { status: 'loading' },
+        error: null,
+      });
     } catch (err) {
       set({ error: getErrorMessage(err) });
+      throw err;
     }
   },
 
   updateDisplayName: async (displayName: string) => {
+    const generation = lifecycleGeneration;
     try {
       await identityService.updateDisplayName(displayName);
+      if (generation !== lifecycleGeneration) return;
       const { state } = get();
       if (state.status === 'unlocked' || state.status === 'locked') {
         set({
@@ -276,13 +300,16 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: getErrorMessage(err) });
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
+      throw err;
     }
   },
 
   updateBio: async (bio: string | null) => {
+    const generation = lifecycleGeneration;
     try {
       await identityService.updateBio(bio);
+      if (generation !== lifecycleGeneration) return;
       const { state } = get();
       if (state.status === 'unlocked' || state.status === 'locked') {
         set({
@@ -293,13 +320,29 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: getErrorMessage(err) });
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
+      throw err;
+    }
+  },
+
+  updateProfileAvatar: async (filePath: string | null) => {
+    const generation = lifecycleGeneration;
+    try {
+      const identity = await identityService.updateProfileAvatar(filePath);
+      if (generation === lifecycleGeneration) {
+        set({ state: { status: 'unlocked', identity }, error: null });
+      }
+    } catch (err) {
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
+      throw err;
     }
   },
 
   updatePassphraseHint: async (hint: string | null) => {
+    const generation = lifecycleGeneration;
     try {
       await identityService.updatePassphraseHint(hint);
+      if (generation !== lifecycleGeneration) return;
       const { state } = get();
       if (state.status === 'unlocked' || state.status === 'locked') {
         set({
@@ -310,7 +353,8 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: getErrorMessage(err) });
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(err) });
+      throw err;
     }
   },
 
@@ -328,5 +372,16 @@ export const useIdentityStore = create<IdentityStore>((set, get) => ({
         },
       });
     }
+  },
+  resetRuntimeSession: () => {
+    lifecycleGeneration += 1;
+    const { state } = get();
+    set({
+      state:
+        state.status === 'locked' || state.status === 'unlocked'
+          ? { status: 'locked', identity: state.identity }
+          : { status: 'loading' },
+      error: null,
+    });
   },
 }));

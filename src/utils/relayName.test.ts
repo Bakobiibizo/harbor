@@ -31,7 +31,7 @@ const claim = {
 describe('relay name presentation', () => {
   it('never presents a legacy label as verified', () =>
     expect(presentRelayName(null, 'Alice', true, 100)).toEqual({
-      label: UNVERIFIED_HARBOR_USER,
+      label: 'Alice@unverified',
       qualifiedName: null,
       trust: 'unverified',
     }));
@@ -48,6 +48,10 @@ describe('verified peer labels', () => {
     expect(safePeerLabel('12D3peer', '@alice@relay.test')).toBe('@alice@relay.test'));
   it('rejects malformed labels without exposing the peer key or accepting an alias', () => {
     expect(safePeerLabel('12D3peer-secret', 'Alice')).toBe(UNVERIFIED_HARBOR_USER);
+    expect(safePeerLabel('12D3peer-secret', undefined, 'Alice')).toBe('Alice@unverified');
+    expect(safePeerLabel('12D3peer-secret', undefined, '@alice@relay.test')).toBe(
+      '@alice@relay.test@unverified',
+    );
     expect(safePeerLabel('12D3peer-secret')).toBe(UNVERIFIED_HARBOR_USER);
     expect(safePeerLabel('12D3peer-secret')).not.toContain('12D3');
   });
@@ -60,7 +64,7 @@ describe('verified peer labels', () => {
       relayNameVerified: true,
     } as IdentityInfo;
 
-    expect(safeIdentityLabel(identity)).toBe(UNVERIFIED_HARBOR_USER);
+    expect(safeIdentityLabel(identity)).toBe('Saved alias@unverified');
     expect(safeIdentityLabel(identity)).not.toContain('12D3');
   });
 });

@@ -27,6 +27,7 @@ pub fn build_swarm(keypair: Keypair, config: &NetworkConfig) -> Result<Swarm<Cha
                 PeerId::from(keypair.public()),
                 keypair.public(),
                 relay_behaviour,
+                config.enable_mdns,
             ))
         })
         .map_err(|e| AppError::Network(format!("Behaviour error: {}", e)))?
@@ -62,5 +63,20 @@ mod tests {
 
         // Peer ID should start with "12D3KooW"
         assert!(peer_id.to_string().starts_with("12D3KooW"));
+    }
+
+    #[tokio::test]
+    async fn mdns_behaviour_tracks_network_config() {
+        for enabled in [false, true] {
+            let keypair = Keypair::generate_ed25519();
+            let config = NetworkConfig {
+                enable_mdns: enabled,
+                ..NetworkConfig::default()
+            };
+
+            let swarm = build_swarm(keypair, &config).unwrap();
+
+            assert_eq!(swarm.behaviour().mdns.is_enabled(), enabled);
+        }
     }
 }

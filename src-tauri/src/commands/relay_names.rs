@@ -16,7 +16,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NameClaimRequestDto {
     pub domain: String,
@@ -31,7 +31,7 @@ pub struct NameClaimRequestDto {
     pub nonce: Vec<u8>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NameClaimDto {
     pub request: NameClaimRequestDto,
@@ -163,6 +163,7 @@ pub async fn register_relay_name(
     accounts.update_verified_qualified_name(
         &claim.request.peer_id,
         &format!("@{}@{}", claim.request.local_name, claim.request.relay),
+        claim.not_after,
     )?;
     Ok(claim.into())
 }
@@ -171,14 +172,13 @@ pub fn get_local_name_claim(
     db: State<'_, Arc<Database>>,
     identity: State<'_, Arc<IdentityService>>,
 ) -> Result<Option<NameClaimDto>> {
-    let Some(bytes) = RelayNamesRepository::new(&db)
-        .active_for_peer(&identity.get_peer_id()?, chrono::Utc::now().timestamp())?
-    else {
-        return Ok(None);
-    };
-    ciborium::de::from_reader::<NameClaim, _>(bytes.as_slice())
-        .map(|claim| Some(claim.into()))
-        .map_err(|e| AppError::Serialization(e.to_string()))
+    crate::services::name_claim_service::verified_name_claim(
+        &RelayNamesRepository::new(&db),
+        &identity.get_peer_id()?,
+        chrono::Utc::now().timestamp(),
+    )
+    .map(|claim| claim.map(|(claim, _)| claim.into()))
+    .map_err(|error| AppError::Crypto(error.to_string()))
 }
 #[tauri::command]
 pub fn verify_name_claim(claim: NameClaimDto, db: State<'_, Arc<Database>>) -> Result<bool> {
@@ -206,14 +206,14 @@ pub fn apply_relay_key_rotation(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IdentityMigrationState {
+pub struct IdentityPublishingState {
     pub mode: String,
 }
 
 /// The complete, verified state needed by the frontend identity-entry gate.
 ///
 /// Returning this as one command prevents the UI from making decisions from a
-/// migration-mode read and a separately verified claim read that can fail or
+/// publishing-mode read and a separately verified claim read that can fail or
 /// complete independently. A claim is only included after all user, relay-key,
 /// peer-id, signature, and validity checks have passed.
 #[derive(Serialize)]
@@ -223,11 +223,11 @@ pub struct IdentityEntryState {
     pub claim: Option<NameClaimDto>,
 }
 
-fn migration_mode(db: &Database, peer: &str) -> Result<String> {
+fn publishing_mode(db: &Database, peer: &str) -> Result<String> {
     db.with_connection(|connection| {
         connection
             .query_row(
-                "SELECT mode FROM identity_migration_state WHERE peer_id=?",
+                "SELECT mode FROM identity_publishing_state WHERE peer_id=?",
                 [peer],
                 |row| row.get(0),
             )
@@ -242,6 +242,19 @@ fn migration_mode(db: &Database, peer: &str) -> Result<String> {
     .map_err(Into::into)
 }
 
+fn validate_publishing_mode(mode: &str, has_verified_claim: bool) -> Result<()> {
+    match (mode, has_verified_claim) {
+        ("verified", true) | ("unverified", false) => Ok(()),
+        ("verified", false) => Err(AppError::Validation(
+            "A verified publishing mode requires an active relay name claim".into(),
+        )),
+        ("unverified", true) => Err(AppError::Validation(
+            "A verified identity cannot be downgraded to unverified".into(),
+        )),
+        _ => Err(AppError::Validation("Invalid publishing mode".into())),
+    }
+}
+
 #[tauri::command]
 pub fn get_identity_entry_state(
     db: State<'_, Arc<Database>>,
@@ -249,23 +262,26 @@ pub fn get_identity_entry_state(
     accounts: State<'_, Arc<AccountsService>>,
 ) -> Result<IdentityEntryState> {
     let peer = identity.get_peer_id()?;
-    let mode = migration_mode(&db, &peer)?;
+    let stored_mode = publishing_mode(&db, &peer)?;
     let now = chrono::Utc::now().timestamp();
-    let claim = RelayNamesRepository::new(&db)
-        .active_for_peer(&peer, now)?
-        .map(|bytes| {
-            let claim: NameClaim = ciborium::de::from_reader(bytes.as_slice())
-                .map_err(|error| AppError::Serialization(error.to_string()))?;
-            verify_and_cache(&RelayNamesRepository::new(&db), &claim, now)
-                .map_err(|error| AppError::Crypto(error.to_string()))?;
-            Ok::<NameClaimDto, AppError>(claim.into())
-        })
-        .transpose()?;
+    let claim = crate::services::name_claim_service::verified_name_claim(
+        &RelayNamesRepository::new(&db),
+        &peer,
+        now,
+    )
+    .map_err(|error| AppError::Crypto(error.to_string()))?
+    .map(|(claim, _)| NameClaimDto::from(claim));
+    let mode = if claim.is_some() {
+        "verified".to_string()
+    } else {
+        stored_mode
+    };
 
     if let Some(ref claim) = claim {
         accounts.update_verified_qualified_name(
             &peer,
             &format!("@{}@{}", claim.request.local_name, claim.request.relay),
+            claim.not_after,
         )?;
     }
 
@@ -273,25 +289,42 @@ pub fn get_identity_entry_state(
 }
 
 #[tauri::command]
-pub fn get_identity_migration_state(
+pub fn get_identity_publishing_state(
     db: State<'_, Arc<Database>>,
     identity: State<'_, Arc<IdentityService>>,
-) -> Result<IdentityMigrationState> {
+) -> Result<IdentityPublishingState> {
     let peer = identity.get_peer_id()?;
-    let mode = migration_mode(&db, &peer)?;
-    Ok(IdentityMigrationState { mode })
+    let stored_mode = publishing_mode(&db, &peer)?;
+    let has_verified_claim = crate::services::name_claim_service::verified_name_claim(
+        &RelayNamesRepository::new(&db),
+        &peer,
+        chrono::Utc::now().timestamp(),
+    )
+    .map_err(|error| AppError::Crypto(error.to_string()))?
+    .is_some();
+    let mode = if has_verified_claim {
+        "verified".to_string()
+    } else {
+        stored_mode
+    };
+    Ok(IdentityPublishingState { mode })
 }
 #[tauri::command]
-pub fn set_identity_migration_mode(
+pub fn set_identity_publishing_mode(
     mode: String,
     db: State<'_, Arc<Database>>,
     identity: State<'_, Arc<IdentityService>>,
 ) -> Result<()> {
-    if mode != "compatibility" && mode != "verified" {
-        return Err(AppError::Validation("Invalid migration mode".into()));
-    }
     let peer = identity.get_peer_id()?;
-    db.with_connection(|c|c.execute("INSERT INTO identity_migration_state VALUES(?,?,?) ON CONFLICT(peer_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at",rusqlite::params![peer,mode,chrono::Utc::now().timestamp()]).map(|_|()))?;
+    let has_verified_claim = crate::services::name_claim_service::verified_name_claim(
+        &RelayNamesRepository::new(&db),
+        &peer,
+        chrono::Utc::now().timestamp(),
+    )
+    .map_err(|error| AppError::Crypto(error.to_string()))?
+    .is_some();
+    validate_publishing_mode(&mode, has_verified_claim)?;
+    db.with_connection(|c|c.execute("INSERT INTO identity_publishing_state VALUES(?,?,?) ON CONFLICT(peer_id) DO UPDATE SET mode=excluded.mode,updated_at=excluded.updated_at",rusqlite::params![peer,mode,chrono::Utc::now().timestamp()]).map(|_|()))?;
     Ok(())
 }
 
@@ -376,18 +409,27 @@ mod dto_tests {
     }
 
     #[test]
-    fn identity_entry_mode_defaults_to_migration_and_restores_persisted_state() {
+    fn identity_entry_mode_defaults_to_required_and_restores_persisted_state() {
         let db = Database::in_memory().unwrap();
-        assert_eq!(migration_mode(&db, "peer-returning").unwrap(), "required");
+        assert_eq!(publishing_mode(&db, "peer-returning").unwrap(), "required");
 
         db.with_connection(|connection| {
             connection.execute(
-                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?,?,?)",
+                "INSERT INTO identity_publishing_state(peer_id, mode, updated_at) VALUES(?,?,?)",
                 rusqlite::params!["peer-returning", "verified", 123],
             )
         })
         .unwrap();
 
-        assert_eq!(migration_mode(&db, "peer-returning").unwrap(), "verified");
+        assert_eq!(publishing_mode(&db, "peer-returning").unwrap(), "verified");
+    }
+
+    #[test]
+    fn publishing_modes_cannot_spoof_or_downgrade_verified_identity() {
+        assert!(validate_publishing_mode("unverified", false).is_ok());
+        assert!(validate_publishing_mode("verified", true).is_ok());
+        assert!(validate_publishing_mode("verified", false).is_err());
+        assert!(validate_publishing_mode("unverified", true).is_err());
+        assert!(validate_publishing_mode("compatibility", false).is_err());
     }
 }

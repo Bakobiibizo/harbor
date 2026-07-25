@@ -27,6 +27,8 @@ if [ ! -x "$BINARY" ]; then
   exit 2
 fi
 
+node scripts/validate-release-webview-origin.mjs --artifact "$BINARY"
+
 for command in jq nc python3 scrot xdotool; do
   command -v "$command" >/dev/null || {
     echo "Missing packaged-smoke dependency: $command" >&2
@@ -101,6 +103,14 @@ shutdown() {
   APP_PID=""
 }
 
+assert_no_origin_failure() {
+  local log="$1"
+  if grep -Eqi 'missing Origin header|Origin header is not a valid URL|not allowed on origin|https?://(localhost|127\.0\.0\.1):1420' "$log"; then
+    echo "Packaged webview origin or IPC validation failed; see $log" >&2
+    return 1
+  fi
+}
+
 frontend_snapshot() {
   local port="$1"
   control "$port" "{\"id\":\"snapshot\",\"token\":\"$CONTROL_TOKEN\",\"command\":\"frontend\",\"action\":\"state.snapshot\",\"payload\":{}}"
@@ -169,6 +179,7 @@ if ! wait_for_verified_frontend "$CONTROL_PORT" "$OUTPUT_DIR/first-launch-state.
 fi
 scrot "$OUTPUT_DIR/verified-onboarding.png"
 shutdown "$CONTROL_PORT"
+assert_no_origin_failure "$FIRST_LOG"
 
 python3 - "$PROFILE_ROOT" "$NAME" "$NAMESPACE" <<'PY'
 import json, pathlib, sqlite3, sys
@@ -202,6 +213,7 @@ if ! wait_for_verified_frontend "$RESTART_PORT" "$OUTPUT_DIR/restart-state.json"
 fi
 scrot "$OUTPUT_DIR/restart-recovered.png"
 shutdown "$RESTART_PORT"
+assert_no_origin_failure "$RESTART_LOG"
 
 {
   echo "commit=$(git rev-parse HEAD)"

@@ -22,30 +22,36 @@ import { useCallingStore, useContactsStore, useMessagingStore } from '../stores'
 import { getInitials, getContactColor, formatRelativeTime } from '../utils/formatting';
 import { EmojiPicker } from '../components/common/EmojiPicker';
 import { PostMedia } from '../components/common/PostMedia';
+import { AvatarMedia } from '../components/common/AvatarMedia';
+import { MessageSecurityState } from '../components/chat/MessageSecurityState';
 import { mediaService } from '../services/media';
 import {
   HARBOR_SHORTCUT_EVENTS,
   isEditableShortcutTarget,
   shouldSendMessageFromKey,
 } from '../hooks/useKeyboardNavigation';
+import type { MessageStatus } from '../types';
 
 const log = createLogger('Chat');
 
 // --- Media attachment types and helpers ---
 
 interface PendingAttachment {
-  file: File;
   type: 'image' | 'video';
   previewUrl: string;
   name: string;
   size: number;
+  mediaHash: string;
+  mimeType: string;
 }
-
-const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-const ACCEPTED_VIDEO_TYPES = ['video/mp4', 'video/webm'];
-const ALL_ACCEPTED_TYPES = [...ACCEPTED_IMAGE_TYPES, ...ACCEPTED_VIDEO_TYPES];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const MEDIA_MARKER_PATTERN = /\[media:([^\]]+):([^\]]+)\]/;
+const MESSAGE_STATUS_LABELS: Record<MessageStatus, string> = {
+  queued: 'Queued',
+  sent: 'Sent',
+  delivered: 'Delivered',
+  read: 'Read',
+  failed: 'Not sent',
+};
 
 /** Format file size for display */
 function formatFileSize(bytes: number): string {
@@ -393,14 +399,18 @@ function ContactPicker({
   const availableContacts = contacts.filter(
     (c) =>
       !existingPeerIds.includes(c.peerId) &&
-      safePeerLabel(c.peerId, c.verifiedQualifiedName).toLowerCase().includes(filter.toLowerCase()),
+      safePeerLabel(c.peerId, c.verifiedQualifiedName, c.displayName)
+        .toLowerCase()
+        .includes(filter.toLowerCase()),
   );
 
   // Also show contacts that have existing conversations (for starting a new chat with them)
   const existingContacts = contacts.filter(
     (c) =>
       existingPeerIds.includes(c.peerId) &&
-      safePeerLabel(c.peerId, c.verifiedQualifiedName).toLowerCase().includes(filter.toLowerCase()),
+      safePeerLabel(c.peerId, c.verifiedQualifiedName, c.displayName)
+        .toLowerCase()
+        .includes(filter.toLowerCase()),
   );
 
   return (
@@ -484,14 +494,24 @@ function ContactPicker({
                         className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white flex-shrink-0"
                         style={{ background: getContactColor(contact.peerId) }}
                       >
-                        {getInitials(safePeerLabel(contact.peerId, contact.verifiedQualifiedName))}
+                        {getInitials(
+                          safePeerLabel(
+                            contact.peerId,
+                            contact.verifiedQualifiedName,
+                            contact.displayName,
+                          ),
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <p
                           className="font-semibold text-sm truncate"
                           style={{ color: 'hsl(var(--harbor-text-primary))' }}
                         >
-                          {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
+                          {safePeerLabel(
+                            contact.peerId,
+                            contact.verifiedQualifiedName,
+                            contact.displayName,
+                          )}
                         </p>
                         <p
                           className="text-xs truncate"
@@ -538,7 +558,11 @@ function ContactPicker({
                           style={{ background: getContactColor(contact.peerId) }}
                         >
                           {getInitials(
-                            safePeerLabel(contact.peerId, contact.verifiedQualifiedName),
+                            safePeerLabel(
+                              contact.peerId,
+                              contact.verifiedQualifiedName,
+                              contact.displayName,
+                            ),
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
@@ -546,7 +570,11 @@ function ContactPicker({
                             className="font-semibold text-sm truncate"
                             style={{ color: 'hsl(var(--harbor-text-primary))' }}
                           >
-                            {safePeerLabel(contact.peerId, contact.verifiedQualifiedName)}
+                            {safePeerLabel(
+                              contact.peerId,
+                              contact.verifiedQualifiedName,
+                              contact.displayName,
+                            )}
                           </p>
                           <p
                             className="text-xs truncate"
@@ -598,8 +626,8 @@ interface UnifiedConversation {
   id: string;
   peerId: string;
   name: string;
-  online: boolean;
   avatarGradient: string;
+  avatarHash: string | null;
   lastMessage: string;
   timestamp: Date;
   unread: number;
@@ -674,7 +702,6 @@ export function ChatPage() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const conversationSearchInputRef = useRef<HTMLInputElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load real contacts and conversations on mount
   useEffect(() => {
@@ -765,9 +792,9 @@ export function ChatPage() {
         return {
           id: `real-${contact.peerId}`,
           peerId: contact.peerId,
-          name: safePeerLabel(contact.peerId, contact.verifiedQualifiedName),
-          online: true, // Assume online for now - would need presence tracking
+          name: safePeerLabel(contact.peerId, contact.verifiedQualifiedName, contact.displayName),
           avatarGradient: getContactColor(contact.peerId),
+          avatarHash: contact.avatarHash,
           lastMessage: realConv ? 'Tap to view messages' : 'Start a conversation',
           timestamp: realConv
             ? new Date(realConv.lastMessageAt * 1000)
@@ -807,7 +834,10 @@ export function ChatPage() {
             .map((message, index) => ({
               message,
               index,
-              content: message.content.toLowerCase(),
+              content:
+                message.contentState.kind === 'plaintext'
+                  ? message.contentState.text.toLowerCase()
+                  : '',
             }))
             .filter((item) => item.content.includes(messageSearchQuery.toLowerCase()))
         : [],
@@ -847,62 +877,30 @@ export function ChatPage() {
   };
 
   // --- Attachment handlers ---
-  const handleAttachmentClick = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const handleFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Validate file type
-    if (!ALL_ACCEPTED_TYPES.includes(file.type)) {
-      toast.error(
-        'Unsupported file type. Please select an image (jpg, png, gif, webp) or video (mp4, webm).',
-      );
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
+  const handleAttachmentClick = useCallback(async () => {
+    try {
+      const selected = await mediaService.selectAndStore(['image', 'video']);
+      if (!selected) return;
+      setPendingAttachment({
+        type: selected.type === 'video' ? 'video' : 'image',
+        previewUrl: selected.previewUrl,
+        name: selected.fileName,
+        size: selected.totalBytes,
+        mediaHash: selected.mediaHash,
+        mimeType: selected.mimeType,
+      });
+      toast.success(`${selected.type === 'video' ? 'Video' : 'Image'} attached`);
+    } catch (error) {
+      log.warn('Failed to import message attachment', error);
+      toast.error('Attachment could not be imported');
     }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error(`File is too large (${formatFileSize(file.size)}). Maximum size is 10 MB.`);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    const isVideo = file.type.startsWith('video/');
-    const previewUrl = URL.createObjectURL(file);
-
-    setPendingAttachment({
-      file,
-      type: isVideo ? 'video' : 'image',
-      previewUrl,
-      name: file.name,
-      size: file.size,
-    });
-
-    toast.success(`${isVideo ? 'Video' : 'Image'} attached`);
-
-    // Reset file input so the same file can be re-selected
-    if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
 
   const handleRemoveAttachment = useCallback(() => {
     if (pendingAttachment) {
-      URL.revokeObjectURL(pendingAttachment.previewUrl);
       setPendingAttachment(null);
     }
   }, [pendingAttachment]);
-
-  // Clean up object URLs on unmount
-  useEffect(() => {
-    return () => {
-      if (pendingAttachment) {
-        URL.revokeObjectURL(pendingAttachment.previewUrl);
-      }
-    };
-  }, []);
 
   // Load messages when selecting a conversation
   useEffect(() => {
@@ -934,14 +932,11 @@ export function ChatPage() {
       let content = messageInput.trim();
       let contentType = 'text';
       if (pendingAttachment) {
-        const bytes = new Uint8Array(await pendingAttachment.file.arrayBuffer());
-        const mediaHash = await mediaService.storeMediaBytes(bytes, pendingAttachment.file.type);
-        const mediaMarker = `[media:${mediaHash}:${pendingAttachment.file.type}]`;
+        const mediaMarker = `[media:${pendingAttachment.mediaHash}:${pendingAttachment.mimeType}]`;
         content = content ? `${content}\n${mediaMarker}` : mediaMarker;
         contentType = pendingAttachment.type;
       }
       await sendRealMessage(selectedConv.peerId, content, contentType);
-      if (pendingAttachment) URL.revokeObjectURL(pendingAttachment.previewUrl);
       setMessageInput('');
       setPendingAttachment(null);
       inputRef.current?.focus();
@@ -1020,10 +1015,6 @@ export function ChatPage() {
 
   const handleCall = (video = false) => {
     if (!selectedConv) return;
-    if (!selectedConv.online) {
-      toast.error(`${selectedConv.name} is offline`);
-      return;
-    }
 
     useCallingStore
       .getState()
@@ -1044,9 +1035,7 @@ export function ChatPage() {
     const peerIds = [
       selectedConv.peerId,
       ...activeConversations
-        .filter(
-          (conversation) => conversation.peerId !== selectedConv.peerId && conversation.online,
-        )
+        .filter((conversation) => conversation.peerId !== selectedConv.peerId)
         .slice(0, 2)
         .map((conversation) => conversation.peerId),
     ];
@@ -1280,22 +1269,19 @@ export function ChatPage() {
                     {/* Avatar */}
                     <div className="relative flex-shrink-0">
                       <div
-                        className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-semibold text-white"
+                        className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-semibold text-white overflow-hidden"
                         style={{
-                          background: conversation.avatarGradient,
+                          background: conversation.avatarHash
+                            ? 'transparent'
+                            : conversation.avatarGradient,
                         }}
                       >
-                        {getInitials(conversation.name)}
+                        {conversation.avatarHash ? (
+                          <AvatarMedia hash={conversation.avatarHash} />
+                        ) : (
+                          getInitials(conversation.name)
+                        )}
                       </div>
-                      {conversation.online && (
-                        <div
-                          className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2"
-                          style={{
-                            background: 'hsl(var(--harbor-success))',
-                            borderColor: 'hsl(var(--harbor-bg-primary))',
-                          }}
-                        />
-                      )}
                     </div>
 
                     {/* Info */}
@@ -1429,42 +1415,24 @@ export function ChatPage() {
           </button>
           <div className="relative">
             <div
-              className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white"
+              className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white overflow-hidden"
               style={{
-                background: selectedConv!.avatarGradient,
+                background: selectedConv!.avatarHash ? 'transparent' : selectedConv!.avatarGradient,
               }}
             >
-              {getInitials(selectedConv!.name)}
+              {selectedConv!.avatarHash ? (
+                <AvatarMedia hash={selectedConv!.avatarHash!} />
+              ) : (
+                getInitials(selectedConv!.name)
+              )}
             </div>
-            {selectedConv!.online && (
-              <div
-                className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2"
-                style={{
-                  background: 'hsl(var(--harbor-success))',
-                  borderColor: 'hsl(var(--harbor-bg-elevated))',
-                }}
-              />
-            )}
           </div>
           <div>
             <p className="font-semibold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
               {selectedConv!.name}
             </p>
-            <p
-              className="text-xs"
-              style={{
-                color: selectedConv!.online
-                  ? 'hsl(var(--harbor-success))'
-                  : 'hsl(var(--harbor-text-tertiary))',
-              }}
-            >
-              {selectedConv!.isReal
-                ? selectedConv!.online
-                  ? 'Online'
-                  : 'Offline'
-                : selectedConv!.online
-                  ? 'Online - will reply automatically'
-                  : 'Offline'}
+            <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+              Presence is not shared
             </p>
           </div>
         </div>
@@ -1478,9 +1446,9 @@ export function ChatPage() {
                 background: 'hsl(var(--harbor-surface-1))',
                 color: 'hsl(var(--harbor-text-secondary))',
               }}
-              title={`Open ${selectedConv!.name}'s wall`}
+              title={`Open ${selectedConv!.name}'s profile`}
             >
-              Wall
+              Profile
             </button>
           )}
           <button
@@ -1667,13 +1635,18 @@ export function ChatPage() {
           {currentMessages.map((message, messageIndex) => {
             const isMine = message.isOutgoing;
             const timestamp = new Date(message.sentAt * 1000);
-            const content = message.content;
+            const plaintextState =
+              message.contentState.kind === 'plaintext' ? message.contentState : null;
+            const unreadableState =
+              message.contentState.kind === 'plaintext' ? null : message.contentState;
+            const isPlaintext = plaintextState !== null;
+            const content = plaintextState?.text ?? '';
             const id = message.messageId;
             const isMatch = showMessageSearch && matchingMessageIndices.has(messageIndex);
             const isActiveMatch = messageIndex === activeMatchMessageIndex;
             const contentHasMedia = hasMediaContent(content);
             const segments = contentHasMedia ? parseMessageContent(content) : null;
-            const isEditing = editingMessageId === id;
+            const isEditing = isPlaintext && editingMessageId === id;
             const isEdited = message.editedAt != null;
 
             return (
@@ -1689,7 +1662,7 @@ export function ChatPage() {
                 className={`group flex ${isMine ? 'justify-end' : 'justify-start'}`}
               >
                 {/* Edit button for own messages (appears on hover, before the bubble) */}
-                {isMine && !isEditing && (
+                {isMine && isPlaintext && !isEditing && (
                   <button
                     onClick={() => handleStartEdit(id, content)}
                     className="self-center mr-2 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -1706,10 +1679,15 @@ export function ChatPage() {
                 <div
                   className={`max-w-[75%] rounded-2xl transition-shadow duration-200 overflow-hidden ${contentHasMedia && !isEditing ? 'p-1.5' : 'px-4 py-2.5'}`}
                   style={{
-                    background: isMine
-                      ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
-                      : 'hsl(var(--harbor-surface-1))',
-                    color: isMine ? 'white' : 'hsl(var(--harbor-text-primary))',
+                    background: !isPlaintext
+                      ? 'hsl(var(--harbor-surface-1))'
+                      : isMine
+                        ? 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))'
+                        : 'hsl(var(--harbor-surface-1))',
+                    color: isMine && isPlaintext ? 'white' : 'hsl(var(--harbor-text-primary))',
+                    border: !isPlaintext
+                      ? '1px solid hsl(var(--harbor-warning) / 0.35)'
+                      : undefined,
                     borderBottomRightRadius: isMine ? '4px' : '16px',
                     borderBottomLeftRadius: isMine ? '16px' : '4px',
                     boxShadow: isActiveMatch
@@ -1719,7 +1697,21 @@ export function ChatPage() {
                         : 'none',
                   }}
                 >
-                  {isEditing ? (
+                  {unreadableState ? (
+                    <div className="space-y-2">
+                      <MessageSecurityState state={unreadableState} />
+                      <p
+                        className="text-xs text-right"
+                        style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+                      >
+                        {timestamp.toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                        {isMine && ` · ${MESSAGE_STATUS_LABELS[message.status]}`}
+                      </p>
+                    </div>
+                  ) : isEditing ? (
                     /* Edit mode: inline textarea with save/cancel */
                     <div className="space-y-2">
                       <textarea
@@ -1836,6 +1828,7 @@ export function ChatPage() {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
+                        {isMine && ` · ${MESSAGE_STATUS_LABELS[message.status]}`}
                       </p>
                     </div>
                   ) : (
@@ -1868,6 +1861,7 @@ export function ChatPage() {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
+                        {isMine && ` · ${MESSAGE_STATUS_LABELS[message.status]}`}
                       </p>
                     </>
                   )}
@@ -1878,15 +1872,6 @@ export function ChatPage() {
           <div ref={messagesEndRef} />
         </div>
       </div>
-
-      {/* Hidden file input for attachments */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm"
-        className="hidden"
-        onChange={handleFileSelected}
-      />
 
       {/* Message input */}
       <div
@@ -2060,12 +2045,7 @@ export function ChatPage() {
           className="text-xs mt-2 text-center"
           style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
         >
-          Press Enter to send &bull;{' '}
-          {selectedConv?.isReal
-            ? 'End-to-end encrypted'
-            : selectedConv?.online
-              ? 'Demo mode - auto replies enabled'
-              : 'Demo peer is offline'}
+          Press Enter to send &bull; End-to-end encrypted
         </p>
       </div>
 

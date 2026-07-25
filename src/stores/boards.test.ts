@@ -43,18 +43,19 @@ const mockBoardPost = {
   createdAt: 1700000100,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('useBoardsStore', () => {
   beforeEach(() => {
-    useBoardsStore.setState({
-      communities: [],
-      boards: [],
-      boardPosts: [],
-      activeCommunity: null,
-      activeBoard: null,
-      isLoading: false,
-      error: null,
-      hasMore: true,
-    });
+    useBoardsStore.getState().reset();
     vi.clearAllMocks();
   });
 
@@ -162,6 +163,55 @@ describe('useBoardsStore', () => {
 
       expect(useBoardsStore.getState().activeBoard?.boardId).toBe('board-default');
     });
+
+    it('keeps the newest community authoritative when an older request resolves last', async () => {
+      const communityB = { ...mockCommunity, relayPeerId: 'relay-2', communityName: 'Second' };
+      const boardB = { ...mockBoard, relayPeerId: 'relay-2', boardId: 'board-b', name: 'Board B' };
+      const postB = {
+        ...mockBoardPost,
+        relayPeerId: 'relay-2',
+        boardId: 'board-b',
+        postId: 'bp-b',
+      };
+      const boardsA = deferred<(typeof mockBoard)[]>();
+      vi.mocked(boardsService.getBoards).mockImplementation((relayPeerId) =>
+        relayPeerId === 'relay-1' ? boardsA.promise : Promise.resolve([boardB]),
+      );
+      vi.mocked(boardsService.getBoardPosts).mockResolvedValue([postB]);
+
+      const loadingA = useBoardsStore.getState().selectCommunity(mockCommunity);
+      await useBoardsStore.getState().selectCommunity(communityB);
+      boardsA.resolve([mockBoard]);
+      await loadingA;
+
+      expect(useBoardsStore.getState()).toMatchObject({
+        activeCommunity: communityB,
+        activeBoard: boardB,
+        boards: [boardB],
+        boardPosts: [postB],
+        isLoading: false,
+        error: null,
+      });
+    });
+
+    it('does not let an old community error replace the current view', async () => {
+      const communityB = { ...mockCommunity, relayPeerId: 'relay-2', communityName: 'Second' };
+      const boardB = { ...mockBoard, relayPeerId: 'relay-2', boardId: 'board-b' };
+      const boardsA = deferred<(typeof mockBoard)[]>();
+      vi.mocked(boardsService.getBoards).mockImplementation((relayPeerId) =>
+        relayPeerId === 'relay-1' ? boardsA.promise : Promise.resolve([boardB]),
+      );
+      vi.mocked(boardsService.getBoardPosts).mockResolvedValue([]);
+
+      const loadingA = useBoardsStore.getState().selectCommunity(mockCommunity);
+      await useBoardsStore.getState().selectCommunity(communityB);
+      boardsA.reject(new Error('stale relay failure'));
+      await loadingA;
+
+      expect(useBoardsStore.getState().activeCommunity).toEqual(communityB);
+      expect(useBoardsStore.getState().error).toBeNull();
+      expect(useBoardsStore.getState().isLoading).toBe(false);
+    });
   });
 
   describe('selectBoard', () => {
@@ -176,6 +226,26 @@ describe('useBoardsStore', () => {
 
       const state = useBoardsStore.getState();
       expect(state.activeBoard).toEqual(mockBoard);
+    });
+
+    it('discards posts and errors from a previously selected board', async () => {
+      const boardB = { ...mockBoard, boardId: 'board-b', name: 'Board B', isDefault: false };
+      const postB = { ...mockBoardPost, boardId: 'board-b', postId: 'bp-b' };
+      const postsA = deferred<(typeof mockBoardPost)[]>();
+      vi.mocked(boardsService.getBoardPosts).mockImplementation((_relay, boardId) =>
+        boardId === mockBoard.boardId ? postsA.promise : Promise.resolve([postB]),
+      );
+      useBoardsStore.setState({ activeCommunity: mockCommunity });
+
+      const loadingA = useBoardsStore.getState().selectBoard(mockBoard);
+      await useBoardsStore.getState().selectBoard(boardB);
+      postsA.resolve([mockBoardPost]);
+      await loadingA;
+
+      expect(useBoardsStore.getState().activeBoard).toEqual(boardB);
+      expect(useBoardsStore.getState().boardPosts).toEqual([postB]);
+      expect(useBoardsStore.getState().error).toBeNull();
+      expect(useBoardsStore.getState().isLoading).toBe(false);
     });
   });
 
@@ -196,6 +266,25 @@ describe('useBoardsStore', () => {
       await useBoardsStore.getState().loadBoardPosts();
 
       expect(useBoardsStore.getState().boardPosts).toEqual([mockBoardPost]);
+    });
+
+    it('does not commit a delayed load after profile teardown', async () => {
+      const posts = deferred<(typeof mockBoardPost)[]>();
+      useBoardsStore.setState({ activeCommunity: mockCommunity, activeBoard: mockBoard });
+      vi.mocked(boardsService.getBoardPosts).mockReturnValue(posts.promise);
+
+      const loading = useBoardsStore.getState().loadBoardPosts();
+      useBoardsStore.getState().reset();
+      posts.resolve([mockBoardPost]);
+      await loading;
+
+      expect(useBoardsStore.getState()).toMatchObject({
+        activeCommunity: null,
+        activeBoard: null,
+        boardPosts: [],
+        isLoading: false,
+        error: null,
+      });
     });
   });
 
@@ -219,8 +308,10 @@ describe('useBoardsStore', () => {
       expect(boardsService.syncBoard).toHaveBeenCalledWith('relay-1', 'board-general');
     });
 
-    it('should not submit if no active community/board', async () => {
-      await useBoardsStore.getState().submitPost('content');
+    it('rejects submission if no active community/board', async () => {
+      await expect(useBoardsStore.getState().submitPost('content')).rejects.toThrow(
+        'Select a community board',
+      );
 
       expect(boardsService.submitBoardPost).not.toHaveBeenCalled();
     });
@@ -244,8 +335,10 @@ describe('useBoardsStore', () => {
       expect(posts[0].postId).toBe('bp-2');
     });
 
-    it('should not delete if no active community', async () => {
-      await useBoardsStore.getState().deletePost('bp-1');
+    it('rejects deletion if no active community', async () => {
+      await expect(useBoardsStore.getState().deletePost('bp-1')).rejects.toThrow(
+        'Select a community',
+      );
 
       expect(boardsService.deleteBoardPost).not.toHaveBeenCalled();
     });

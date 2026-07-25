@@ -9,6 +9,8 @@
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,8 +18,27 @@ use crate::db::Database;
 use crate::error::{AppError, Result};
 
 /// Default chunk size for P2P media transfer (256 KB)
-const DEFAULT_CHUNK_SIZE: u32 = 256 * 1024;
+pub const DEFAULT_CHUNK_SIZE: u32 = 256 * 1024;
 const MAX_TRANSFER_BYTES: u64 = 10 * 1024 * 1024;
+pub const MAX_AVATAR_BYTES: u64 = 5 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredMediaInfo {
+    pub media_hash: String,
+    pub mime_type: String,
+    pub file_name: String,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaRange {
+    pub data: Vec<u8>,
+    pub offset: u64,
+    pub total_bytes: u64,
+    pub mime_type: String,
+    pub eof: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -137,7 +158,176 @@ impl MediaStorageService {
         Ok(hash)
     }
 
+    /// Import a selected file with bounded buffers and atomically publish it
+    /// into content-addressed storage. No file bytes cross the IPC boundary.
+    pub fn store_media_path(&self, source: &Path, mime_type: &str) -> Result<StoredMediaInfo> {
+        self.store_media_path_with_limit(source, mime_type, MAX_TRANSFER_BYTES)
+    }
+
+    /// Import a profile avatar using the shared streaming path and the
+    /// stricter avatar size/type policy.
+    pub fn store_avatar_path(&self, source: &Path, mime_type: &str) -> Result<StoredMediaInfo> {
+        if !mime_type.starts_with("image/") || mime_type == "image/svg+xml" {
+            return Err(AppError::InvalidData(
+                "Profile photos must be a supported raster image".into(),
+            ));
+        }
+        let metadata = std::fs::metadata(source)?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_AVATAR_BYTES {
+            return Err(AppError::InvalidData(
+                "Profile photo must be a file no larger than 5 MB".into(),
+            ));
+        }
+        let mut header = [0_u8; 12];
+        let read = File::open(source)?.read(&mut header)?;
+        let signature_matches = match mime_type {
+            "image/png" => read >= 8 && header[..8] == [137, 80, 78, 71, 13, 10, 26, 10],
+            "image/jpeg" => read >= 3 && header[..3] == [0xff, 0xd8, 0xff],
+            "image/gif" => read >= 6 && (&header[..6] == b"GIF87a" || &header[..6] == b"GIF89a"),
+            "image/webp" => read >= 12 && &header[..4] == b"RIFF" && &header[8..12] == b"WEBP",
+            _ => false,
+        };
+        if !signature_matches {
+            return Err(AppError::InvalidData(
+                "Profile photo contents do not match the selected image type".into(),
+            ));
+        }
+        self.store_media_path_with_limit(source, mime_type, MAX_AVATAR_BYTES)
+    }
+
+    fn store_media_path_with_limit(
+        &self,
+        source: &Path,
+        mime_type: &str,
+        max_bytes: u64,
+    ) -> Result<StoredMediaInfo> {
+        let metadata = std::fs::metadata(source)?;
+        let total_bytes = metadata.len();
+        if !metadata.is_file() || total_bytes == 0 || total_bytes > max_bytes {
+            return Err(AppError::InvalidData(format!(
+                "File must be between 1 byte and {max_bytes} bytes"
+            )));
+        }
+        let mut reader = BufReader::new(File::open(source)?);
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; DEFAULT_CHUNK_SIZE as usize];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        let hash = hex::encode(hasher.finalize());
+        let ext = mime_to_extension(mime_type);
+        let dir = self.media_dir.join(&hash[..2]);
+        std::fs::create_dir_all(&dir)?;
+        let destination = dir.join(format!("{hash}.{ext}"));
+        let temporary = dir.join(format!("{hash}.import-{}", uuid::Uuid::new_v4()));
+        let created = if destination.exists() {
+            false
+        } else {
+            let mut input = File::open(source)?;
+            let mut output = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            std::io::copy(&mut input, &mut output)?;
+            output.sync_all()?;
+            match std::fs::rename(&temporary, &destination) {
+                Ok(()) => true,
+                Err(_) if destination.exists() => {
+                    let _ = std::fs::remove_file(&temporary);
+                    false
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        let media_type = mime_type.split('/').next().unwrap_or("image");
+        if let Err(error) = self.record_local_media(
+            &hash,
+            media_type,
+            mime_type,
+            source.file_name().and_then(|name| name.to_str()),
+            total_bytes,
+        ) {
+            if created {
+                let _ = std::fs::remove_file(&destination);
+            }
+            return Err(error);
+        }
+        Ok(StoredMediaInfo {
+            media_hash: hash,
+            mime_type: mime_type.to_string(),
+            file_name: source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("attachment")
+                .to_string(),
+            total_bytes,
+        })
+    }
+
+    /// Release local ownership after an avatar replacement and remove bytes
+    /// only when no post still references the same content hash.
+    pub fn release_local_media(&self, hash: &str) -> Result<()> {
+        validate_hash(hash)?;
+        self.db
+            .with_connection(|connection| {
+                connection.execute("DELETE FROM media_local_pins WHERE media_hash = ?", [hash])?;
+                Ok(())
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        self.delete_media_if_orphaned(hash)
+    }
+
+    fn record_local_media(
+        &self,
+        hash: &str,
+        media_type: &str,
+        mime_type: &str,
+        file_name: Option<&str>,
+        total_bytes: u64,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .with_connection(|connection| {
+                let transaction = connection.unchecked_transaction()?;
+                transaction.execute(
+                    "INSERT INTO media_transfers
+                    (media_hash, media_type, mime_type, file_name, total_bytes,
+                     bytes_received, status, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, 'ready', ?)
+                 ON CONFLICT(media_hash) DO UPDATE SET
+                    media_type = excluded.media_type,
+                    mime_type = excluded.mime_type,
+                    file_name = COALESCE(excluded.file_name, file_name),
+                    total_bytes = excluded.total_bytes,
+                    bytes_received = excluded.bytes_received,
+                    status = 'ready', error_code = NULL, error_message = NULL,
+                    updated_at = excluded.updated_at",
+                    rusqlite::params![
+                        hash,
+                        media_type,
+                        mime_type,
+                        file_name,
+                        total_bytes as i64,
+                        total_bytes as i64,
+                        now
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_local_pins(media_hash, pinned_at) VALUES (?, ?)
+                 ON CONFLICT(media_hash) DO UPDATE SET pinned_at = excluded.pinned_at",
+                    rusqlite::params![hash, now],
+                )?;
+                transaction.commit()
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))
+    }
+
     /// Read the full media file for a given hash.
+    #[cfg(test)]
     pub fn get_media(&self, hash: &str) -> Result<Vec<u8>> {
         let file_path = self.resolve_path(hash)?;
         let data = std::fs::read(&file_path)?;
@@ -159,9 +349,9 @@ impl MediaStorageService {
             chunk_size
         };
 
-        let data = self.get_media(hash)?;
-        let total_size = data.len() as u32;
-        let total_chunks = total_size.div_ceil(chunk_size);
+        let range =
+            self.get_media_range(hash, chunk_index as u64 * chunk_size as u64, chunk_size)?;
+        let total_chunks = (range.total_bytes as u32).div_ceil(chunk_size);
 
         if chunk_index >= total_chunks {
             return Err(AppError::InvalidData(format!(
@@ -170,11 +360,134 @@ impl MediaStorageService {
             )));
         }
 
-        let start = (chunk_index * chunk_size) as usize;
-        let end = std::cmp::min(start + chunk_size as usize, data.len());
-        let chunk = data[start..end].to_vec();
+        Ok((range.data, total_chunks))
+    }
 
-        Ok((chunk, total_chunks))
+    /// Read one bounded byte range without buffering the full attachment.
+    pub fn get_media_range(&self, hash: &str, offset: u64, max_bytes: u32) -> Result<MediaRange> {
+        let max_bytes = max_bytes.clamp(1, DEFAULT_CHUNK_SIZE);
+        let path = self.resolve_path(hash)?;
+        let total_bytes = std::fs::metadata(&path)?.len();
+        if offset >= total_bytes {
+            return Err(AppError::InvalidData(
+                "Media range starts beyond the file".into(),
+            ));
+        }
+        let mut file = File::open(&path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let length = (total_bytes - offset).min(max_bytes as u64) as usize;
+        let mut data = vec![0_u8; length];
+        file.read_exact(&mut data)?;
+        Ok(MediaRange {
+            data,
+            offset,
+            total_bytes,
+            mime_type: path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(extension_to_mime)
+                .unwrap_or("application/octet-stream")
+                .to_string(),
+            eof: offset + length as u64 == total_bytes,
+        })
+    }
+
+    /// Append a verified bounded response to a durable partial file. Returns
+    /// true only after the complete file hash is verified and atomically named.
+    pub fn store_received_range(
+        &self,
+        hash: &str,
+        mime_type: &str,
+        offset: u64,
+        total_bytes: u64,
+        data: &[u8],
+    ) -> Result<bool> {
+        validate_hash(hash)?;
+        let transfer_limit = if self
+            .get_transfer(hash)?
+            .is_some_and(|state| state.file_name.as_deref() == Some("profile-avatar"))
+        {
+            MAX_AVATAR_BYTES
+        } else {
+            MAX_TRANSFER_BYTES
+        };
+        if total_bytes == 0
+            || total_bytes > transfer_limit
+            || data.is_empty()
+            || data.len() > DEFAULT_CHUNK_SIZE as usize
+            || offset + data.len() as u64 > total_bytes
+        {
+            return Err(AppError::InvalidData("Invalid media transfer range".into()));
+        }
+        let dir = self.media_dir.join(&hash[..2]);
+        std::fs::create_dir_all(&dir)?;
+        let partial = dir.join(format!("{hash}.part"));
+        let current = std::fs::metadata(&partial)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if current != offset {
+            return Err(AppError::InvalidData(format!(
+                "Media range offset mismatch: expected {current}, received {offset}"
+            )));
+        }
+        let mut output = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&partial)?;
+        output.write_all(data)?;
+        output.sync_data()?;
+        let received = offset + data.len() as u64;
+        self.update_transfer(
+            hash,
+            MediaTransferUpdate {
+                status: "transferring",
+                bytes_received: Some(received),
+                total_bytes: Some(total_bytes),
+                error_code: None,
+                error_message: None,
+                increment_attempt: false,
+            },
+        )?;
+        if received != total_bytes {
+            return Ok(false);
+        }
+        let mut reader = BufReader::new(File::open(&partial)?);
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; DEFAULT_CHUNK_SIZE as usize];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        if hex::encode(hasher.finalize()) != hash {
+            let _ = std::fs::remove_file(&partial);
+            return Err(AppError::InvalidData("Media integrity check failed".into()));
+        }
+        let destination = dir.join(format!("{hash}.{}", mime_to_extension(mime_type)));
+        std::fs::rename(&partial, &destination)?;
+        self.update_transfer(
+            hash,
+            MediaTransferUpdate {
+                status: "ready",
+                bytes_received: Some(total_bytes),
+                total_bytes: Some(total_bytes),
+                error_code: None,
+                error_message: None,
+                increment_attempt: false,
+            },
+        )?;
+        Ok(true)
+    }
+
+    pub fn partial_bytes(&self, hash: &str) -> Result<u64> {
+        validate_hash(hash)?;
+        Ok(
+            std::fs::metadata(self.media_dir.join(&hash[..2]).join(format!("{hash}.part")))
+                .map(|metadata| metadata.len())
+                .unwrap_or(0),
+        )
     }
 
     /// Check whether a media file exists on disk.
@@ -381,17 +694,45 @@ impl MediaStorageService {
                 (*size).try_into().ok(),
             )?;
         }
+        let interrupted = self
+            .db
+            .with_connection(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT media_hash FROM media_transfers
+                     WHERE status IN ('discovering', 'transferring', 'retrying')
+                     ORDER BY updated_at DESC, media_hash ASC LIMIT 2048",
+                )?;
+                let hashes = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(hashes)
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        let partial_lengths = interrupted
+            .iter()
+            .map(|hash| (hash.clone(), self.partial_bytes(hash).unwrap_or(0)))
+            .collect::<Vec<_>>();
         self.db
             .with_connection(|conn| {
-                conn.execute(
+                let transaction = conn.unchecked_transaction()?;
+                transaction.execute(
                     "UPDATE media_transfers
-                     SET status = 'queued', bytes_received = 0,
+                     SET status = 'queued',
                          error_code = 'restart',
                          error_message = 'Transfer interrupted; ready to retry',
                          updated_at = strftime('%s','now')
                      WHERE status IN ('discovering', 'transferring', 'retrying')",
                     [],
-                )
+                )?;
+                {
+                    let mut update = transaction.prepare(
+                        "UPDATE media_transfers SET bytes_received = ? WHERE media_hash = ?",
+                    )?;
+                    for (hash, partial_bytes) in &partial_lengths {
+                        update.execute(rusqlite::params![*partial_bytes as i64, hash])?;
+                    }
+                }
+                transaction.commit()
             })
             .map_err(|error| AppError::DatabaseString(error.to_string()))?;
         Ok(expected.len())
@@ -922,6 +1263,28 @@ fn mime_to_extension(mime_type: &str) -> &'static str {
     }
 }
 
+fn extension_to_mime(extension: &str) -> &'static str {
+    match extension {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "avi" => "video/x-msvideo",
+        "mkv" => "video/x-matroska",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        _ => "application/octet-stream",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,6 +1351,89 @@ mod tests {
 
         // Out of range
         assert!(service.get_media_chunk(&hash, 3, 4).is_err());
+    }
+
+    #[test]
+    fn range_reads_are_bounded_and_partial_transfer_survives_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("ranges.sqlite");
+        let payload = vec![7_u8; DEFAULT_CHUNK_SIZE as usize + 37];
+        let hash = hex::encode(Sha256::digest(&payload));
+        {
+            let db = Arc::new(Database::new(db_path.clone()).unwrap());
+            let service = MediaStorageService::new(tmp.path(), db).unwrap();
+            service
+                .ensure_transfer(
+                    &hash,
+                    Some("remote-peer"),
+                    "video",
+                    Some("video/mp4"),
+                    Some("clip.mp4"),
+                    Some(payload.len() as u64),
+                )
+                .unwrap();
+            assert!(!service
+                .store_received_range(
+                    &hash,
+                    "video/mp4",
+                    0,
+                    payload.len() as u64,
+                    &payload[..DEFAULT_CHUNK_SIZE as usize],
+                )
+                .unwrap());
+            assert!(service
+                .store_received_range(&hash, "video/mp4", 1, payload.len() as u64, &payload[..1],)
+                .is_err());
+        }
+        let db = Arc::new(Database::new(db_path).unwrap());
+        let service = MediaStorageService::new(tmp.path(), db).unwrap();
+        service.reconstruct_transfers().unwrap();
+        let resumed = service.get_transfer(&hash).unwrap().unwrap();
+        assert_eq!(resumed.status, "queued");
+        assert_eq!(resumed.bytes_received, DEFAULT_CHUNK_SIZE as u64);
+        assert!(service
+            .store_received_range(
+                &hash,
+                "video/mp4",
+                DEFAULT_CHUNK_SIZE as u64,
+                payload.len() as u64,
+                &payload[DEFAULT_CHUNK_SIZE as usize..],
+            )
+            .unwrap());
+        let range = service.get_media_range(&hash, 0, u32::MAX).unwrap();
+        assert_eq!(range.data.len(), DEFAULT_CHUNK_SIZE as usize);
+        assert!(!range.eof);
+    }
+
+    #[test]
+    fn one_thousand_transfer_rows_remain_unique_and_queryable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::in_memory().unwrap());
+        let service = MediaStorageService::new(tmp.path(), db).unwrap();
+        for index in 0..1_000_u64 {
+            let hash = format!("{index:064x}");
+            service
+                .ensure_transfer(
+                    &hash,
+                    Some("remote-peer"),
+                    "image",
+                    Some("image/png"),
+                    None,
+                    Some(1),
+                )
+                .unwrap();
+        }
+        let count: i64 = service
+            .db
+            .with_connection(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM media_transfers", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(count, 1_000);
+        assert!(service
+            .get_transfer(&format!("{:064x}", 999))
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -1342,5 +1788,253 @@ mod tests {
                 max_bytes: u64::MAX,
             })
             .is_err());
+    }
+
+    #[test]
+    fn two_profiles_transfer_verified_avatar_and_preserve_it_across_restart() {
+        use crate::services::{ContactsService, IdentityService};
+
+        let alice_dir = tempfile::tempdir().unwrap();
+        let bob_dir = tempfile::tempdir().unwrap();
+        let alice_db = Arc::new(Database::new(alice_dir.path().join("harbor.db")).unwrap());
+        let bob_db_path = bob_dir.path().join("harbor.db");
+        let bob_db = Arc::new(Database::new(bob_db_path.clone()).unwrap());
+        let alice_media = MediaStorageService::new(alice_dir.path(), alice_db).unwrap();
+        let bob_media = MediaStorageService::new(bob_dir.path(), bob_db.clone()).unwrap();
+        let bob_contacts = ContactsService::new(
+            bob_db.clone(),
+            Arc::new(IdentityService::new(bob_db.clone())),
+        );
+
+        let old_hash = bob_media.store_media(b"old-avatar", "image/png").unwrap();
+        bob_contacts
+            .add_contact(
+                "peer-alice",
+                &[3; 32],
+                &[4; 32],
+                "Alice",
+                Some(&old_hash),
+                None,
+            )
+            .unwrap();
+        let new_bytes = vec![9_u8; DEFAULT_CHUNK_SIZE as usize + 17];
+        let new_hash = alice_media.store_media(&new_bytes, "image/png").unwrap();
+        assert!(bob_contacts
+            .stage_profile_update(
+                "peer-alice",
+                1,
+                "Alice Updated",
+                Some(&new_hash),
+                Some("image/png"),
+                Some("new bio"),
+            )
+            .unwrap());
+        assert_eq!(
+            bob_contacts
+                .get_contact("peer-alice")
+                .unwrap()
+                .unwrap()
+                .avatar_hash
+                .as_deref(),
+            Some(old_hash.as_str()),
+            "staged metadata must not replace visible bytes"
+        );
+        drop(bob_contacts);
+        drop(bob_media);
+        drop(bob_db);
+
+        let resumed_db = Arc::new(Database::new(bob_db_path.clone()).unwrap());
+        let resumed_media = MediaStorageService::new(bob_dir.path(), resumed_db.clone()).unwrap();
+        let resumed_contacts = ContactsService::new(
+            resumed_db.clone(),
+            Arc::new(IdentityService::new(resumed_db.clone())),
+        );
+        assert_eq!(resumed_contacts.pending_profile_avatars().unwrap().len(), 1);
+        assert_eq!(
+            resumed_contacts
+                .get_contact("peer-alice")
+                .unwrap()
+                .unwrap()
+                .avatar_hash
+                .as_deref(),
+            Some(old_hash.as_str())
+        );
+        resumed_media
+            .ensure_transfer(
+                &new_hash,
+                Some("peer-alice"),
+                "image",
+                Some("image/png"),
+                Some("profile-avatar"),
+                Some(new_bytes.len() as u64),
+            )
+            .unwrap();
+        let mut offset = 0;
+        loop {
+            let range = alice_media
+                .get_media_range(&new_hash, offset, DEFAULT_CHUNK_SIZE)
+                .unwrap();
+            let complete = resumed_media
+                .store_received_range(
+                    &new_hash,
+                    &range.mime_type,
+                    range.offset,
+                    range.total_bytes,
+                    &range.data,
+                )
+                .unwrap();
+            offset += range.data.len() as u64;
+            if complete {
+                break;
+            }
+        }
+        assert!(resumed_contacts
+            .promote_verified_profile_avatar("peer-alice", &new_hash)
+            .unwrap());
+        drop(resumed_contacts);
+        drop(resumed_media);
+        drop(resumed_db);
+
+        let restarted_db = Arc::new(Database::new(bob_db_path).unwrap());
+        let restarted_media =
+            MediaStorageService::new(bob_dir.path(), restarted_db.clone()).unwrap();
+        let restarted_contacts = ContactsService::new(
+            restarted_db.clone(),
+            Arc::new(IdentityService::new(restarted_db)),
+        );
+        assert!(restarted_media.has_media(&new_hash));
+        let contact = restarted_contacts
+            .get_contact("peer-alice")
+            .unwrap()
+            .unwrap();
+        assert_eq!(contact.avatar_hash.as_deref(), Some(new_hash.as_str()));
+        assert_eq!(contact.display_name, "Alice Updated");
+    }
+
+    #[test]
+    fn oversized_and_tampered_avatar_replacements_preserve_previous_avatar() {
+        use crate::services::{ContactsService, IdentityService};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::new(tmp.path().join("harbor.db")).unwrap());
+        let media = MediaStorageService::new(tmp.path(), db.clone()).unwrap();
+        let contacts = ContactsService::new(db.clone(), Arc::new(IdentityService::new(db)));
+        let old_hash = media.store_media(b"old-avatar", "image/png").unwrap();
+        contacts
+            .add_contact(
+                "peer-alice",
+                &[3; 32],
+                &[4; 32],
+                "Alice",
+                Some(&old_hash),
+                None,
+            )
+            .unwrap();
+
+        let expected_hash = "a".repeat(64);
+        contacts
+            .stage_profile_update(
+                "peer-alice",
+                2,
+                "Mallory payload",
+                Some(&expected_hash),
+                Some("image/png"),
+                None,
+            )
+            .unwrap();
+        assert!(!contacts
+            .stage_profile_update(
+                "peer-alice",
+                1,
+                "Stale metadata",
+                Some(&"b".repeat(64)),
+                Some("image/png"),
+                None,
+            )
+            .unwrap());
+        media
+            .ensure_transfer(
+                &expected_hash,
+                Some("peer-alice"),
+                "image",
+                Some("image/png"),
+                Some("profile-avatar"),
+                Some(8),
+            )
+            .unwrap();
+        assert!(media
+            .store_received_range(&expected_hash, "image/png", 0, 8, b"tampered")
+            .is_err());
+        assert_eq!(
+            contacts
+                .get_contact("peer-alice")
+                .unwrap()
+                .unwrap()
+                .avatar_hash
+                .as_deref(),
+            Some(old_hash.as_str())
+        );
+
+        let valid = tmp.path().join("valid.png");
+        std::fs::write(&valid, [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).unwrap();
+        let imported = media.store_avatar_path(&valid, "image/png").unwrap();
+        assert_eq!(imported.total_bytes, 12);
+        assert!(media.has_media(&imported.media_hash));
+        media.release_local_media(&imported.media_hash).unwrap();
+        assert!(!media.has_media(&imported.media_hash));
+
+        let oversized_remote_hash = "d".repeat(64);
+        contacts
+            .stage_profile_update(
+                "peer-alice",
+                3,
+                "Oversized payload",
+                Some(&oversized_remote_hash),
+                Some("image/png"),
+                None,
+            )
+            .unwrap();
+        media
+            .ensure_transfer(
+                &oversized_remote_hash,
+                Some("peer-alice"),
+                "image",
+                Some("image/png"),
+                Some("profile-avatar"),
+                Some(MAX_AVATAR_BYTES + 1),
+            )
+            .unwrap();
+        assert!(media
+            .store_received_range(
+                &oversized_remote_hash,
+                "image/png",
+                0,
+                MAX_AVATAR_BYTES + 1,
+                &[1],
+            )
+            .is_err());
+        assert_eq!(
+            contacts
+                .get_contact("peer-alice")
+                .unwrap()
+                .unwrap()
+                .avatar_hash
+                .as_deref(),
+            Some(old_hash.as_str())
+        );
+
+        let oversized = tmp.path().join("oversized.png");
+        let file = File::create(&oversized).unwrap();
+        file.set_len(MAX_AVATAR_BYTES + 1).unwrap();
+        assert!(media.store_avatar_path(&oversized, "image/png").is_err());
+        assert_eq!(
+            contacts
+                .get_contact("peer-alice")
+                .unwrap()
+                .unwrap()
+                .avatar_hash
+                .as_deref(),
+            Some(old_hash.as_str())
+        );
     }
 }

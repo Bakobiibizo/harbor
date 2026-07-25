@@ -14,7 +14,7 @@ use super::protocols::{
     BOARD_SYNC_PROTOCOL, CONTENT_SYNC_PROTOCOL, IDENTITY_PROTOCOL, MESSAGING_PROTOCOL,
     SIGNALING_PROTOCOL,
 };
-use crate::services::PermissionGrantMessage;
+use crate::services::{PermissionGrantMessage, PermissionRevokeMessage};
 
 // Duration is used in ping configuration
 
@@ -28,7 +28,7 @@ pub struct ChatBehaviour {
     /// Kademlia DHT for peer discovery and routing
     pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
     /// mDNS for local network peer discovery
-    pub mdns: mdns::tokio::Behaviour,
+    pub mdns: Toggle<mdns::tokio::Behaviour>,
     /// Relay client for NAT traversal
     pub relay_client: relay::client::Behaviour,
     /// DCUtR for direct connection upgrade through relay (disabled by default —
@@ -62,11 +62,18 @@ pub struct IdentityExchangeRequest {
     pub x25519_public: Vec<u8>,
     pub display_name: String,
     pub avatar_hash: Option<String>,
+    #[serde(default)]
+    pub avatar_mime_type: Option<String>,
+    #[serde(default)]
+    pub profile_revision: u64,
     pub bio: Option<String>,
     pub timestamp: i64,
     /// Signed grants issued to the recipient as part of mutual contact acceptance.
     #[serde(default)]
     pub permission_grants: Vec<PermissionGrantMessage>,
+    /// Signed capability revocations committed with relationship teardown.
+    #[serde(default)]
+    pub permission_revocations: Vec<PermissionRevokeMessage>,
     pub signature: Vec<u8>,
 }
 
@@ -81,11 +88,17 @@ pub struct IdentityExchangeResponse {
     pub x25519_public: Vec<u8>,
     pub display_name: String,
     pub avatar_hash: Option<String>,
+    #[serde(default)]
+    pub avatar_mime_type: Option<String>,
+    #[serde(default)]
+    pub profile_revision: u64,
     pub bio: Option<String>,
     pub timestamp: i64,
     /// Signed grants issued to the recipient as part of mutual contact acceptance.
     #[serde(default)]
     pub permission_grants: Vec<PermissionGrantMessage>,
+    #[serde(default)]
+    pub permission_revocations: Vec<PermissionRevokeMessage>,
     pub signature: Vec<u8>,
 }
 
@@ -208,6 +221,7 @@ impl ChatBehaviour {
         local_peer_id: libp2p::PeerId,
         local_public_key: libp2p::identity::PublicKey,
         relay_client: relay::client::Behaviour,
+        enable_mdns: bool,
     ) -> Self {
         // Ping
         let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(15)));
@@ -226,8 +240,14 @@ impl ChatBehaviour {
         let kademlia = kad::Behaviour::with_config(local_peer_id, store, kad_config);
 
         // mDNS
-        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
-            .expect("Failed to create mDNS behaviour");
+        let mdns = if enable_mdns {
+            Toggle::from(Some(
+                mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
+                    .expect("Failed to create mDNS behaviour"),
+            ))
+        } else {
+            Toggle::from(None)
+        };
 
         // DCUtR for hole punching — disabled by default.
         // When enabled, failed hole-punch attempts destabilise relay circuits

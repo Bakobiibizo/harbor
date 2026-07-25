@@ -8,10 +8,19 @@ import { MentionResolution } from '../identity';
 import { contentTypeForPost } from '../../utils/postModality';
 import { createLogger } from '../../utils/logger';
 import { safeIdentityLabel } from '../../utils/relayName';
+import { extractQualifiedMentions } from '../../utils/mentions';
+import { mediaService } from '../../services/media';
 
 const log = createLogger('ComposePostModal');
 type MediaType = 'image' | 'video' | 'audio';
-type PendingMedia = { type: MediaType; url: string; name: string; file: File };
+type PendingMedia = {
+  type: MediaType;
+  url: string;
+  name: string;
+  mediaHash: string;
+  mimeType: string;
+  fileSize: number;
+};
 
 const CONTENT_TYPES: {
   type: WallContentType;
@@ -38,14 +47,21 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
   const [isPublishing, setIsPublishing] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaTypeRef = useRef<MediaType>('image');
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
   const identity = identityState.status === 'unlocked' ? identityState.identity : null;
   const config = CONTENT_TYPES.find((item) => item.type === contentType) ?? CONTENT_TYPES[0];
+  const mentionNames = extractQualifiedMentions(content);
+  const activeResolvedMentions = mentionNames
+    .map((qualifiedName) =>
+      resolvedMentions.find((mention) => mention.qualifiedName === qualifiedName),
+    )
+    .filter((mention): mention is ResolvedMention => mention !== undefined);
+  const hasMentionText = mentionNames.length > 0;
+  const mentionsAreResolving = activeResolvedMentions.length !== mentionNames.length;
+  const hasMentionMediaConflict = hasMentionText && media.length > 0;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -86,37 +102,37 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
 
   if (!identity) return null;
 
-  const selectMedia = (type: MediaType) => {
-    mediaTypeRef.current = type;
-    if (!fileInputRef.current) return;
-    fileInputRef.current.accept = `${type}/*`;
-    fileInputRef.current.click();
-  };
-
-  const addMedia = (file: File | undefined) => {
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File size must be less than 10MB');
-      return;
+  const selectMedia = async (type: MediaType) => {
+    try {
+      const selected = await mediaService.selectAndStore([type]);
+      if (!selected) return;
+      setMedia((current) => [
+        ...current,
+        {
+          type,
+          url: selected.previewUrl,
+          name: selected.fileName,
+          mediaHash: selected.mediaHash,
+          mimeType: selected.mimeType,
+          fileSize: selected.totalBytes,
+        },
+      ]);
+      setContentType(type);
+    } catch (error) {
+      log.warn('Failed to import attachment', error);
+      toast.error('Attachment could not be imported');
     }
-    const type = mediaTypeRef.current;
-    setMedia((current) => [
-      ...current,
-      { type, url: URL.createObjectURL(file), name: file.name, file },
-    ]);
-    setContentType(type);
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeMedia = (index: number) => {
-    setMedia((current) => {
-      URL.revokeObjectURL(current[index].url);
-      return current.filter((_, mediaIndex) => mediaIndex !== index);
-    });
+    const removed = media[index];
+    if (!removed) return;
+    const remaining = media.filter((_, mediaIndex) => mediaIndex !== index);
+    setMedia(remaining);
+    if (remaining.length === 0 && contentType === removed.type) setContentType('post');
   };
 
   const clearDraft = () => {
-    media.forEach((item) => URL.revokeObjectURL(item.url));
     setContent('');
     setContentType('post');
     setVisibility(defaultVisibility);
@@ -127,24 +143,21 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
   const publish = async () => {
     if ((!content.trim() && media.length === 0) || isPublishing) return;
     if (config.limit && content.length > config.limit) return;
-    if (resolvedMentions.some((mention) => mention.status === 'blocked')) {
+    if (mentionsAreResolving || hasMentionMediaConflict) return;
+    if (activeResolvedMentions.some((mention) => mention.status === 'blocked')) {
       toast.error('Remove blocked mentions before publishing');
-      return;
-    }
-    if (resolvedMentions.length > 0 && media.length > 0) {
-      toast.error('Mentioned posts cannot include attachments yet');
       return;
     }
 
     setIsPublishing(true);
     const derivedContentType = contentTypeForPost(contentType, media);
     try {
-      if (resolvedMentions.length > 0) {
+      if (activeResolvedMentions.length > 0) {
         await mentionsService.publish({
           contentType: derivedContentType === 'post' ? 'text' : derivedContentType,
           contentText: content.trim(),
           visibility,
-          mentions: resolvedMentions.map((mention) => ({
+          mentions: activeResolvedMentions.map((mention) => ({
             qualifiedName: mention.qualifiedName,
             intent: 'notify',
             authorizedPeerId: mention.status === 'known' ? mention.peerId : undefined,
@@ -258,6 +271,31 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
             }}
           />
           <MentionResolution text={content} onResolved={setResolvedMentions} />
+          {mentionsAreResolving && (
+            <p
+              role="status"
+              className="mt-2 text-xs"
+              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+            >
+              Checking mention recipients before publishing...
+            </p>
+          )}
+          {hasMentionText && (
+            <p
+              id="mention-media-explanation"
+              role={hasMentionMediaConflict ? 'alert' : 'note'}
+              className="mt-2 text-xs"
+              style={{
+                color: hasMentionMediaConflict
+                  ? 'hsl(var(--harbor-warning))'
+                  : 'hsl(var(--harbor-text-tertiary))',
+              }}
+            >
+              {hasMentionMediaConflict
+                ? 'This draft cannot be published with both an attachment and an @mention. Remove one before publishing.'
+                : 'Attachments are unavailable while this post contains an @mention. Remove the @mention to add media.'}
+            </p>
+          )}
           {config.limit && (
             <p
               className="mt-1 text-right text-xs"
@@ -307,7 +345,9 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
                 key={type}
                 type="button"
                 onClick={() => selectMedia(type)}
-                className="harbor-interactive rounded-lg px-3 py-2 text-sm capitalize"
+                disabled={hasMentionText}
+                aria-describedby={hasMentionText ? 'mention-media-explanation' : undefined}
+                className="harbor-interactive rounded-lg px-3 py-2 text-sm capitalize disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                   background: 'hsl(var(--harbor-surface-1))',
                   color: 'hsl(var(--harbor-text-secondary))',
@@ -320,7 +360,7 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
               type="button"
               aria-pressed={visibility === 'public'}
               onClick={() => setVisibility(visibility === 'public' ? 'contacts' : 'public')}
-              title="Public posts appear in public previews and RSS. Contacts posts are shared only with contacts who have wall access."
+              title="Public posts appear in public previews and RSS. Contacts posts are shared only with approved contacts."
               className="harbor-interactive rounded-lg px-3 py-2 text-sm font-semibold"
               style={{
                 background: 'hsl(var(--harbor-surface-1))',
@@ -344,7 +384,13 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
             <button
               type="button"
               onClick={publish}
-              disabled={isPublishing || (!content.trim() && media.length === 0)}
+              disabled={
+                isPublishing ||
+                (!content.trim() && media.length === 0) ||
+                mentionsAreResolving ||
+                hasMentionMediaConflict
+              }
+              aria-describedby={hasMentionMediaConflict ? 'mention-media-explanation' : undefined}
               className="harbor-interactive rounded-lg px-5 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
               style={{ background: 'hsl(var(--harbor-primary))' }}
             >
@@ -352,12 +398,6 @@ export function ComposePostModal({ isOpen, onClose }: { isOpen: boolean; onClose
             </button>
           </div>
         </footer>
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          onChange={(event) => addMedia(event.target.files?.[0])}
-        />
       </div>
     </div>
   );

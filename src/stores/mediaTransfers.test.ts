@@ -84,8 +84,8 @@ describe('media transfer store', () => {
     expect(useMediaTransfersStore.getState().transfers).toEqual({});
   });
 
-  it('bounds lifecycle memory to the most recent 512 attachments', () => {
-    for (let index = 0; index < 520; index += 1) {
+  it('bounds lifecycle memory across one thousand attachments', () => {
+    for (let index = 0; index < 1_000; index += 1) {
       useMediaTransfersStore
         .getState()
         .apply(state({ mediaHash: index.toString(16).padStart(64, '0'), updatedAt: index }));

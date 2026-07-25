@@ -7,6 +7,7 @@ import { mediaService } from '../services/media';
 import type { FeedItem } from '../types';
 import type { Comment } from '../services/comments';
 import { createLogger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 
 const log = createLogger('ContactWallStore');
 
@@ -72,6 +73,36 @@ const initialState: Pick<
   loadingComments: new Set<string>(),
 };
 
+let lifecycleGeneration = 0;
+let wallSelectionGeneration = 0;
+let wallRequestGeneration = 0;
+let commentCountsRequestGeneration = 0;
+
+interface WallSelectionSnapshot {
+  lifecycle: number;
+  selection: number;
+  authorPeerId: string | null;
+}
+
+function captureWallSelection(get: () => ContactWallState): WallSelectionSnapshot {
+  return {
+    lifecycle: lifecycleGeneration,
+    selection: wallSelectionGeneration,
+    authorPeerId: get().authorPeerId,
+  };
+}
+
+function isCurrentWallSelection(
+  get: () => ContactWallState,
+  snapshot: WallSelectionSnapshot,
+): boolean {
+  return (
+    snapshot.lifecycle === lifecycleGeneration &&
+    snapshot.selection === wallSelectionGeneration &&
+    snapshot.authorPeerId === get().authorPeerId
+  );
+}
+
 async function loadPermission(authorPeerId: string): Promise<boolean> {
   try {
     return await permissionsService.weHaveCapability(authorPeerId, 'wall_read');
@@ -106,6 +137,14 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   ...initialState,
 
   loadWall: async (authorPeerId: string, limit: number = 20) => {
+    const generation = lifecycleGeneration;
+    const selection = ++wallSelectionGeneration;
+    const request = ++wallRequestGeneration;
+    const isCurrent = () =>
+      generation === lifecycleGeneration &&
+      selection === wallSelectionGeneration &&
+      request === wallRequestGeneration &&
+      get().authorPeerId === authorPeerId;
     set({
       authorPeerId,
       isLoading: true,
@@ -124,17 +163,22 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
     try {
       await feedService.fetchContactWall(authorPeerId);
     } catch (error) {
-      syncError = String(error);
+      if (!isCurrent()) return;
+      syncError = getErrorMessage(error);
       log.warn('Targeted contact wall relay sync failed', error);
     } finally {
-      set({ isSyncing: false });
+      if (isCurrent()) set({ isSyncing: false });
     }
+
+    if (!isCurrent()) return;
 
     try {
       const [canReadContactsOnly, wallItems] = await Promise.all([
         loadPermission(authorPeerId),
         feedService.getWall(authorPeerId, limit).then(decorateWallItems),
       ]);
+
+      if (!isCurrent()) return;
 
       set({
         wallItems,
@@ -156,14 +200,17 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
             log.warn('Failed to fetch contact wall social events from relay', error),
           );
         get().loadCommentCounts(wallItems.map((item) => item.postId));
-        mediaService.preloadMissingMedia().catch(() => {});
+        mediaService
+          .preloadMissingMedia()
+          .catch((error) => log.warn('Background contact media preload is degraded', error));
       }
     } catch (error) {
+      if (!isCurrent()) return;
       log.error('Failed to load contact wall', error);
       set({
-        error: String(error),
+        error: getErrorMessage(error),
         isLoading: false,
-        syncError: syncError ?? String(error),
+        syncError: syncError ?? getErrorMessage(error),
         lastSyncAt: Math.floor(Date.now() / 1000),
         syncStatus: 'partial_failure',
       });
@@ -173,6 +220,10 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   loadMore: async (limit: number = 20) => {
     const { authorPeerId, wallItems, isLoading, hasMore } = get();
     if (!authorPeerId || isLoading || !hasMore) return;
+    const snapshot = captureWallSelection(get);
+    const request = ++wallRequestGeneration;
+    const isCurrent = () =>
+      request === wallRequestGeneration && isCurrentWallSelection(get, snapshot);
 
     set({ isLoading: true, error: null });
     try {
@@ -180,6 +231,7 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
       const newItems = await decorateWallItems(
         await feedService.getWall(authorPeerId, limit, lastItem?.createdAt),
       );
+      if (!isCurrent()) return;
       set({
         wallItems: [...wallItems, ...newItems],
         isLoading: false,
@@ -189,8 +241,9 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
         get().loadCommentCounts(newItems.map((item) => item.postId));
       }
     } catch (error) {
+      if (!isCurrent()) return;
       log.error('Failed to load more contact wall posts', error);
-      set({ error: String(error), isLoading: false });
+      set({ error: getErrorMessage(error), isLoading: false });
     }
   },
 
@@ -205,12 +258,17 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   reconcileWall: async (limit: number = 20) => {
     const { authorPeerId } = get();
     if (!authorPeerId) return;
+    const snapshot = captureWallSelection(get);
+    const request = ++wallRequestGeneration;
+    const isCurrent = () =>
+      request === wallRequestGeneration && isCurrentWallSelection(get, snapshot);
 
     try {
       const [canReadContactsOnly, wallItems] = await Promise.all([
         loadPermission(authorPeerId),
         feedService.getWall(authorPeerId, limit).then(decorateWallItems),
       ]);
+      if (!isCurrent()) return;
       set({
         wallItems,
         canReadContactsOnly,
@@ -221,15 +279,18 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
         get().loadCommentCounts(wallItems.map((item) => item.postId));
       }
     } catch (error) {
+      if (!isCurrent()) return;
       log.warn('Failed to reconcile contact wall from local state', error);
     }
   },
 
   toggleLike: async (postId: string) => {
+    const snapshot = captureWallSelection(get);
     const existing = get().wallItems.find((item) => item.postId === postId);
     const summary = existing?.likedByUser
       ? await likesService.unlikePost(postId)
       : await likesService.likePost(postId);
+    if (!isCurrentWallSelection(get, snapshot)) return;
     feedService
       .syncWallSocialEventsToRelay()
       .catch((error) => log.warn('Failed to sync contact wall reaction event to relay', error));
@@ -244,6 +305,7 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   },
 
   loadComments: async (postId: string) => {
+    const snapshot = captureWallSelection(get);
     const { loadingComments } = get();
     if (loadingComments.has(postId)) return;
 
@@ -253,6 +315,7 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
 
     try {
       const comments = await commentsService.getComments(postId);
+      if (!isCurrentWallSelection(get, snapshot)) return;
       set((state) => {
         const newLoading = new Set(state.loadingComments);
         newLoading.delete(postId);
@@ -263,6 +326,7 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
         };
       });
     } catch (error) {
+      if (!isCurrentWallSelection(get, snapshot)) return;
       log.error('Failed to load contact wall comments', error);
       set((state) => {
         const newLoading = new Set(state.loadingComments);
@@ -273,7 +337,9 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   },
 
   addComment: async (postId: string, content: string) => {
+    const snapshot = captureWallSelection(get);
     const comment = await commentsService.addComment(postId, content);
+    if (!isCurrentWallSelection(get, snapshot)) return;
     feedService
       .syncWallSocialEventsToRelay()
       .catch((error) => log.warn('Failed to sync contact wall comment event to relay', error));
@@ -284,7 +350,9 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   },
 
   deleteComment: async (postId: string, commentId: string) => {
+    const snapshot = captureWallSelection(get);
     await commentsService.deleteComment(commentId);
+    if (!isCurrentWallSelection(get, snapshot)) return;
     set((state) => ({
       comments: {
         ...state.comments,
@@ -315,8 +383,12 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
   },
 
   loadCommentCounts: async (postIds: string[]) => {
+    const snapshot = captureWallSelection(get);
+    const request = ++commentCountsRequestGeneration;
     try {
       const counts = await commentsService.getCommentCounts(postIds);
+      if (request !== commentCountsRequestGeneration || !isCurrentWallSelection(get, snapshot))
+        return;
       set((state) => {
         const commentCounts = { ...state.commentCounts };
         for (const count of counts) {
@@ -325,9 +397,24 @@ export const useContactWallStore = create<ContactWallState>((set, get) => ({
         return { commentCounts };
       });
     } catch (error) {
+      if (request !== commentCountsRequestGeneration || !isCurrentWallSelection(get, snapshot))
+        return;
       log.error('Failed to load contact wall comment counts', error);
     }
   },
 
-  reset: () => set({ ...initialState, expandedComments: new Set(), loadingComments: new Set() }),
+  reset: () => {
+    lifecycleGeneration += 1;
+    wallSelectionGeneration += 1;
+    wallRequestGeneration += 1;
+    commentCountsRequestGeneration += 1;
+    set({
+      ...initialState,
+      wallItems: [],
+      comments: {},
+      commentCounts: {},
+      expandedComments: new Set(),
+      loadingComments: new Set(),
+    });
+  },
 }));

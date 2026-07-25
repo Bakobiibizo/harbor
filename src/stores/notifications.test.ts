@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useNotificationsStore } from './notifications';
+import { activateProfile, suspendProfile } from '../services/profileSession';
 
 const notification = (overrides = {}) => ({
   dedupeKey: 'message:peer-a:1',
@@ -16,6 +17,9 @@ const notification = (overrides = {}) => ({
 
 describe('useNotificationsStore', () => {
   beforeEach(() => {
+    suspendProfile();
+    activateProfile('test-profile');
+    localStorage.clear();
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `notice-${Date.now()}`) });
     useNotificationsStore.getState().reset();
   });

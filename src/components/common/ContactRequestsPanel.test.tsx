@@ -38,6 +38,35 @@ describe('ContactRequestsPanel', () => {
     expect(screen.getByText(/never accepts contact requests automatically/i)).toBeInTheDocument();
   });
 
+  it('keeps acceptance pending and prevents duplicate decisions until durable completion', async () => {
+    let finish!: () => void;
+    const decide = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<ContactRequestsPanel requests={[requests[0]]} onDecision={decide} onRetry={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+    expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Saving...' }));
+    expect(decide).toHaveBeenCalledTimes(1);
+
+    finish();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled());
+  });
+
+  it('restores review actions when durable acceptance fails', async () => {
+    const decide = vi.fn().mockRejectedValue(new Error('transaction rolled back'));
+    render(<ContactRequestsPanel requests={[requests[0]]} onDecision={decide} onRetry={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled());
+    expect(screen.getByText('Incoming · Needs review')).toBeInTheDocument();
+  });
+
   it.each([
     ['accepted', 'Accepted'],
     ['declined', 'Declined'],

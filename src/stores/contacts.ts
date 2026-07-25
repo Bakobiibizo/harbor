@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { contactsService } from '../services/contacts';
-import type { Contact, ContactRequest } from '../types';
+import type { Contact, ContactDecisionResult, ContactRequest } from '../types';
+import { getErrorMessage } from '../utils/errors';
 
 interface ContactsState {
   // State
@@ -14,11 +15,17 @@ interface ContactsState {
   refreshContacts: () => Promise<void>;
   loadRequests: () => Promise<void>;
   sendRequest: (peerId: string) => Promise<void>;
-  respondToRequest: (requestId: string, decision: 'accepted' | 'declined') => Promise<void>;
+  respondToRequest: (
+    requestId: string,
+    decision: 'accepted' | 'declined',
+  ) => Promise<ContactDecisionResult>;
   retryRequest: (requestId: string) => Promise<void>;
   isContact: (peerId: string) => boolean;
   getContact: (peerId: string) => Contact | undefined;
+  reset: () => void;
 }
+
+let lifecycleGeneration = 0;
 
 export const useContactsStore = create<ContactsState>((set, get) => ({
   // Initial state
@@ -29,47 +36,58 @@ export const useContactsStore = create<ContactsState>((set, get) => ({
 
   // Load all contacts
   loadContacts: async () => {
+    const generation = lifecycleGeneration;
     set({ isLoading: true, error: null });
     try {
       const contacts = await contactsService.getActiveContacts();
-      set({ contacts, isLoading: false });
+      if (generation === lifecycleGeneration) set({ contacts, isLoading: false });
     } catch (error) {
+      if (generation !== lifecycleGeneration) return;
       console.error('Failed to load contacts:', error);
-      set({ error: String(error), isLoading: false });
+      set({ error: getErrorMessage(error), isLoading: false });
     }
   },
 
   // Refresh contacts (alias for loadContacts, used after adding new contact)
   refreshContacts: async () => {
+    const generation = lifecycleGeneration;
     try {
       const contacts = await contactsService.getActiveContacts();
-      set({ contacts });
+      if (generation === lifecycleGeneration) set({ contacts });
     } catch (error) {
-      console.error('Failed to refresh contacts:', error);
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(error) });
     }
   },
 
   loadRequests: async () => {
+    const generation = lifecycleGeneration;
     try {
       const requests = await contactsService.getContactRequests();
-      set({ requests });
+      if (generation === lifecycleGeneration) set({ requests });
     } catch (error) {
-      set({ error: String(error) });
+      if (generation === lifecycleGeneration) set({ error: getErrorMessage(error) });
     }
   },
 
   sendRequest: async (peerId) => {
+    const generation = lifecycleGeneration;
     await contactsService.requestPeerIdentity(peerId);
+    if (generation !== lifecycleGeneration) return;
     await get().loadRequests();
   },
 
   respondToRequest: async (requestId, decision) => {
-    await contactsService.respondContactRequest(requestId, decision);
+    const generation = lifecycleGeneration;
+    const result = await contactsService.respondContactRequest(requestId, decision);
+    if (generation !== lifecycleGeneration) return result;
     await Promise.all([get().loadRequests(), get().refreshContacts()]);
+    return result;
   },
 
   retryRequest: async (requestId) => {
+    const generation = lifecycleGeneration;
     await contactsService.retryContactRequest(requestId);
+    if (generation !== lifecycleGeneration) return;
     await get().loadRequests();
   },
 
@@ -81,5 +99,9 @@ export const useContactsStore = create<ContactsState>((set, get) => ({
   // Get a contact by peer ID
   getContact: (peerId: string) => {
     return get().contacts.find((c) => c.peerId === peerId);
+  },
+  reset: () => {
+    lifecycleGeneration += 1;
+    set({ contacts: [], requests: [], isLoading: false, error: null });
   },
 }));

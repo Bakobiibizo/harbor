@@ -3,7 +3,7 @@ use crate::{
     error::{AppError, Result},
     models::{domain, NameClaim, QualifiedRelayName, PROTOCOL_VERSION},
     services::{
-        name_claim_service::{verify_and_cache, ClaimVerificationError},
+        name_claim_service::{verified_name_claim, verify_and_cache, ClaimVerificationError},
         signing::canonical_cbor,
         ContactsService, CryptoService, IdentityService, PostsService, Signable,
     },
@@ -12,8 +12,82 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
+const MAX_DELIVERY_KEYS: usize = 256;
+
+struct DeliveryKeyEntry {
+    key: Vec<u8>,
+    expires_at: i64,
+    last_used: u64,
+}
+
+#[derive(Default)]
+struct DeliveryKeyCache {
+    entries: HashMap<String, DeliveryKeyEntry>,
+    access_sequence: u64,
+}
+
+impl DeliveryKeyCache {
+    fn next_sequence(&mut self) -> u64 {
+        if self.access_sequence == u64::MAX {
+            let mut oldest_first = self
+                .entries
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.last_used))
+                .collect::<Vec<_>>();
+            oldest_first.sort_by_key(|(_, last_used)| *last_used);
+            for (index, (name, _)) in oldest_first.into_iter().enumerate() {
+                if let Some(entry) = self.entries.get_mut(&name) {
+                    entry.last_used = index as u64 + 1;
+                }
+            }
+            self.access_sequence = self.entries.len() as u64;
+        }
+        self.access_sequence += 1;
+        self.access_sequence
+    }
+
+    fn prune(&mut self, now: i64) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|_, entry| entry.expires_at > now);
+        before - self.entries.len()
+    }
+
+    fn insert(&mut self, name: String, key: Vec<u8>, expires_at: i64, now: i64) {
+        self.prune(now);
+        let last_used = self.next_sequence();
+        self.entries.insert(
+            name,
+            DeliveryKeyEntry {
+                key,
+                expires_at,
+                last_used,
+            },
+        );
+        while self.entries.len() > MAX_DELIVERY_KEYS {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(name, _)| name.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    fn get(&mut self, name: &str, now: i64) -> Option<Vec<u8>> {
+        self.prune(now);
+        let last_used = self.next_sequence();
+        let entry = self.entries.get_mut(name)?;
+        entry.last_used = last_used;
+        Some(entry.key.clone())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,7 +170,7 @@ pub struct MentionsService {
     identity: Arc<IdentityService>,
     contacts: Arc<ContactsService>,
     posts: Arc<PostsService>,
-    delivery_keys: std::sync::Mutex<std::collections::HashMap<String, (Vec<u8>, i64)>>,
+    delivery_keys: Mutex<DeliveryKeyCache>,
 }
 impl MentionsService {
     pub fn queued_outbound(
@@ -130,7 +204,11 @@ impl MentionsService {
             .x25519_secret
             .diffie_hellman(&x25519_dalek::PublicKey::from(ep));
         let plain = CryptoService::decrypt_message(
-            &CryptoService::derive_symmetric_key(shared.as_bytes(), domain::MENTION.as_bytes()),
+            &CryptoService::derive_ephemeral_envelope_key(
+                shared.as_bytes(),
+                domain::MENTION,
+                PROTOCOL_VERSION,
+            )?,
             &envelope.ciphertext,
         )?;
         let signed: SignedPrivateMentionPayload = ciborium::de::from_reader(plain.as_slice())
@@ -228,34 +306,53 @@ impl MentionsService {
             identity,
             contacts,
             posts,
-            delivery_keys: std::sync::Mutex::new(std::collections::HashMap::new()),
+            delivery_keys: Mutex::new(DeliveryKeyCache::default()),
         }
     }
     pub fn cache_delivery_key(&self, name: &str, key: Vec<u8>, expires: i64) -> Result<()> {
-        if key.len() != 32 || expires <= chrono::Utc::now().timestamp() {
+        self.cache_delivery_key_at(name, key, expires, chrono::Utc::now().timestamp())
+    }
+    fn cache_delivery_key_at(
+        &self,
+        name: &str,
+        key: Vec<u8>,
+        expires: i64,
+        now: i64,
+    ) -> Result<()> {
+        if key.len() != 32 || expires <= now {
             return Err(AppError::Validation("Invalid delivery key".into()));
         }
         self.delivery_keys
             .lock()
             .map_err(|_| AppError::Internal("Delivery-key cache unavailable".into()))?
-            .insert(name.into(), (key, expires));
+            .insert(name.into(), key, expires, now);
         Ok(())
     }
     fn cached_delivery_key(&self, name: &str) -> Option<Vec<u8>> {
-        let now = chrono::Utc::now().timestamp();
-        self.delivery_keys
+        self.cached_delivery_key_at(name, chrono::Utc::now().timestamp())
+    }
+    fn cached_delivery_key_at(&self, name: &str, now: i64) -> Option<Vec<u8>> {
+        self.delivery_keys.lock().ok()?.get(name, now)
+    }
+    pub fn prune_delivery_keys(&self, now: i64) -> Result<usize> {
+        Ok(self
+            .delivery_keys
             .lock()
-            .ok()?
-            .get(name)
-            .filter(|(_, e)| *e >= now)
-            .map(|(k, _)| k.clone())
+            .map_err(|_| AppError::Internal("Delivery-key cache unavailable".into()))?
+            .prune(now))
+    }
+    pub fn clear_runtime_cache(&self) {
+        if let Ok(mut cache) = self.delivery_keys.lock() {
+            cache.entries.clear();
+            cache.access_sequence = 0;
+        }
     }
     pub fn resolve(&self, name: &str) -> Result<ResolvedMention> {
         let _: QualifiedRelayName = name.parse().map_err(|_| {
             AppError::Validation("Mention must use canonical @name@relay form".into())
         })?;
         let found = MentionsRepository::new(&self.db).resolve_claim(name)?;
-        let Some((peer, digest, _)) = found else {
+        let Some(resolved_claim) = found else {
             return Ok(ResolvedMention {
                 qualified_name: name.into(),
                 status: "unknown".into(),
@@ -263,20 +360,37 @@ impl MentionsService {
                 claim_digest: None,
             });
         };
-        if self.contacts.is_blocked(&peer)? {
+        let verified = verify_and_cache(
+            &crate::db::repositories::RelayNamesRepository::new(&self.db),
+            &resolved_claim.claim,
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|error| AppError::Crypto(error.to_string()))?;
+        if verified.qualified_name.to_string() != name
+            || verified.peer_id.to_string() != resolved_claim.peer_id
+        {
+            return Err(AppError::Crypto(
+                "Cached relay name does not match its verified claim".into(),
+            ));
+        }
+        if self.contacts.is_blocked(&resolved_claim.peer_id)? {
             return Ok(ResolvedMention {
                 qualified_name: name.into(),
                 status: "blocked".into(),
                 peer_id: None,
-                claim_digest: Some(digest),
+                claim_digest: Some(resolved_claim.digest),
             });
         }
-        let known = self.contacts.is_contact(&peer)?;
+        let known = self.contacts.is_contact(&resolved_claim.peer_id)?;
         Ok(ResolvedMention {
             qualified_name: name.into(),
             status: if known { "known" } else { "private" }.into(),
-            peer_id: if known { Some(peer.to_string()) } else { None },
-            claim_digest: Some(digest),
+            peer_id: if known {
+                Some(resolved_claim.peer_id)
+            } else {
+                None
+            },
+            claim_digest: Some(resolved_claim.digest),
         })
     }
     pub fn publish(&self, r: PublishMentionedPostRequest) -> Result<PublishMentionedPostResult> {
@@ -323,13 +437,15 @@ impl MentionsService {
             .posts
             .create_post(&r.content_type, Some(&r.content_text), vis)?;
         let sender = self.identity.get_peer_id()?;
-        let sender_claim_bytes = crate::db::repositories::RelayNamesRepository::new(&self.db)
-            .active_for_peer(&sender, chrono::Utc::now().timestamp())?
-            .ok_or_else(|| {
-                AppError::Validation("A verified relay name is required to mention people".into())
-            })?;
-        let sender_claim: NameClaim = ciborium::de::from_reader(sender_claim_bytes.as_slice())
-            .map_err(|e| AppError::Serialization(e.to_string()))?;
+        let (sender_claim, _) = verified_name_claim(
+            &crate::db::repositories::RelayNamesRepository::new(&self.db),
+            &sender,
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|error| AppError::Crypto(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::Validation("A verified relay name is required to mention people".into())
+        })?;
         let sender_name = format!(
             "@{}@{}",
             sender_claim.request.local_name, sender_claim.request.relay
@@ -338,7 +454,22 @@ impl MentionsService {
             let resolved_key =
                 MentionsRepository::new(&self.db).resolve_claim(&m.qualified_name)?;
             let (recipient_peer, recipient_key) = match resolved_key {
-                Some((peer, _, key)) => (peer, key),
+                Some(resolved_claim) => {
+                    let verified = verify_and_cache(
+                        &crate::db::repositories::RelayNamesRepository::new(&self.db),
+                        &resolved_claim.claim,
+                        chrono::Utc::now().timestamp(),
+                    )
+                    .map_err(|error| AppError::Crypto(error.to_string()))?;
+                    if verified.qualified_name.to_string() != m.qualified_name
+                        || verified.peer_id.to_string() != resolved_claim.peer_id
+                    {
+                        return Err(AppError::Crypto(
+                            "Mention recipient does not match its verified claim".into(),
+                        ));
+                    }
+                    (resolved_claim.peer_id, resolved_claim.x25519_public_key)
+                }
                 None => (
                     String::new(),
                     self.cached_delivery_key(&m.qualified_name)
@@ -376,10 +507,11 @@ impl MentionsService {
             })
             .map_err(|e| AppError::Serialization(e.to_string()))?;
             let cipher = CryptoService::encrypt_message(
-                &CryptoService::derive_symmetric_key(
+                &CryptoService::derive_ephemeral_envelope_key(
                     shared.as_bytes(),
-                    crate::models::domain::MENTION.as_bytes(),
-                ),
+                    crate::models::domain::MENTION,
+                    PROTOCOL_VERSION,
+                )?,
                 &plain,
             )?;
             MentionsRepository::new(&self.db).insert(
@@ -575,6 +707,71 @@ mod tests {
     }
 
     #[test]
+    fn delivery_key_churn_is_lru_bounded_and_expired_entries_prune() {
+        let profile = profile("cache-owner");
+        for index in 0..(MAX_DELIVERY_KEYS + 50) {
+            profile
+                .mentions
+                .cache_delivery_key_at(
+                    &format!("@user-{index}@relay.test"),
+                    vec![index as u8; 32],
+                    200,
+                    100,
+                )
+                .unwrap();
+        }
+
+        let cache = profile.mentions.delivery_keys.lock().unwrap();
+        assert_eq!(cache.entries.len(), MAX_DELIVERY_KEYS);
+        drop(cache);
+        assert!(profile
+            .mentions
+            .cached_delivery_key_at("@user-0@relay.test", 100)
+            .is_none());
+
+        assert_eq!(
+            profile.mentions.prune_delivery_keys(200).unwrap(),
+            MAX_DELIVERY_KEYS
+        );
+        assert!(profile
+            .mentions
+            .delivery_keys
+            .lock()
+            .unwrap()
+            .entries
+            .is_empty());
+    }
+
+    #[test]
+    fn delivery_key_runtime_cache_clears_for_profile_stop() {
+        let profile = profile("cache-stop");
+        profile
+            .mentions
+            .cache_delivery_key_at("@user@relay.test", vec![7; 32], 200, 100)
+            .unwrap();
+
+        profile.mentions.clear_runtime_cache();
+
+        assert!(profile
+            .mentions
+            .cached_delivery_key_at("@user@relay.test", 100)
+            .is_none());
+    }
+
+    #[test]
+    fn delivery_key_lru_order_renormalizes_before_sequence_overflow() {
+        let mut cache = DeliveryKeyCache::default();
+        cache.insert("older".into(), vec![1; 32], 200, 100);
+        cache.insert("newer".into(), vec![2; 32], 200, 100);
+        cache.access_sequence = u64::MAX;
+
+        assert_eq!(cache.get("older", 100), Some(vec![1; 32]));
+
+        assert!(cache.entries["older"].last_used > cache.entries["newer"].last_used);
+        assert_eq!(cache.access_sequence, 3);
+    }
+
+    #[test]
     fn unknown_name_sealed_delivery_round_trip_rejects_wrong_recipient_tamper_and_expiry() {
         let now = chrono::Utc::now().timestamp();
         let relay_key = SigningKey::from_bytes(&[71; 32]);
@@ -599,7 +796,7 @@ mod tests {
             .with_connection(|connection| {
                 connection
                     .execute(
-                        "INSERT INTO identity_migration_state VALUES(?, 'verified', ?)",
+                        "INSERT INTO identity_publishing_state VALUES(?, 'verified', ?)",
                         rusqlite::params![alice.info.peer_id, now],
                     )
                     .map(|_| ())

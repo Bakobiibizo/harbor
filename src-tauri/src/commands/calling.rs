@@ -157,6 +157,8 @@ pub async fn send_group_membership(
         "invite" => GroupMembershipAction::Invite,
         "join" => GroupMembershipAction::Join,
         "leave" => GroupMembershipAction::Leave,
+        "decline" => GroupMembershipAction::Decline,
+        "failed" => GroupMembershipAction::Failed,
         "roster" => GroupMembershipAction::Roster,
         "terminate" => GroupMembershipAction::Terminate,
         _ => {
@@ -165,6 +167,13 @@ pub async fn send_group_membership(
             ))
         }
     };
+    let terminal_best_effort = matches!(
+        &action,
+        GroupMembershipAction::Leave
+            | GroupMembershipAction::Decline
+            | GroupMembershipAction::Failed
+            | GroupMembershipAction::Terminate
+    );
     let signal = calling_service.create_group_membership(
         input.room_id.as_deref(),
         input.creator_peer_id.as_deref(),
@@ -173,6 +182,8 @@ pub async fn send_group_membership(
         &input.participants,
         &input.media_mode,
     )?;
+    let mut delivered = 0usize;
+    let mut first_error = None;
     for peer_id in signal
         .participants
         .iter()
@@ -183,7 +194,25 @@ pub async fn send_group_membership(
             recipient_peer_id: peer_id.clone(),
             payload: SignalingPayload::GroupMembership(signal.clone()),
         };
-        transmit_signaling(&network, peer_id, envelope).await?;
+        match transmit_signaling(&network, peer_id, envelope).await {
+            Ok(()) => delivered += 1,
+            Err(error) => {
+                tracing::warn!(
+                    "Could not deliver {:?} group membership update to {}: {}",
+                    signal.action,
+                    peer_id,
+                    error
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if delivered == 0 && !terminal_best_effort {
+        if let Some(error) = first_error {
+            return Err(error);
+        }
     }
     Ok(signal)
 }

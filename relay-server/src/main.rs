@@ -4,43 +4,77 @@
 //! Run with `--community` to enable community boards with SQLite storage.
 
 mod abuse;
+mod admission;
 mod auth;
 mod board_service;
 mod db;
 mod introduction;
 mod name_registration;
+mod peer_binding;
+mod read_auth;
+
+pub use harbor_relay_server::resource_limits;
 
 use board_service::{BoardService, WallReadGrantProof};
 use clap::Parser;
 use db::RelayDatabase;
 use futures::StreamExt;
+use harbor_relay_server::identity_key::load_or_generate_identity;
 use libp2p::{
-    identify,
-    identity::Keypair,
-    noise, ping, relay,
+    identify, noise, ping, relay,
     request_response::{self, ProtocolSupport},
     swarm::{behaviour::toggle::Toggle, NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, StreamProtocol, SwarmBuilder,
 };
+use read_auth::{ReadReplayToken, RelayReadGuard};
+use resource_limits::{ResourceLimitArgs, ResourceLimits};
 use std::collections::HashMap;
 use std::fs;
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Board sync protocol version
 const BOARD_SYNC_PROTOCOL: &str = "/harbor/board/1.0.0";
 
-/// Default maximum requests per peer within the rate limit window
-const DEFAULT_RATE_LIMIT_MAX_REQUESTS: u64 = 60;
+fn is_routable_announce_ip(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    !ip.is_unspecified()
+        && !ip.is_loopback()
+        && !ip.is_private()
+        && !ip.is_link_local()
+        && !ip.is_multicast()
+        && !ip.is_broadcast()
+        && !ip.is_documentation()
+        && octets[0] != 0
+        && octets[0] < 240
+        && !(octets[0] == 100 && (64..=127).contains(&octets[1]))
+        && !(octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+        && !(octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+}
 
-/// Default rate limit window duration in seconds
-const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+fn validated_external_addresses(
+    announce_ip: Ipv4Addr,
+    port: u16,
+    peer_id: &PeerId,
+) -> Result<[Multiaddr; 2], String> {
+    if !is_routable_announce_ip(announce_ip) {
+        return Err(format!(
+            "{announce_ip} is not a publicly routable IPv4 address"
+        ));
+    }
+    let tcp = format!("/ip4/{announce_ip}/tcp/{port}/p2p/{peer_id}")
+        .parse()
+        .map_err(|error| format!("could not construct TCP address: {error}"))?;
+    let quic = format!("/ip4/{announce_ip}/udp/{port}/quic-v1/p2p/{peer_id}")
+        .parse()
+        .map_err(|error| format!("could not construct QUIC address: {error}"))?;
+    Ok([tcp, quic])
+}
 
-/// How often to purge stale entries from the rate limiter (in seconds)
-const RATE_LIMITER_CLEANUP_INTERVAL_SECS: u64 = 300;
 fn source_bucket(addr: &Multiaddr) -> String {
     use libp2p::multiaddr::Protocol;
     for p in addr.iter() {
@@ -75,6 +109,7 @@ fn opaque_delivery_key(
 struct IdentityTransport {
     auth: auth::AuthService,
     abuse: abuse::AbuseGuard,
+    admission: admission::SourceAdmissionGuard,
     database: RelayDatabase,
     relay_name: String,
     relay_key_id: String,
@@ -102,6 +137,87 @@ mod boundary_tests {
             assert!(d >= Duration::from_millis(20) && d <= Duration::from_millis(40));
             assert_eq!(d, response_delay(id));
         }
+    }
+
+    #[test]
+    fn external_addresses_only_use_validated_routable_ip() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let addresses =
+            validated_external_addresses("8.8.8.8".parse().unwrap(), 4001, &peer).unwrap();
+        assert!(addresses
+            .iter()
+            .all(|address| !address.to_string().contains("0.0.0.0")));
+        assert!(addresses
+            .iter()
+            .all(|address| address.to_string().contains("/ip4/8.8.8.8/")));
+
+        for rejected in [
+            "0.0.0.0",
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.1.1",
+            "192.0.2.1",
+            "224.0.0.1",
+        ] {
+            assert!(validated_external_addresses(rejected.parse().unwrap(), 4001, &peer).is_err());
+        }
+    }
+
+    #[test]
+    fn relay_only_mode_keeps_identity_and_wall_protocols_but_rejects_boards() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_string();
+        let identity = BoardSyncRequest::RelayAuthChallenge {
+            peer_id: peer.clone(),
+            audience: "name:register".into(),
+        };
+        let wall = BoardSyncRequest::GetWallPosts {
+            requester_peer_id: peer.clone(),
+            author_peer_id: peer.clone(),
+            since_lamport_clock: 0,
+            limit: 20,
+            timestamp: 1,
+            signature: vec![0; 64],
+            grant_proof: None,
+        };
+        let boards = BoardSyncRequest::ListBoards {
+            requester_peer_id: peer,
+            timestamp: 1,
+            signature: vec![0; 64],
+        };
+
+        assert!(request_enabled_in_mode(&identity, false));
+        assert!(request_enabled_in_mode(&wall, false));
+        assert!(!request_enabled_in_mode(&boards, false));
+        assert!(request_enabled_in_mode(&boards, true));
+    }
+    #[test]
+    fn transport_peer_churn_is_hard_bounded_and_expiry_reclaims_slots() {
+        let start = Instant::now();
+        let mut limiter = PeerRateLimiter::new(10, Duration::from_secs(10), 2);
+        let first = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let second = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let third = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        assert!(limiter.check_rate_limit_at(&first, start).is_ok());
+        assert!(limiter.check_rate_limit_at(&second, start).is_ok());
+        assert!(limiter.check_rate_limit_at(&third, start).is_err());
+        assert_eq!(limiter.peers.len(), 2);
+
+        limiter.cleanup_stale_entries_at(start + Duration::from_secs(21));
+        assert_eq!(limiter.peers.len(), 0);
+        assert!(limiter
+            .check_rate_limit_at(&third, start + Duration::from_secs(21))
+            .is_ok());
     }
     #[test]
     fn delivery_key_is_real_for_a_claim_and_stable_decoy_otherwise() {
@@ -162,6 +278,213 @@ mod boundary_tests {
         assert_eq!(first, second);
         assert_ne!(first, target_public);
     }
+
+    #[test]
+    fn read_handler_rejects_claimed_requester_before_service_authorization() {
+        let service =
+            BoardService::new(RelayDatabase::open(":memory:").unwrap(), "test".to_string());
+        let transport_peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let claimed_peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let local_peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut guard = RelayReadGuard::default();
+
+        let response = handle_board_request(
+            &service,
+            &mut guard,
+            None,
+            "test-network",
+            &local_peer,
+            &transport_peer,
+            BoardSyncRequest::ListBoards {
+                requester_peer_id: claimed_peer.to_string(),
+                timestamp: chrono::Utc::now().timestamp(),
+                signature: vec![1; 64],
+            },
+        );
+
+        assert!(matches!(
+            response,
+            BoardSyncResponse::Error { error }
+                if error == "RELAY_READ_REQUESTER_MISMATCH"
+        ));
+    }
+
+    #[test]
+    fn registration_handler_rejects_cross_transport_peer_claim() {
+        let service =
+            BoardService::new(RelayDatabase::open(":memory:").unwrap(), "test".to_string());
+        let transport = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let claimed_key = libp2p::identity::Keypair::generate_ed25519();
+        let claimed = claimed_key.public().to_peer_id();
+        let local = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut guard = RelayReadGuard::default();
+        let response = handle_board_request(
+            &service,
+            &mut guard,
+            None,
+            "test-network",
+            &local,
+            &transport,
+            BoardSyncRequest::RegisterPeer {
+                peer_id: claimed.to_string(),
+                public_key: claimed_key.public().encode_protobuf(),
+                display_name: "Mallory".into(),
+                timestamp: chrono::Utc::now().timestamp(),
+                signature: vec![0; 64],
+            },
+        );
+        assert!(matches!(
+            response,
+            BoardSyncResponse::Error { error }
+                if error == "RELAY_PEER_TRANSPORT_MISMATCH"
+        ));
+    }
+
+    #[test]
+    fn wall_post_handler_rejects_cross_transport_author_before_storage() {
+        let service =
+            BoardService::new(RelayDatabase::open(":memory:").unwrap(), "test".to_string());
+        let transport = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let claimed = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let local = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut guard = RelayReadGuard::default();
+        let response = handle_board_request(
+            &service,
+            &mut guard,
+            None,
+            "test-network",
+            &local,
+            &transport,
+            BoardSyncRequest::SubmitWallPost {
+                author_peer_id: claimed.to_string(),
+                post_id: "spoofed-post".into(),
+                content_type: "text".into(),
+                content_text: Some("spoofed".into()),
+                visibility: "public".into(),
+                lamport_clock: 1,
+                created_at: 1,
+                signature: vec![0; 64],
+                media_hashes: Vec::new(),
+                timestamp: chrono::Utc::now().timestamp(),
+                request_signature: vec![0; 64],
+                media_items: Vec::new(),
+            },
+        );
+        assert!(matches!(
+            response,
+            BoardSyncResponse::Error { error }
+                if error == "RELAY_POST_TRANSPORT_MISMATCH"
+        ));
+    }
+
+    #[test]
+    fn source_capacity_preserves_generic_introduction_response() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let service = BoardService::new(database.clone(), "test".into());
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let ed = relay_key.clone().try_into_ed25519().unwrap().to_bytes();
+        let mut secret = [0u8; 32];
+        secret.copy_from_slice(&ed[..32]);
+        let mut identity = IdentityTransport {
+            auth: auth::AuthService::new("relay.test", "k1", relay_key),
+            abuse: abuse::AbuseGuard::new(abuse::Limits {
+                peer: 10,
+                network: 10,
+                target: 10,
+                action: 10,
+                global: 10,
+                window_secs: 60,
+            }),
+            admission: admission::SourceAdmissionGuard::new(admission::Limits {
+                per_source: 1,
+                global: 10,
+                max_sources: 10,
+                window_secs: 60,
+            }),
+            database,
+            relay_name: "relay.test".into(),
+            relay_key_id: "k1".into(),
+            relay_signing_key: ed25519_dalek::SigningKey::from_bytes(&secret),
+        };
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let local = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut read_guard = RelayReadGuard::default();
+        let _ = handle_board_request(
+            &service,
+            &mut read_guard,
+            Some(&mut identity),
+            "203.0.113.0/24",
+            &local,
+            &peer,
+            BoardSyncRequest::RelayAuthChallenge {
+                peer_id: peer.to_string(),
+                audience: "introduce".into(),
+            },
+        );
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let response = handle_board_request(
+            &service,
+            &mut read_guard,
+            Some(&mut identity),
+            "203.0.113.0/24",
+            &local,
+            &peer,
+            BoardSyncRequest::SubmitIntroduction {
+                session_token: "invalid".into(),
+                envelope: introduction::IntroductionEnvelope {
+                    version: 1,
+                    request_id: request_id.clone(),
+                    target: "@unknown@relay.test".into(),
+                    requester_peer_id: peer.to_string(),
+                    requester_ephemeral_x25519_key: vec![0; 32],
+                    message_ciphertext: vec![1],
+                    issued_at: 1,
+                    expires_at: 2,
+                    work_challenge: abuse::WorkChallenge {
+                        id: "work".into(),
+                        relay: "relay.test".into(),
+                        requester: peer.to_string(),
+                        target: "@unknown@relay.test".into(),
+                        action: "introduce".into(),
+                        audience: "introduce".into(),
+                        expires_at: 2,
+                        difficulty: 0,
+                        key_id: "k1".into(),
+                        relay_signature: vec![],
+                        delivery_key: vec![0; 32],
+                    },
+                    work_nonce: 0,
+                },
+            },
+        );
+        assert!(matches!(
+            response,
+            BoardSyncResponse::IntroductionAccepted {
+                request_id: returned,
+                retry_after: 3_600
+            } if returned == request_id
+        ));
+    }
 }
 
 /// Per-peer rate limiter for board sync requests.
@@ -176,14 +499,18 @@ struct PeerRateLimiter {
     max_requests: u64,
     /// Duration of the rate limit window
     window_duration: Duration,
+    /// Hard bound for transport identities retained in memory.
+    max_tracked_peers: usize,
 }
 
 impl PeerRateLimiter {
-    fn new(max_requests: u64, window_duration: Duration) -> Self {
+    fn new(max_requests: u64, window_duration: Duration, max_tracked_peers: usize) -> Self {
+        assert!(max_tracked_peers > 0);
         Self {
             peers: HashMap::new(),
             max_requests,
             window_duration,
+            max_tracked_peers,
         }
     }
 
@@ -192,7 +519,13 @@ impl PeerRateLimiter {
     /// Returns `Ok(())` if the request is permitted, or `Err(message)` if the
     /// peer has exceeded their rate limit for the current window.
     fn check_rate_limit(&mut self, peer_id: &PeerId) -> Result<(), String> {
-        let now = Instant::now();
+        self.check_rate_limit_at(peer_id, Instant::now())
+    }
+
+    fn check_rate_limit_at(&mut self, peer_id: &PeerId, now: Instant) -> Result<(), String> {
+        if !self.peers.contains_key(peer_id) && self.peers.len() >= self.max_tracked_peers {
+            return Err("Rate limit capacity reached. Try again later.".to_string());
+        }
 
         let (request_count, window_start) = self.peers.entry(*peer_id).or_insert((0, now));
 
@@ -223,7 +556,10 @@ impl PeerRateLimiter {
     /// and never return. An entry is considered stale if its window started
     /// more than `2 * window_duration` ago.
     fn cleanup_stale_entries(&mut self) {
-        let now = Instant::now();
+        self.cleanup_stale_entries_at(Instant::now());
+    }
+
+    fn cleanup_stale_entries_at(&mut self, now: Instant) {
         let stale_threshold = self.window_duration * 2;
         let initial_count = self.peers.len();
 
@@ -284,6 +620,14 @@ pub enum BoardSyncRequest {
         requester_peer_id: String,
         board_id: String,
         after_timestamp: Option<i64>,
+        limit: u32,
+        timestamp: i64,
+        signature: Vec<u8>,
+    },
+    GetOlderBoardPosts {
+        requester_peer_id: String,
+        board_id: String,
+        before: Option<db::BoardPostCursor>,
         limit: u32,
         timestamp: i64,
         signature: Vec<u8>,
@@ -368,6 +712,22 @@ pub enum BoardSyncRequest {
         timestamp: i64,
         signature: Vec<u8>,
     },
+}
+
+impl BoardSyncRequest {
+    fn requires_community(&self) -> bool {
+        matches!(
+            self,
+            Self::ListBoards { .. }
+                | Self::GetBoardPosts { .. }
+                | Self::SubmitPost { .. }
+                | Self::DeletePost { .. }
+        )
+    }
+}
+
+fn request_enabled_in_mode(request: &BoardSyncRequest, community_mode: bool) -> bool {
+    community_mode || !request.requires_community()
 }
 
 /// Board info in responses
@@ -531,17 +891,8 @@ struct Args {
     #[arg(long)]
     announce_ip: Option<Ipv4Addr>,
 
-    /// Maximum number of relay reservations
-    #[arg(long, default_value_t = 128)]
-    max_reservations: usize,
-
-    /// Maximum circuits per peer
-    #[arg(long, default_value_t = 16)]
-    max_circuits_per_peer: usize,
-
-    /// Maximum total circuits
-    #[arg(long, default_value_t = 512)]
-    max_circuits: usize,
+    #[command(flatten)]
+    resource_limits: ResourceLimitArgs,
 
     /// Path to the persistent identity key (generated if missing)
     #[arg(long, default_value_t = default_identity_path())]
@@ -551,21 +902,13 @@ struct Args {
     #[arg(long, default_value_t = false)]
     community: bool,
 
-    /// Directory for SQLite database storage (only used with --community)
+    /// Directory for persistent identity and optional community storage
     #[arg(long)]
     data_dir: Option<String>,
 
     /// Community name for this relay (only used with --community)
     #[arg(long, default_value = "Harbor Community")]
     community_name: String,
-
-    /// Maximum board sync requests per peer within the rate limit window (only used with --community)
-    #[arg(long, default_value_t = DEFAULT_RATE_LIMIT_MAX_REQUESTS)]
-    rate_limit_max_requests: u64,
-
-    /// Rate limit window duration in seconds (only used with --community)
-    #[arg(long, default_value_t = DEFAULT_RATE_LIMIT_WINDOW_SECS)]
-    rate_limit_window_secs: u64,
 }
 
 /// Combined behaviour for the relay server
@@ -585,25 +928,6 @@ fn default_identity_path() -> String {
         .to_string()
 }
 
-fn load_or_generate_identity(path: &str) -> Result<Keypair, Box<dyn std::error::Error>> {
-    let path = PathBuf::from(path);
-
-    if path.exists() {
-        let bytes = fs::read(&path)?;
-        let key = Keypair::from_protobuf_encoding(&bytes)?;
-        return Ok(key);
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let key = Keypair::generate_ed25519();
-    let encoded = key.to_protobuf_encoding()?;
-    fs::write(&path, encoded)?;
-    Ok(key)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -614,12 +938,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
+    let resource_limits = ResourceLimits::try_from(args.resource_limits.clone())?;
 
     // Warn if community-only options are used without --community
     if !args.community {
-        if args.data_dir.is_some() {
-            warn!("--data-dir has no effect without --community");
-        }
         if args.community_name != "Harbor Community" {
             warn!("--community-name has no effect without --community");
         }
@@ -633,37 +955,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Mode: Relay only (NAT traversal pass-through)");
     }
     info!("Port: {}", args.port);
-    info!("Max reservations: {}", args.max_reservations);
-    info!("Max circuits per peer: {}", args.max_circuits_per_peer);
+    info!(?resource_limits, "Effective relay resource limits");
 
-    let keypair = load_or_generate_identity(&args.identity_key_path)?;
+    let keypair = load_or_generate_identity(Path::new(&args.identity_key_path))?;
     info!("Using identity key at {}", args.identity_key_path);
 
-    // Initialize database and board service only in community mode
-    let board_service: Option<(BoardService, RelayDatabase)> = if args.community {
-        let db_path = if let Some(ref data_dir) = args.data_dir {
-            fs::create_dir_all(data_dir)?;
-            format!("{}/relay.db", data_dir)
-        } else {
-            let default_dir = dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".config/harbor-relay");
-            fs::create_dir_all(&default_dir)?;
-            default_dir.join("relay.db").display().to_string()
-        };
-
-        let relay_db = RelayDatabase::open(&db_path)?;
-        let identity_database = relay_db.clone();
-        let service = BoardService::new(relay_db, args.community_name.clone());
-        info!("Database initialized at {}", db_path);
-        Some((service, identity_database))
+    // Relay-scoped identity, introductions, and wall data are available in
+    // every mode and require durable state. `--community` additionally
+    // enables the community-board request variants on the shared protocol.
+    let db_path = if let Some(ref data_dir) = args.data_dir {
+        fs::create_dir_all(data_dir)?;
+        format!("{}/relay.db", data_dir)
     } else {
-        None
+        let default_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config/harbor-relay");
+        fs::create_dir_all(&default_dir)?;
+        default_dir.join("relay.db").display().to_string()
     };
 
-    let (board_service, identity_database) = board_service
-        .map(|(s, d)| (Some(s), Some(d)))
-        .unwrap_or((None, None));
+    let relay_db = RelayDatabase::open_with_max_bytes(&db_path, resource_limits.max_storage_bytes)?;
+    relay_db.configure_retention(
+        db::RetentionLimits {
+            record_retention_secs: resource_limits.record_retention_secs as i64,
+            max_known_peers: resource_limits.max_known_peers as u64,
+            max_posts: resource_limits.max_posts as u64,
+            max_grants: resource_limits.max_grants as u64,
+            max_introductions: resource_limits.max_introductions as u64,
+            max_social_events: resource_limits.max_social_events as u64,
+        },
+        chrono::Utc::now().timestamp(),
+    )?;
+    let identity_database = relay_db.clone();
+    let board_service = Some(BoardService::new(relay_db, args.community_name.clone()));
+    info!("Persistent relay database initialized at {}", db_path);
+
     let ed = keypair
         .clone()
         .try_into_ed25519()
@@ -671,40 +997,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ed_bytes = ed.to_bytes();
     let mut secret = [0u8; 32];
     secret.copy_from_slice(&ed_bytes[..32]);
-    let mut identity_transport = identity_database.map(|database| IdentityTransport {
-        auth: auth::AuthService::new(
+    let mut identity_transport = Some(IdentityTransport {
+        auth: auth::AuthService::new_with_limits(
             args.identity_namespace.clone(),
             "relay-key-1",
             keypair.clone(),
+            auth::StateLimits {
+                max_entries: resource_limits.max_ephemeral_entries,
+                replay_retention_secs: resource_limits.ephemeral_retention_secs as i64,
+            },
         ),
-        abuse: abuse::AbuseGuard::new(abuse::Limits {
-            peer: 10,
-            network: 30,
-            target: 20,
-            action: 100,
-            global: 1000,
-            window_secs: 60,
+        abuse: abuse::AbuseGuard::new_with_capacities(
+            abuse::Limits {
+                peer: resource_limits.abuse_peer_limit,
+                network: resource_limits.abuse_network_limit,
+                target: resource_limits.abuse_target_limit,
+                action: resource_limits.abuse_action_limit,
+                global: resource_limits.abuse_global_limit,
+                window_secs: resource_limits.abuse_window_secs as i64,
+            },
+            abuse::CapacityLimits {
+                max_entries: resource_limits.max_ephemeral_entries,
+                retention_secs: resource_limits.ephemeral_retention_secs as i64,
+            },
+        ),
+        admission: admission::SourceAdmissionGuard::new(admission::Limits {
+            per_source: resource_limits.abuse_network_limit,
+            global: resource_limits.abuse_global_limit,
+            max_sources: resource_limits.max_admission_sources,
+            window_secs: resource_limits.abuse_window_secs as i64,
         }),
-        database,
+        database: identity_database,
         relay_name: args.identity_namespace.clone(),
         relay_key_id: "relay-key-1".into(),
         relay_signing_key: ed25519_dalek::SigningKey::from_bytes(&secret),
     });
 
-    // Initialize rate limiter for board sync requests (community mode only)
-    let mut rate_limiter: Option<PeerRateLimiter> = if args.community {
-        let limiter = PeerRateLimiter::new(
-            args.rate_limit_max_requests,
-            Duration::from_secs(args.rate_limit_window_secs),
-        );
-        info!(
-            "Rate limiter enabled: {} requests per {}s window",
-            args.rate_limit_max_requests, args.rate_limit_window_secs
-        );
-        Some(limiter)
-    } else {
-        None
-    };
+    // The shared identity/board protocol is exposed in every mode.
+    let mut rate_limiter = PeerRateLimiter::new(
+        resource_limits.rate_limit_max_requests,
+        Duration::from_secs(resource_limits.rate_limit_window_secs),
+        resource_limits.max_admission_sources,
+    );
+    info!(
+        "Identity protocol rate limiter enabled: {} requests per {}s window",
+        resource_limits.rate_limit_max_requests, resource_limits.rate_limit_window_secs
+    );
+    let mut relay_read_guard = RelayReadGuard::default();
 
     let community_mode = args.community;
 
@@ -721,19 +1060,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let local_peer_id = PeerId::from(keypair.public());
             let local_public_key = keypair.public();
 
-            // Configure relay server with limits from CLI args.
-            // Durations are set very high — Harbor is a social app where users
-            // stay connected for days. The libp2p defaults (1h reservation,
-            // 2min circuit, 128KiB circuit bytes) are far too aggressive.
             let relay_config = relay::Config {
-                max_reservations: args.max_reservations,
-                max_circuits: args.max_circuits,
-                max_circuits_per_peer: args.max_circuits_per_peer,
-                reservation_duration: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
-                max_circuit_duration: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
-                max_circuit_bytes: 0,                                        // unlimited
-                ..Default::default()
-            };
+                max_reservations: resource_limits.max_reservations,
+                max_reservations_per_peer: resource_limits.max_reservations_per_peer,
+                reservation_duration: Duration::from_secs(
+                    resource_limits.reservation_duration_secs,
+                ),
+                reservation_rate_limiters: Vec::new(),
+                max_circuits: resource_limits.max_circuits,
+                max_circuits_per_peer: resource_limits.max_circuits_per_peer,
+                max_circuit_duration: Duration::from_secs(
+                    resource_limits.max_circuit_duration_secs,
+                ),
+                max_circuit_bytes: resource_limits.max_circuit_bytes,
+                circuit_src_rate_limiters: Vec::new(),
+            }
+            .reservation_rate_per_peer(
+                NonZeroU32::new(resource_limits.reservation_admission_per_peer)
+                    .expect("validated nonzero reservation peer admission limit"),
+                Duration::from_secs(resource_limits.admission_window_secs),
+            )
+            .reservation_rate_per_ip(
+                NonZeroU32::new(resource_limits.reservation_admission_per_ip)
+                    .expect("validated nonzero reservation IP admission limit"),
+                Duration::from_secs(resource_limits.admission_window_secs),
+            )
+            .circuit_src_per_peer(
+                NonZeroU32::new(resource_limits.circuit_admission_per_peer)
+                    .expect("validated nonzero circuit peer admission limit"),
+                Duration::from_secs(resource_limits.admission_window_secs),
+            )
+            .circuit_src_per_ip(
+                NonZeroU32::new(resource_limits.circuit_admission_per_ip)
+                    .expect("validated nonzero circuit IP admission limit"),
+                Duration::from_secs(resource_limits.admission_window_secs),
+            );
 
             let relay = relay::Behaviour::new(local_peer_id, relay_config);
 
@@ -748,18 +1109,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 local_public_key,
             ));
 
-            // Board sync protocol (only in community mode)
-            let board_sync = if community_mode {
-                Toggle::from(Some(request_response::cbor::Behaviour::new(
-                    [(
-                        StreamProtocol::new(BOARD_SYNC_PROTOCOL),
-                        ProtocolSupport::Full,
-                    )],
-                    request_response::Config::default(),
-                )))
-            } else {
-                Toggle::from(None)
-            };
+            // Identity and wall operations share this protocol with optional
+            // community boards, so the transport must exist in every mode.
+            let board_sync = Toggle::from(Some(request_response::cbor::Behaviour::new(
+                [(
+                    StreamProtocol::new(BOARD_SYNC_PROTOCOL),
+                    ProtocolSupport::Full,
+                )],
+                request_response::Config::default(),
+            )));
 
             RelayServerBehaviour {
                 relay,
@@ -769,7 +1127,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?
         .with_swarm_config(|cfg| {
-            cfg.with_idle_connection_timeout(Duration::from_secs(365 * 24 * 60 * 60))
+            cfg.with_idle_connection_timeout(Duration::from_secs(
+                resource_limits.idle_connection_timeout_secs,
+            ))
         })
         .build();
 
@@ -789,33 +1149,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If announce IP is provided, add external addresses
     if let Some(announce_ip) = args.announce_ip {
-        let external_tcp: Multiaddr = format!(
-            "/ip4/{}/tcp/{}/p2p/{}",
-            announce_ip, args.port, local_peer_id
-        )
-        .parse()?;
-        let external_quic: Multiaddr = format!(
-            "/ip4/{}/udp/{}/quic-v1/p2p/{}",
-            announce_ip, args.port, local_peer_id
-        )
-        .parse()?;
-        let local_0_0_0_0_tcp: Multiaddr =
-            format!("/ip4/0.0.0.0/tcp/{}/p2p/{}", args.port, local_peer_id).parse()?;
-        let local_0_0_0_0_quic: Multiaddr = format!(
-            "/ip4/0.0.0.0/udp/{}/quic-v1/p2p/{}",
-            args.port, local_peer_id
-        )
-        .parse()?;
-
-        swarm.add_external_address(external_tcp.clone());
-        swarm.add_external_address(external_quic.clone());
-        swarm.add_external_address(local_0_0_0_0_tcp.clone());
-        swarm.add_external_address(local_0_0_0_0_quic.clone());
+        let external_addresses =
+            validated_external_addresses(announce_ip, args.port, &local_peer_id)
+                .map_err(|error| format!("invalid --announce-ip: {error}"))?;
+        for address in &external_addresses {
+            swarm.add_external_address(address.clone());
+        }
 
         info!("========================================");
         info!("YOUR RELAY ADDRESSES:");
-        info!("  TCP:  {}", external_tcp);
-        info!("  QUIC: {}", external_quic);
+        info!("  TCP:  {}", external_addresses[0]);
+        info!("  QUIC: {}", external_addresses[1]);
         info!("========================================");
         info!("Copy the TCP address and paste it into Harbor!");
     } else {
@@ -826,8 +1170,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Periodic cleanup timer for the rate limiter
-    let mut cleanup_interval =
-        tokio::time::interval(Duration::from_secs(RATE_LIMITER_CLEANUP_INTERVAL_SECS));
+    let mut cleanup_interval = tokio::time::interval(Duration::from_secs(
+        resource_limits.rate_limiter_cleanup_interval_secs,
+    ));
     // The first tick completes immediately; consume it so we don't
     // run cleanup at startup.
     cleanup_interval.tick().await;
@@ -836,8 +1181,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             _ = cleanup_interval.tick() => {
-                if let Some(ref mut limiter) = rate_limiter {
-                    limiter.cleanup_stale_entries();
+                rate_limiter.cleanup_stale_entries();
+                if let Some(ref mut identity) = identity_transport {
+                    let now = chrono::Utc::now().timestamp();
+                    identity.admission.prune(now);
+                    if let Err(error) = identity.database.enforce_retention(now) {
+                        warn!(%error, "Relay retention cleanup failed");
+                    }
                 }
             }
             event = swarm.select_next_some() => match event {
@@ -861,16 +1211,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         request, channel, ..
                     } => {
                         if let Some(ref service) = board_service {
-                            // Check per-peer rate limit before processing the request
-                            let response = if let Some(ref mut limiter) = rate_limiter {
-                                match limiter.check_rate_limit(&peer) {
-                                    Ok(()) => handle_board_request(service, identity_transport.as_mut(), source_networks.get(&peer).map(String::as_str).unwrap_or("unknown"), &local_peer_id, &peer, request),
-                                    Err(rate_limit_error) => BoardSyncResponse::Error {
-                                        error: rate_limit_error,
-                                    },
+                            // Rate-limit every request, including variants that are
+                            // disabled in this deployment mode.
+                            let response = if let Err(rate_limit_error) =
+                                rate_limiter.check_rate_limit(&peer)
+                            {
+                                BoardSyncResponse::Error {
+                                    error: rate_limit_error,
+                                }
+                            } else if !request_enabled_in_mode(&request, community_mode) {
+                                BoardSyncResponse::Error {
+                                    error: "COMMUNITY_BOARDS_DISABLED".into(),
                                 }
                             } else {
-                                handle_board_request(service, identity_transport.as_mut(), source_networks.get(&peer).map(String::as_str).unwrap_or("unknown"), &local_peer_id, &peer, request)
+                                handle_board_request(
+                                    service,
+                                    &mut relay_read_guard,
+                                    identity_transport.as_mut(),
+                                    source_networks
+                                        .get(&peer)
+                                        .map(String::as_str)
+                                        .unwrap_or("unknown"),
+                                    &local_peer_id,
+                                    &peer,
+                                    request,
+                                )
                             };
 
                             if let BoardSyncResponse::IntroductionAccepted{request_id,..}=&response{tokio::time::sleep(response_delay(request_id)).await;}
@@ -879,7 +1244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .behaviour_mut()
                                 .board_sync
                                 .as_mut()
-                                .expect("board_sync enabled in community mode")
+                                .expect("identity protocol is enabled in every mode")
                                 .send_response(channel, response)
                             {
                                 warn!("Failed to send board sync response: {:?}", send_error);
@@ -891,7 +1256,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, connection_id, endpoint, .. } => {
-                    source_networks.insert(peer_id,source_bucket(endpoint.get_remote_address()));
+                    if source_networks.contains_key(&peer_id)
+                        || source_networks.len() < resource_limits.max_admission_sources
+                    {
+                        source_networks.insert(peer_id,source_bucket(endpoint.get_remote_address()));
+                    } else {
+                        warn!(%peer_id, "Source attribution capacity reached; using shared unknown-source budget");
+                    }
                     info!("Connection established with: {} via {:?} ({:?})", peer_id, connection_id, endpoint);
                 }
                 SwarmEvent::ConnectionClosed { peer_id, connection_id, cause, endpoint, .. } => {
@@ -904,14 +1275,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+fn begin_relay_read(
+    guard: &mut RelayReadGuard,
+    peer: &PeerId,
+    requester_peer_id: &str,
+    timestamp: i64,
+    signature: &[u8],
+    server_now: i64,
+) -> Result<ReadReplayToken, BoardSyncResponse> {
+    guard
+        .authorize(peer, requester_peer_id, timestamp, signature, server_now)
+        .map_err(|error| BoardSyncResponse::Error {
+            error: error.code().to_string(),
+        })
+}
+
+fn deny_relay_read(
+    guard: &mut RelayReadGuard,
+    token: ReadReplayToken,
+    internal_error: String,
+) -> BoardSyncResponse {
+    guard.discard(token);
+    warn!("Relay read denied: {}", internal_error);
+    let stable = match internal_error.as_str() {
+        board_service::RELAY_READ_DATABASE
+        | board_service::RELAY_READ_SIGNATURE_INVALID
+        | board_service::RELAY_READ_GRANT_INVALID
+        | board_service::RELAY_READ_SCOPE_UNSUPPORTED => internal_error,
+        _ if internal_error.starts_with("RELAY_PEER_") => internal_error,
+        _ => board_service::RELAY_READ_DENIED.to_string(),
+    };
+    BoardSyncResponse::Error { error: stable }
+}
+
 fn handle_board_request(
     service: &BoardService,
-    identity: Option<&mut IdentityTransport>,
+    relay_read_guard: &mut RelayReadGuard,
+    mut identity: Option<&mut IdentityTransport>,
     source_network: &str,
     local_peer_id: &PeerId,
     peer: &PeerId,
     request: BoardSyncRequest,
 ) -> BoardSyncResponse {
+    if let Some(state) = identity.as_deref_mut() {
+        let now = chrono::Utc::now().timestamp();
+        if let Err(error) = state
+            .admission
+            .check_and_record(source_network, &peer.to_string(), now)
+        {
+            warn!(%error, %source_network, "Relay source admission rejected request");
+            return match &request {
+                // Preserve the 0845 indistinguishable submission response. A
+                // source-budget rejection must not become a target oracle.
+                BoardSyncRequest::SubmitIntroduction { envelope, .. } => {
+                    BoardSyncResponse::IntroductionAccepted {
+                        request_id: envelope.request_id.clone(),
+                        retry_after: 3_600,
+                    }
+                }
+                _ => BoardSyncResponse::Error {
+                    error: error.to_string(),
+                },
+            };
+        }
+        if let Err(error) = state.database.enforce_retention(now) {
+            warn!(%error, "Relay retention cleanup failed before request");
+        }
+    }
     match request {
         BoardSyncRequest::RelayAuthChallenge { peer_id, audience } => {
             let Some(state) = identity else {
@@ -1025,7 +1455,7 @@ fn handle_board_request(
             let response = state.database.with_connection(|conn| {
                 introduction::IntroductionService::new(conn, &state.auth, &mut state.abuse).map(
                     |mut s| {
-                        s.submit(
+                        s.submit_with_outcome(
                             &session_token,
                             source_network,
                             envelope,
@@ -1036,10 +1466,25 @@ fn handle_board_request(
                 )
             });
             match response {
-                Ok(r) => BoardSyncResponse::IntroductionAccepted {
-                    request_id: r.request_id,
-                    retry_after: r.retry_after,
-                },
+                Ok(outcome) => {
+                    let admission_code = outcome.code.as_str();
+                    let request_id = outcome.response.request_id.clone();
+                    match outcome.code {
+                        introduction::AdmissionCode::StorageFailure
+                        | introduction::AdmissionCode::CapacityRejected => warn!(
+                            admission_code,
+                            request_id, "Introduction admission was not queued"
+                        ),
+                        _ => debug!(
+                            admission_code,
+                            request_id, "Introduction admission decision"
+                        ),
+                    }
+                    BoardSyncResponse::IntroductionAccepted {
+                        request_id: outcome.response.request_id,
+                        retry_after: outcome.response.retry_after,
+                    }
+                }
                 Err(_) => BoardSyncResponse::Error {
                     error: "INTRODUCTION_UNAVAILABLE".into(),
                 },
@@ -1158,17 +1603,19 @@ fn handle_board_request(
         } => {
             if peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
-                    error: "peer_id mismatch".to_string(),
+                    error: "RELAY_PEER_TRANSPORT_MISMATCH".to_string(),
                 };
             }
-            match service.process_register_peer(
+            let server_now = chrono::Utc::now().timestamp();
+            match service.process_register_peer_at(
                 &peer_id,
                 &public_key,
                 &display_name,
                 timestamp,
                 &signature,
+                server_now,
             ) {
-                Ok(()) => BoardSyncResponse::PeerRegistered { peer_id },
+                Ok(_) => BoardSyncResponse::PeerRegistered { peer_id },
                 Err(e) => BoardSyncResponse::Error { error: e },
             }
         }
@@ -1176,27 +1623,41 @@ fn handle_board_request(
             requester_peer_id,
             timestamp,
             signature,
-        } => match service.process_list_boards(&requester_peer_id, timestamp, &signature) {
-            Ok(boards) => {
-                info!(
-                    "Serving board list for community: {}",
-                    service.community_name()
-                );
-                BoardSyncResponse::BoardList {
-                    boards: boards
-                        .into_iter()
-                        .map(|b| BoardInfoProto {
-                            board_id: b.board_id,
-                            name: b.name,
-                            description: b.description,
-                            is_default: b.is_default,
-                        })
-                        .collect(),
-                    relay_peer_id: local_peer_id.to_string(),
+        } => {
+            let server_now = chrono::Utc::now().timestamp();
+            let token = match begin_relay_read(
+                relay_read_guard,
+                peer,
+                &requester_peer_id,
+                timestamp,
+                &signature,
+                server_now,
+            ) {
+                Ok(token) => token,
+                Err(response) => return response,
+            };
+            match service.process_list_boards(&requester_peer_id, timestamp, &signature) {
+                Ok(boards) => {
+                    info!(
+                        "Serving board list for community: {}",
+                        service.community_name()
+                    );
+                    BoardSyncResponse::BoardList {
+                        boards: boards
+                            .into_iter()
+                            .map(|b| BoardInfoProto {
+                                board_id: b.board_id,
+                                name: b.name,
+                                description: b.description,
+                                is_default: b.is_default,
+                            })
+                            .collect(),
+                        relay_peer_id: local_peer_id.to_string(),
+                    }
                 }
+                Err(error) => deny_relay_read(relay_read_guard, token, error),
             }
-            Err(e) => BoardSyncResponse::Error { error: e },
-        },
+        }
         BoardSyncRequest::GetBoardPosts {
             requester_peer_id,
             board_id,
@@ -1204,35 +1665,99 @@ fn handle_board_request(
             limit,
             timestamp,
             signature,
-        } => match service.process_get_board_posts(
-            &requester_peer_id,
-            &board_id,
-            after_timestamp,
+        } => {
+            let server_now = chrono::Utc::now().timestamp();
+            let token = match begin_relay_read(
+                relay_read_guard,
+                peer,
+                &requester_peer_id,
+                timestamp,
+                &signature,
+                server_now,
+            ) {
+                Ok(token) => token,
+                Err(response) => return response,
+            };
+            match service.process_get_board_posts(
+                &requester_peer_id,
+                &board_id,
+                after_timestamp,
+                limit,
+                timestamp,
+                &signature,
+            ) {
+                Ok((posts, has_more)) => BoardSyncResponse::BoardPosts {
+                    board_id,
+                    posts: posts
+                        .into_iter()
+                        .map(|p| BoardPostInfoProto {
+                            post_id: p.post_id,
+                            board_id: p.board_id,
+                            author_peer_id: p.author_peer_id,
+                            author_display_name: p.author_display_name,
+                            content_type: p.content_type,
+                            content_text: p.content_text,
+                            lamport_clock: p.lamport_clock,
+                            created_at: p.created_at,
+                            deleted_at: p.deleted_at,
+                            signature: p.signature,
+                        })
+                        .collect(),
+                    has_more,
+                },
+                Err(error) => deny_relay_read(relay_read_guard, token, error),
+            }
+        }
+        BoardSyncRequest::GetOlderBoardPosts {
+            requester_peer_id,
+            board_id,
+            before,
             limit,
             timestamp,
-            &signature,
-        ) {
-            Ok((posts, has_more)) => BoardSyncResponse::BoardPosts {
-                board_id,
-                posts: posts
-                    .into_iter()
-                    .map(|p| BoardPostInfoProto {
-                        post_id: p.post_id,
-                        board_id: p.board_id,
-                        author_peer_id: p.author_peer_id,
-                        author_display_name: p.author_display_name,
-                        content_type: p.content_type,
-                        content_text: p.content_text,
-                        lamport_clock: p.lamport_clock,
-                        created_at: p.created_at,
-                        deleted_at: p.deleted_at,
-                        signature: p.signature,
-                    })
-                    .collect(),
-                has_more,
-            },
-            Err(e) => BoardSyncResponse::Error { error: e },
-        },
+            signature,
+        } => {
+            let server_now = chrono::Utc::now().timestamp();
+            let token = match begin_relay_read(
+                relay_read_guard,
+                peer,
+                &requester_peer_id,
+                timestamp,
+                &signature,
+                server_now,
+            ) {
+                Ok(token) => token,
+                Err(response) => return response,
+            };
+            match service.process_get_older_board_posts(
+                &requester_peer_id,
+                &board_id,
+                before.as_ref(),
+                limit,
+                timestamp,
+                &signature,
+            ) {
+                Ok((posts, has_more)) => BoardSyncResponse::BoardPosts {
+                    board_id,
+                    posts: posts
+                        .into_iter()
+                        .map(|p| BoardPostInfoProto {
+                            post_id: p.post_id,
+                            board_id: p.board_id,
+                            author_peer_id: p.author_peer_id,
+                            author_display_name: p.author_display_name,
+                            content_type: p.content_type,
+                            content_text: p.content_text,
+                            lamport_clock: p.lamport_clock,
+                            created_at: p.created_at,
+                            deleted_at: p.deleted_at,
+                            signature: p.signature,
+                        })
+                        .collect(),
+                    has_more,
+                },
+                Err(error) => deny_relay_read(relay_read_guard, token, error),
+            }
+        }
         BoardSyncRequest::SubmitPost {
             post_id,
             board_id,
@@ -1245,7 +1770,7 @@ fn handle_board_request(
         } => {
             if author_peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
-                    error: "author_peer_id mismatch".to_string(),
+                    error: "RELAY_POST_TRANSPORT_MISMATCH".to_string(),
                 };
             }
             match service.process_submit_post(
@@ -1270,7 +1795,7 @@ fn handle_board_request(
         } => {
             if author_peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
-                    error: "author_peer_id mismatch".to_string(),
+                    error: "RELAY_POST_TRANSPORT_MISMATCH".to_string(),
                 };
             }
             match service.process_delete_post(&post_id, &author_peer_id, timestamp, &signature) {
@@ -1294,7 +1819,7 @@ fn handle_board_request(
         } => {
             if author_peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
-                    error: "author_peer_id mismatch".to_string(),
+                    error: "RELAY_POST_TRANSPORT_MISMATCH".to_string(),
                 };
             }
             match service.process_submit_wall_post(
@@ -1324,7 +1849,19 @@ fn handle_board_request(
             signature,
             grant_proof,
         } => {
-            match service.process_get_wall_posts(
+            let server_now = chrono::Utc::now().timestamp();
+            let token = match begin_relay_read(
+                relay_read_guard,
+                peer,
+                &requester_peer_id,
+                timestamp,
+                &signature,
+                server_now,
+            ) {
+                Ok(token) => token,
+                Err(response) => return response,
+            };
+            match service.process_get_wall_posts_at(
                 &requester_peer_id,
                 &author_peer_id,
                 since_lamport_clock,
@@ -1332,6 +1869,7 @@ fn handle_board_request(
                 timestamp,
                 &signature,
                 grant_proof.as_ref(),
+                server_now,
             ) {
                 Ok((posts, has_more, media_map)) => {
                     // Build a lookup from post_id -> media items
@@ -1387,7 +1925,7 @@ fn handle_board_request(
                         has_more,
                     }
                 }
-                Err(e) => BoardSyncResponse::Error { error: e },
+                Err(error) => deny_relay_read(relay_read_guard, token, error),
             }
         }
         BoardSyncRequest::RegisterWallReadGrant { grant } => {
@@ -1434,7 +1972,7 @@ fn handle_board_request(
         } => {
             if author_peer_id != peer.to_string() {
                 return BoardSyncResponse::Error {
-                    error: "author_peer_id mismatch".to_string(),
+                    error: "RELAY_POST_TRANSPORT_MISMATCH".to_string(),
                 };
             }
             match service.process_delete_wall_post(
@@ -1473,7 +2011,19 @@ fn handle_board_request(
             timestamp,
             signature,
         } => {
-            match service.process_get_wall_social_events(
+            let server_now = chrono::Utc::now().timestamp();
+            let token = match begin_relay_read(
+                relay_read_guard,
+                peer,
+                &requester_peer_id,
+                timestamp,
+                &signature,
+                server_now,
+            ) {
+                Ok(token) => token,
+                Err(response) => return response,
+            };
+            match service.process_get_wall_social_events_at(
                 &requester_peer_id,
                 &author_peer_id,
                 &post_ids,
@@ -1481,6 +2031,7 @@ fn handle_board_request(
                 limit,
                 timestamp,
                 &signature,
+                server_now,
             ) {
                 Ok((rows, has_more, next_timestamp)) => BoardSyncResponse::WallSocialEvents {
                     events: rows
@@ -1502,7 +2053,7 @@ fn handle_board_request(
                     has_more,
                     next_timestamp,
                 },
-                Err(e) => BoardSyncResponse::Error { error: e },
+                Err(error) => deny_relay_read(relay_read_guard, token, error),
             }
         }
     }

@@ -17,12 +17,22 @@ describe('callFailureFrom', () => {
     [new DOMException('denied', 'NotAllowedError'), 'permission_denied'],
     [new DOMException('media capture API unavailable', 'NotSupportedError'), 'missing_media_api'],
     [new DOMException('no microphone', 'NotFoundError'), 'missing_device'],
-    ['ICE failed without a usable TURN server', 'turn_required'],
-    ['call timed out', 'timeout'],
-    ['remote is busy', 'busy'],
-    ['call declined', 'rejected'],
+    [{ code: 'turn_required', message: 'Relay path required' }, 'turn_required'],
+    [{ code: 'NETWORK_TIMEOUT', message: 'Connection expired' }, 'timeout'],
+    [{ code: 'busy', message: 'Unavailable' }, 'busy'],
+    [{ code: 'rejected', message: 'Unavailable' }, 'rejected'],
   ])('classifies %s as %s', (error, expected) => {
     expect(callFailureFrom(error).code).toBe(expected);
+  });
+
+  it('does not change behavior when error prose changes or is localized', () => {
+    expect(callFailureFrom({ code: 'NETWORK_TIMEOUT', message: 'Connection expired' }).code).toBe(
+      'timeout',
+    );
+    expect(
+      callFailureFrom({ code: 'NETWORK_TIMEOUT', message: 'La connexion a expiré' }).code,
+    ).toBe('timeout');
+    expect(callFailureFrom('call timed out').code).toBe('unknown');
   });
 
   it('never renders opaque objects or serializes their contents into diagnostics', () => {

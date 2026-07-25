@@ -13,7 +13,21 @@ describe('networkService', () => {
 
       await networkService.startNetwork();
 
-      expect(invoke).toHaveBeenCalledWith('start_network');
+      expect(invoke).toHaveBeenCalledWith('start_network', {});
+    });
+
+    it('passes persisted startup settings to the backend', async () => {
+      vi.mocked(invoke).mockResolvedValue(undefined);
+
+      await networkService.startNetwork({
+        enableMdns: false,
+        bootstrapNodes: ['/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWExample'],
+      });
+
+      expect(invoke).toHaveBeenCalledWith('start_network', {
+        enableMdns: false,
+        bootstrapNodes: ['/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWExample'],
+      });
     });
   });
 
@@ -115,11 +129,14 @@ describe('networkService', () => {
   });
 
   describe('addContactFromString', () => {
+    const peerId = '12D3KooWEKyPsvgm7g8vyRA59466ph3t9VLxEUFzNqTXHJdfY2Wq';
     const bundle = {
-      multiaddr: '/ip4/1.2.3.4/tcp/9000/p2p/peer-alice',
-      display_name: 'Alice',
-      public_key: 'QUJDRA==',
-      x25519_public: 'RUZHSA==',
+      version: 1,
+      peerId,
+      multiaddr: `/ip4/1.2.3.4/tcp/9000/p2p/${peerId}`,
+      displayName: 'Alice',
+      publicKey: 'QwRr/kCSs+lJlOraFdzCDYqqB7ZY/TlU644O+4vcpd4=',
+      x25519Public: 'CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=',
     };
     const encoded = btoa(JSON.stringify(bundle))
       .replace(/\+/g, '-')
@@ -127,22 +144,28 @@ describe('networkService', () => {
       .replace(/=+$/, '');
 
     it('normalizes an official web invite before invoking add_contact_from_string', async () => {
-      vi.mocked(invoke).mockResolvedValue('peer-alice');
+      const added = {
+        requestId: 'request-1',
+        peerId,
+        status: 'pending',
+        delivery: 'offline',
+      };
+      vi.mocked(invoke).mockResolvedValue(added);
 
       const result = await networkService.addContactFromString(
-        `https://social-harbor.com/add-friend/${encoded}`,
+        `https://social-harbor.com/add-friend/v1/${encoded}`,
       );
 
       expect(invoke).toHaveBeenCalledWith('add_contact_from_string', {
-        contactString: `harbor://${encoded}`,
+        contactString: `harbor://contact/v1/${encoded}`,
       });
-      expect(result).toBe('peer-alice');
+      expect(result).toEqual(added);
     });
 
     it('rejects malformed and oversized invites without invoking the backend', async () => {
       await expect(
-        networkService.addContactFromString('https://evil.test/add-friend/x'),
-      ).rejects.toThrow(/official social-harbor.com/);
+        networkService.addContactFromString('https://evil.test/add-friend/v1/x'),
+      ).rejects.toThrow(/official Harbor v1/);
       expect(invoke).not.toHaveBeenCalled();
     });
   });

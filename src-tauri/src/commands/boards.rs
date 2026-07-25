@@ -135,24 +135,24 @@ pub async fn get_board_posts(
     let limit = limit.unwrap_or(50);
     let posts =
         board_service.get_board_posts(&relay_peer_id, &board_id, limit, before_timestamp)?;
-    Ok(posts
+    posts
         .into_iter()
-        .map(|p| BoardPostInfoFe {
-            author_verified_qualified_name: board_service
-                .verified_qualified_name(&p.author_peer_id)
-                .ok()
-                .flatten(),
-            post_id: p.post_id,
-            board_id: p.board_id,
-            relay_peer_id: p.relay_peer_id,
-            author_peer_id: p.author_peer_id,
-            author_display_name: p.author_display_name,
-            content_type: p.content_type,
-            content_text: p.content_text,
-            lamport_clock: p.lamport_clock,
-            created_at: p.created_at,
+        .map(|p| {
+            Ok(BoardPostInfoFe {
+                author_verified_qualified_name: board_service
+                    .verified_qualified_name(&p.author_peer_id)?,
+                post_id: p.post_id,
+                board_id: p.board_id,
+                relay_peer_id: p.relay_peer_id,
+                author_peer_id: p.author_peer_id,
+                author_display_name: p.author_display_name,
+                content_type: p.content_type,
+                content_text: p.content_text,
+                lamport_clock: p.lamport_clock,
+                created_at: p.created_at,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Submit a post to a board on a relay

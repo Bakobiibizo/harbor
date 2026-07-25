@@ -6,6 +6,7 @@ import { safePeerLabel } from '../utils/relayName';
 import { getInitials } from '../utils/formatting';
 import { ModalityFilter } from '../components/common/ModalityFilter';
 import { matchesModalityFilter } from '../utils/postModality';
+import { getErrorMessage } from '../utils/errors';
 
 function formatTimeAgo(unixSeconds: number): string {
   const now = Date.now();
@@ -25,6 +26,10 @@ function formatTimeAgo(unixSeconds: number): string {
   return date.toLocaleDateString();
 }
 
+export function boardAuthorLabel(post: BoardPost): string {
+  return safePeerLabel(post.authorPeerId, post.authorVerifiedQualifiedName, post.authorDisplayName);
+}
+
 // Post card component
 function PostCard({
   post,
@@ -35,7 +40,7 @@ function PostCard({
   isOwnPost: boolean;
   onDelete: (postId: string) => void;
 }) {
-  const authorName = safePeerLabel(post.authorPeerId, post.authorVerifiedQualifiedName);
+  const authorName = boardAuthorLabel(post);
   return (
     <div
       className="p-4 rounded-xl"
@@ -295,7 +300,7 @@ function JoinCommunityForm({ onJoin }: { onJoin: (address: string) => Promise<vo
       setAddress('');
       toast.success('Joined community');
     } catch (error) {
-      toast.error(`Failed to join: ${error}`);
+      toast.error(`Failed to join: ${getErrorMessage(error)}`);
     } finally {
       setIsJoining(false);
     }
@@ -354,11 +359,13 @@ export function BoardsPage() {
     submitPost,
     deletePost,
     refreshBoard,
+    reset,
   } = useBoardsStore();
 
   useEffect(() => {
-    loadCommunities();
-  }, [loadCommunities]);
+    void loadCommunities();
+    return () => reset();
+  }, [loadCommunities, reset]);
 
   const handleDeletePost = async (postId: string) => {
     try {
@@ -447,7 +454,10 @@ export function BoardsPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="p-6 border-b" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
+      <div
+        className="harbor-page-gutter border-b"
+        style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+      >
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
@@ -480,10 +490,10 @@ export function BoardsPage() {
         <JoinCommunityForm onJoin={joinCommunity} />
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="harbor-boards-content flex flex-1 overflow-hidden">
         {/* Community sidebar */}
         <div
-          className="w-56 border-r p-3 overflow-y-auto flex-shrink-0"
+          className="harbor-boards-community-sidebar w-56 flex-shrink-0 overflow-y-auto border-r p-3"
           style={{
             borderColor: 'hsl(var(--harbor-border-subtle))',
             background: 'hsl(var(--harbor-bg-elevated))',
@@ -495,7 +505,7 @@ export function BoardsPage() {
           >
             Communities
           </p>
-          <div className="space-y-1">
+          <div className="harbor-boards-community-list flex flex-col gap-1">
             {communities.map((community) => (
               <CommunityItem
                 key={community.relayPeerId}
@@ -517,7 +527,7 @@ export function BoardsPage() {
               </p>
             </div>
           ) : (
-            <div className="max-w-2xl mx-auto p-6 space-y-4">
+            <div className="harbor-page-gutter mx-auto max-w-2xl space-y-4">
               {/* Board tabs */}
               <BoardTabs boards={boards} activeBoard={activeBoard} onSelect={selectBoard} />
               <ModalityFilter

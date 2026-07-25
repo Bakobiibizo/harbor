@@ -16,7 +16,7 @@ vi.mock('../../services', () => ({
   identityService: {
     registerRelayName: vi.fn(),
     verifyNameClaim: vi.fn(),
-    setMigrationMode: vi.fn(),
+    setPublishingMode: vi.fn(),
   },
   accountsService: { listAccounts: vi.fn().mockResolvedValue([]) },
 }));
@@ -67,7 +67,7 @@ describe('CreateIdentity relay registration', () => {
     vi.clearAllMocks();
     h.complete.mockResolvedValue(identity);
     vi.mocked(identityService.verifyNameClaim).mockResolvedValue(true);
-    vi.mocked(identityService.setMigrationMode).mockResolvedValue();
+    vi.mocked(identityService.setPublishingMode).mockResolvedValue();
   });
   it('registers, verifies and attaches the relay claim', async () => {
     h.complete.mockResolvedValue({ ...identity, relayNameClaim: claim });
@@ -75,6 +75,13 @@ describe('CreateIdentity relay registration', () => {
     await fill();
     fireEvent.click(screen.getByRole('button', { name: 'Create Identity' }));
     await waitFor(() => expect(h.complete).toHaveBeenCalled());
+  });
+
+  it('offers encrypted-backup recovery before any account exists', () => {
+    render(<CreateIdentity />);
+
+    expect(screen.getByText('Already have an encrypted Harbor backup?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Recover from Backup' })).toBeInTheDocument();
   });
   it('retries registration without creating a second identity', async () => {
     h.complete.mockRejectedValueOnce(new Error('relay offline')).mockResolvedValueOnce(identity);

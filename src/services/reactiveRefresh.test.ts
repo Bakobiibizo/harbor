@@ -76,4 +76,24 @@ describe('ReactiveRefreshCoordinator', () => {
     expect(refresh.media).not.toHaveBeenCalled();
     coordinator.stop();
   });
+
+  it('can restart cleanly after profile suspension', async () => {
+    vi.useFakeTimers();
+    const refresh = handlers();
+    const coordinator = new ReactiveRefreshCoordinator(refresh, {
+      debounceMs: 25,
+      fallbackMs: 5_000,
+    });
+
+    coordinator.start();
+    coordinator.enqueue({ domains: ['posts'], peerId: 'profile-a' });
+    coordinator.stop();
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(refresh.posts).not.toHaveBeenCalled();
+
+    coordinator.start();
+    await vi.advanceTimersByTimeAsync(5_026);
+    expect(refresh.posts).toHaveBeenCalledTimes(1);
+    coordinator.stop();
+  });
 });

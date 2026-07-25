@@ -43,7 +43,7 @@ describe('MentionInbox', () => {
   });
   it.each([
     ['Accept notification', 'accept-notification'],
-    ['Repost on my wall', 'accept-repost'],
+    ['Repost on my profile', 'accept-repost'],
     ['Decline', 'decline'],
     ['Block', 'block'],
   ] as const)('shows qualified requester and handles %s', async (button, decision) => {
@@ -75,7 +75,9 @@ describe('MentionInbox', () => {
     });
     render(<MentionInbox />);
 
-    expect(await screen.findByText('Unverified Harbor user')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Saved alias that must not be trusted@unverified'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('Saved alias that must not be trusted')).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('peer');
   });

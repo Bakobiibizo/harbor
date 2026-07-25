@@ -38,3 +38,16 @@ export interface ContactRequest {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface ContactDecisionResult {
+  peerId: string;
+  status: 'accepted' | 'declined';
+  delivery: 'connected' | 'offline';
+}
+
+export interface AddContactResult {
+  requestId: string;
+  peerId: string;
+  status: 'pending';
+  delivery: 'connected' | 'offline';
+}

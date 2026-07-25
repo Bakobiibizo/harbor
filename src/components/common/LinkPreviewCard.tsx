@@ -1,16 +1,8 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { getDomainFromUrl } from '../../utils/urlDetection';
 import { parseProviderEmbed } from '../../utils/providerEmbeds';
 import { ProviderEmbed } from './ProviderEmbed';
-
-interface LinkPreviewData {
-  url: string;
-  title: string | null;
-  description: string | null;
-  image_url: string | null;
-  site_name: string | null;
-}
+import { fetchLinkPreview, type LinkPreviewData } from '../../services/linkPreview';
 
 type PreviewState =
   | { status: 'loading' }
@@ -28,6 +20,7 @@ const SUCCESS_TTL_MS = 15 * 60 * 1000;
 const ERROR_TTL_MS = 60 * 1000;
 const previewCache = new Map<string, CacheEntry>();
 const pendingRequests = new Map<string, Promise<Exclude<PreviewState, { status: 'loading' }>>>();
+let cacheGeneration = 0;
 
 function normalizeHttpUrl(value: string): string | null {
   try {
@@ -81,7 +74,8 @@ async function loadPreview(key: string): Promise<CacheEntry['state']> {
   const pending = pendingRequests.get(key);
   if (pending) return pending;
 
-  const request = invoke<LinkPreviewData>('fetch_link_preview', { url: key })
+  const generation = cacheGeneration;
+  const request = fetchLinkPreview(key)
     .then((preview): CacheEntry['state'] => {
       if (!isSafeBackendPreview(preview)) {
         return { status: 'error', message: 'Harbor rejected unsafe preview metadata.' };
@@ -95,18 +89,29 @@ async function loadPreview(key: string): Promise<CacheEntry['state']> {
       message: 'Preview details are unavailable. You can still open this link.',
     }))
     .then((state) => {
+      if (generation !== cacheGeneration) {
+        return {
+          status: 'error' as const,
+          message: 'Preview was cleared when the active account changed.',
+        };
+      }
       writeCache(key, state);
       return state;
     })
-    .finally(() => pendingRequests.delete(key));
+    .finally(() => {
+      if (pendingRequests.get(key) === request) pendingRequests.delete(key);
+    });
   pendingRequests.set(key, request);
   return request;
 }
 
-export function clearLinkPreviewCacheForTests() {
+export function clearLinkPreviewCache() {
+  cacheGeneration += 1;
   previewCache.clear();
   pendingRequests.clear();
 }
+
+export const clearLinkPreviewCacheForTests = clearLinkPreviewCache;
 
 interface LinkPreviewCardProps {
   url: string;

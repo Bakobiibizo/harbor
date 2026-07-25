@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useNetworkStore } from './network';
 import * as networkService from '../services/network';
+import { useSettingsStore } from './settings';
 
 vi.mock('../services/network', () => ({
   startNetwork: vi.fn(),
@@ -54,6 +55,7 @@ describe('useNetworkStore', () => {
       isLoading: false,
     });
     vi.clearAllMocks();
+    useSettingsStore.setState({ localDiscovery: false, bootstrapNodes: ['bootstrap-address'] });
   });
 
   describe('startNetwork', () => {
@@ -65,6 +67,10 @@ describe('useNetworkStore', () => {
 
       await useNetworkStore.getState().startNetwork();
 
+      expect(networkService.startNetwork).toHaveBeenCalledWith({
+        enableMdns: false,
+        bootstrapNodes: ['bootstrap-address'],
+      });
       expect(useNetworkStore.getState().isRunning).toBe(true);
       expect(useNetworkStore.getState().status).toBe('connected');
       expect(useNetworkStore.getState().connectedPeers).toEqual(mockPeers);
@@ -73,7 +79,7 @@ describe('useNetworkStore', () => {
     it('should handle start failure', async () => {
       vi.mocked(networkService.startNetwork).mockRejectedValue(new Error('Network error'));
 
-      await useNetworkStore.getState().startNetwork();
+      await expect(useNetworkStore.getState().startNetwork()).rejects.toThrow('Network error');
 
       expect(useNetworkStore.getState().isRunning).toBe(false);
       expect(useNetworkStore.getState().status).toBe('disconnected');
