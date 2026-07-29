@@ -147,13 +147,45 @@ pub fn register(
     {
         return Err(RegistrationError::Replay);
     }
-    let existing:Option<(String,i64,String)>=tx.query_row("SELECT peer_id,sequence,status FROM relay_name_claims WHERE relay=? AND local_name=? ORDER BY sequence DESC LIMIT 1",params![relay,r.local_name],|x|Ok((x.get(0)?,x.get(1)?,x.get(2)?))).optional().map_err(|_|RegistrationError::Database)?;
-    if let Some((peer, seq, status)) = existing {
+    let existing: Option<(String, i64, String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT peer_id,sequence,status,claim_cbor
+             FROM relay_name_claims
+             WHERE relay=? AND local_name=?
+             ORDER BY sequence DESC LIMIT 1",
+            params![relay, r.local_name],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|_| RegistrationError::Database)?;
+    if let Some((peer, seq, status, encoded)) = existing {
         let stored_sequence = u64::try_from(seq).map_err(|_| RegistrationError::IntegerRange)?;
         if status == "retired" || peer != r.peer_id {
             return Err(RegistrationError::Unavailable);
         }
-        if r.sequence <= stored_sequence {
+        if r.sequence == stored_sequence {
+            let claim: NameClaim = ciborium::de::from_reader(encoded.as_slice())
+                .map_err(|_| RegistrationError::Database)?;
+            if claim.status != "active"
+                || claim.not_after < now
+                || claim.relay_key_id != key_id
+                || claim.request.local_name != r.local_name
+                || claim.request.relay != r.relay
+                || claim.request.peer_id != r.peer_id
+                || claim.request.ed25519_public_key != r.ed25519_public_key
+                || claim.request.x25519_public_key != r.x25519_public_key
+            {
+                return Err(RegistrationError::Replay);
+            }
+            tx.execute(
+                "INSERT INTO relay_name_nonces VALUES(?,?,?)",
+                params![r.peer_id, r.nonce, now],
+            )
+            .map_err(|_| RegistrationError::Replay)?;
+            tx.commit().map_err(|_| RegistrationError::Database)?;
+            return Ok(claim);
+        }
+        if r.sequence < stored_sequence {
             return Err(RegistrationError::Replay);
         }
     }
@@ -315,6 +347,42 @@ mod acceptance_tests {
         assert_eq!(peer, expected);
         drop(conn);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn same_owner_can_recover_a_persisted_claim_after_losing_the_response() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let relay = SigningKey::from_bytes(&[9; 32]);
+        let user = SigningKey::from_bytes(&[4; 32]);
+
+        database.with_connection(|connection| {
+            let first_request = signed(&user, "alice", 1);
+            let mut retry_request = first_request.clone();
+            retry_request.request.nonce = vec![2; 32];
+            retry_request.user_signature = user
+                .sign(&cbor(&retry_request.request).unwrap())
+                .to_bytes()
+                .to_vec();
+            let original =
+                register(connection, "relay.test", "k1", &relay, first_request, 100).unwrap();
+
+            // A fresh, signed retry represents a client that never received or
+            // cached the first successful response. The relay must return the
+            // persisted claim to its owner instead of stranding the identity.
+            let recovered =
+                register(connection, "relay.test", "k1", &relay, retry_request, 100).unwrap();
+
+            assert_eq!(cbor(&recovered).unwrap(), cbor(&original).unwrap());
+            let rows: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM relay_name_claims
+                     WHERE relay='relay.test' AND local_name='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows, 1);
+        });
     }
 
     #[test]

@@ -19,7 +19,7 @@ set -euo pipefail
 STACK_NAME="harbor-relay"
 REGION="us-east-1"
 TEMPLATE_TYPE="community"
-EXPECTED_SHA256="b6d3a64b27c818ca67b1d9cccbb8a0629da641b5d10438e93001f751221eba40"
+EXPECTED_SHA256="b843530a361220a42d97df60ec1f7236658992fadd78e19d9b66d9f85aee9144"
 BINARY_URL="https://github.com/bakobiibizo/harbor/raw/main/relay-server/bin/harbor-relay"
 IDENTITY_NAMESPACE="harbor.social"
 
