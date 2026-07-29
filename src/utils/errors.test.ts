@@ -75,7 +75,20 @@ describe('HarborError', () => {
       const result = HarborError.fromUnknown(null);
       expect(result).toBeInstanceOf(HarborError);
       expect(result.code).toBe('INTERNAL_ERROR');
-      expect(result.message).toBe('null');
+      expect(result.message).toBe('An unexpected error occurred');
+    });
+
+    it('does not expose fields from an opaque rejected object in its public message', () => {
+      const result = HarborError.fromUnknown({
+        token: 'private-token',
+        nested: { password: 'private-password' },
+      });
+
+      expect(result.message).toBe('An unexpected error occurred');
+      expect(result.message).not.toContain('[object Object]');
+      expect(result.message).not.toContain('private-token');
+      expect(result.message).not.toContain('private-password');
+      expect(result.details).not.toContain('private-token');
     });
   });
 
@@ -85,6 +98,8 @@ describe('HarborError', () => {
         'NETWORK_TIMEOUT',
         'NETWORK_CONNECTION_FAILED',
         'NETWORK_PEER_UNREACHABLE',
+        'NETWORK_NOT_INITIALIZED',
+        'NETWORK_SERVICE_UNAVAILABLE',
         'IDENTITY_LOCKED',
         'IDENTITY_INVALID_PASSPHRASE',
         'VALIDATION_ERROR',
@@ -174,6 +189,7 @@ describe('getErrorMessage', () => {
   it('should stringify unknown values', () => {
     expect(getErrorMessage('string error')).toBe('string error');
     expect(getErrorMessage(42)).toBe('42');
-    expect(getErrorMessage(null)).toBe('null');
+    expect(getErrorMessage(null)).toBe('An unexpected error occurred');
+    expect(getErrorMessage({ secret: 'do-not-render' })).toBe('An unexpected error occurred');
   });
 });

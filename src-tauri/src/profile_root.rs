@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileRoot(PathBuf);
 impl ProfileRoot {
+    pub fn from_path(path: PathBuf) -> Self {
+        Self(path)
+    }
+
     pub fn resolve(default: &Path, custom: Option<PathBuf>, profile: Option<&str>) -> Self {
         Self(custom.unwrap_or_else(|| {
             profile

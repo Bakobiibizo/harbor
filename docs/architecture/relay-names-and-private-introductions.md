@@ -42,7 +42,7 @@ Each Harbor identity already has:
 - an Ed25519 signing keypair;
 - an X25519 key-agreement keypair;
 - a libp2p peer ID derived from the Ed25519 signing key; and
-- locally encrypted private-key material protected by the user's passphrase.
+- locally encrypted private-key material protected by the user's password.
 
 The Ed25519 key signs protocol records. X25519 establishes encrypted communication. The peer ID is the stable account identifier.
 

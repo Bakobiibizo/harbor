@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Harbor uses your microphone only while you are participating in a voice or video call.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Harbor uses your camera only while you are participating in a video call.</string>
+</dict>
+</plist>

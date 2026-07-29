@@ -28,6 +28,8 @@ describe('Button', () => {
     render(<Button loading>Loading</Button>);
 
     expect(screen.getByRole('button')).toBeDisabled();
+    expect(screen.getByRole('button')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button')).toHaveAttribute('data-loading', 'true');
   });
 
   it('should show spinner when loading', () => {
@@ -51,14 +53,15 @@ describe('Button', () => {
     render(<Button>Primary</Button>);
 
     const button = screen.getByRole('button');
-    expect(button.className).toContain('bg-blue-600');
+    expect(button.className).toContain('harbor-button--primary');
+    expect(button.className).toContain('harbor-interactive');
   });
 
   it('should apply danger variant styles', () => {
     render(<Button variant="danger">Delete</Button>);
 
     const button = screen.getByRole('button');
-    expect(button.className).toContain('bg-red-600');
+    expect(button.className).toContain('harbor-button--danger');
   });
 
   it('should apply size styles', () => {

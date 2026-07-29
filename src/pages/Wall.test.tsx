@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { WallPage } from './Wall';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { profilePostedMilestoneKey, WallPage } from './Wall';
 import { useIdentityStore, useSettingsStore, useWallStore } from '../stores';
 import { postsService } from '../services/posts';
 import { feedService } from '../services/feed';
 import { getShareableContactString } from '../services/network';
+import { ComposePostModal } from '../components/common/ComposePostModal';
 
 vi.mock('../services/posts', () => ({
   postsService: {
@@ -47,6 +48,27 @@ const identity = {
   publicKey: 'pub',
   x25519Public: 'xpub',
   displayName: 'Test User',
+  relayNameVerified: true,
+  relayNameClaim: {
+    request: {
+      domain: 'harbor.relay-name',
+      version: 1,
+      localName: 'tester',
+      relay: 'relay.test',
+      peerId: 'peer-me',
+      ed25519PublicKey: [],
+      x25519PublicKey: [],
+      sequence: 1,
+      issuedAt: 1,
+      nonce: [],
+    },
+    userSignature: [],
+    status: 'active',
+    notBefore: 1,
+    notAfter: 4102444800,
+    relayKeyId: 'relay-key',
+    relaySignature: [],
+  },
   avatarHash: null,
   bio: null,
   passphraseHint: null,
@@ -83,6 +105,7 @@ const contactsPreviewPost = {
 describe('WallPage visibility controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
       configurable: true,
@@ -119,7 +142,7 @@ describe('WallPage visibility controls', () => {
   });
 
   it('selects the persisted default visibility before publishing', async () => {
-    render(<WallPage />);
+    render(<ComposePostModal isOpen onClose={vi.fn()} />);
 
     const publicButton = screen.getByRole('button', { name: 'Public' });
     expect(publicButton).toHaveAttribute('aria-pressed', 'true');
@@ -140,9 +163,9 @@ describe('WallPage visibility controls', () => {
   });
 
   it('lets the author override visibility per post', async () => {
-    render(<WallPage />);
+    render(<ComposePostModal isOpen onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByText('Contacts only').closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Public' }));
     fireEvent.change(screen.getByPlaceholderText(/share your thoughts/i), {
       target: { value: 'Private to contacts' },
     });
@@ -156,6 +179,20 @@ describe('WallPage visibility controls', () => {
         undefined,
       );
     });
+  });
+
+  it('opens with focus in the accessible dialog and closes with Escape', async () => {
+    const onClose = vi.fn();
+    render(<ComposePostModal isOpen onClose={onClose} />);
+
+    expect(screen.getByRole('dialog', { name: 'Create a post' })).toHaveAttribute(
+      'aria-modal',
+      'true',
+    );
+    await waitFor(() => expect(screen.getByPlaceholderText(/share your thoughts/i)).toHaveFocus());
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('loads backend guest preview and switches to contact preview without showing contacts-only posts to guests', async () => {
@@ -178,7 +215,7 @@ describe('WallPage visibility controls', () => {
     });
     expect(await screen.findByText('Contacts-only preview post')).toBeInTheDocument();
     expect(
-      screen.getByText(/Contacts with WallRead see public and contacts-only posts/i),
+      screen.getByText(/Approved contacts see public and contacts-only posts/i),
     ).toBeInTheDocument();
   });
 
@@ -190,9 +227,9 @@ describe('WallPage visibility controls', () => {
     await waitFor(() => {
       expect(feedService.generateRssFeed).toHaveBeenCalledWith({
         base_url: 'harbor://peer/peer-me',
-        title: "Test User's Public Harbor Wall",
+        title: "@tester@relay.test's Public Harbor Posts",
         description:
-          'Locally generated RSS XML containing only posts marked Public on this Harbor wall.',
+          'Locally generated RSS XML containing only posts marked Public on this Harbor profile.',
         max_items: 50,
       });
     });
@@ -226,5 +263,50 @@ describe('WallPage visibility controls', () => {
       .mocked(navigator.clipboard.writeText)
       .mock.calls.map(([value]) => value);
     expect(copiedValues.join('\n')).not.toMatch(/private|backup|passphrase/i);
+  });
+
+  it('opens the post composer from the profile header action', () => {
+    const openComposer = vi.fn();
+    window.addEventListener('harbor:new-post', openComposer);
+    render(<WallPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add post' }));
+    expect(openComposer).toHaveBeenCalledOnce();
+
+    window.removeEventListener('harbor:new-post', openComposer);
+  });
+
+  it('shows the empty-profile placeholder only until the account has had its first post', async () => {
+    render(<WallPage />);
+
+    expect(await screen.findByTestId('empty-profile-placeholder')).toBeInTheDocument();
+
+    act(() => {
+      useWallStore.setState({
+        posts: [
+          {
+            postId: 'first-post',
+            content: 'First post',
+            contentType: 'post',
+            timestamp: new Date(),
+            likes: 0,
+            comments: 0,
+            liked: false,
+            authorPeerId: 'peer-me',
+            visibility: 'public',
+            lamportClock: 1,
+            relayStatus: 'local',
+          } as never,
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('empty-profile-placeholder')).not.toBeInTheDocument();
+      expect(localStorage.getItem(profilePostedMilestoneKey('peer-me'))).toBe('1');
+    });
+
+    act(() => useWallStore.setState({ posts: [] }));
+    expect(screen.queryByTestId('empty-profile-placeholder')).not.toBeInTheDocument();
   });
 });

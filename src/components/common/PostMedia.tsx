@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { mediaService } from '../../services/media';
 import { createLogger } from '../../utils/logger';
+import { useMediaTransfersStore } from '../../stores/mediaTransfers';
 
 const log = createLogger('PostMedia');
 
@@ -8,6 +9,9 @@ export interface PostMediaItem {
   type: 'image' | 'video' | 'audio';
   url: string;
   name?: string;
+  sourcePeerId?: string;
+  mimeType?: string;
+  totalBytes?: number;
 }
 
 interface PostMediaProps {
@@ -40,6 +44,9 @@ function MediaItem({ item }: { item: PostMediaItem }) {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const transfer = useMediaTransfersStore((state) => state.transfers[item.url]);
+  const ensure = useMediaTransfersStore((state) => state.ensure);
+  const retry = useMediaTransfersStore((state) => state.retry);
 
   useEffect(() => {
     // Blob URLs and regular URLs can be used directly
@@ -48,36 +55,98 @@ function MediaItem({ item }: { item: PostMediaItem }) {
       return;
     }
 
-    // Content hash: resolve via the media service
+    // Content hash: retain verified metadata while bytes are transferred.
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-
-    mediaService
-      .getMediaUrl(item.url)
-      .then((url) => {
-        if (!cancelled) {
-          setResolvedUrl(url);
-          setIsLoading(false);
+    ensure({
+      mediaHash: item.url,
+      sourcePeerId: item.sourcePeerId,
+      mediaType: item.type,
+      mimeType: item.mimeType,
+      fileName: item.name,
+      totalBytes: item.totalBytes,
+    })
+      .then((state) => {
+        if (state.status === 'queued' && item.sourcePeerId) {
+          void retry(item.url).catch(() => {});
+          return null;
         }
+        if (state.status !== 'ready') return null;
+        return mediaService.getMediaUrl(item.url);
+      })
+      .then((url) => {
+        if (!cancelled && url) setResolvedUrl(url);
       })
       .catch((err) => {
         if (!cancelled) {
-          log.error(`Failed to resolve media hash: ${item.url}`, err);
-          setError('Failed to load media');
-          setIsLoading(false);
+          log.warn('Failed to prepare attachment lifecycle', err);
+          setError('Attachment state is unavailable');
         }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [item.url]);
+  }, [
+    ensure,
+    item.mimeType,
+    item.name,
+    item.sourcePeerId,
+    item.totalBytes,
+    item.type,
+    item.url,
+    retry,
+  ]);
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!isContentHash(item.url) || transfer?.status !== 'ready' || resolvedUrl) return;
+    let cancelled = false;
+    mediaService
+      .getMediaUrl(item.url)
+      .then((url) => {
+        if (!cancelled) setResolvedUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Attachment could not be opened');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.url, resolvedUrl, transfer?.status]);
+
+  const status = transfer?.status ?? (isLoading ? 'queued' : null);
+  const percent =
+    transfer?.totalBytes && transfer.totalBytes > 0
+      ? Math.min(100, Math.round((transfer.bytesReceived / transfer.totalBytes) * 100))
+      : null;
+  const statusLabel =
+    status === 'queued'
+      ? 'Attachment queued'
+      : status === 'discovering'
+        ? 'Finding attachment source'
+        : status === 'transferring'
+          ? percent == null
+            ? 'Transferring attachment'
+            : `Transferring attachment, ${percent}%`
+          : status === 'retrying'
+            ? 'Retrying attachment transfer'
+            : status === 'unavailable'
+              ? 'Attachment source unavailable'
+              : status === 'failed'
+                ? 'Attachment transfer failed'
+                : 'Preparing attachment';
+
+  if (!resolvedUrl && !error) {
     return (
       <div
         className="rounded-lg flex items-center justify-center"
+        role="status"
+        aria-live="polite"
+        aria-label={`${item.type} attachment: ${statusLabel}`}
         style={{
           background: 'hsl(var(--harbor-surface-1))',
           width: '100%',
@@ -86,16 +155,28 @@ function MediaItem({ item }: { item: PostMediaItem }) {
         }}
       >
         <div className="flex flex-col items-center gap-2">
-          <div
-            className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin"
-            style={{
-              borderColor: 'hsl(var(--harbor-primary))',
-              borderTopColor: 'transparent',
-            }}
-          />
-          <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-            Loading media...
+          <span className="text-2xl" aria-hidden="true">
+            {item.type === 'video' ? '▶' : item.type === 'audio' ? '♪' : '▧'}
           </span>
+          <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+            {statusLabel}
+          </span>
+          {percent != null && (
+            <progress className="w-40" value={percent} max={100} aria-label={`${percent}%`} />
+          )}
+          {(status === 'failed' || status === 'unavailable') && (
+            <button
+              type="button"
+              onClick={() => retry(item.url).catch(() => setError('Retry could not be started'))}
+              className="px-3 py-1.5 rounded-md text-xs font-medium"
+              style={{
+                color: 'hsl(var(--harbor-text-primary))',
+                border: '1px solid hsl(var(--harbor-border-subtle))',
+              }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       </div>
     );
@@ -128,7 +209,7 @@ function MediaItem({ item }: { item: PostMediaItem }) {
             />
           </svg>
           <span className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-            {error || 'Media unavailable'}
+            {error || transfer?.errorMessage || 'Attachment unavailable'}
           </span>
         </div>
       </div>

@@ -1,126 +1,133 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { KEYBOARD_SHORTCUTS } from './useKeyboardNavigation';
+import { fireEvent, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  formatShortcut,
+  HARBOR_SHORTCUT_EVENTS,
+  isEditableShortcutTarget,
+  KEYBOARD_SHORTCUTS,
+  shouldSendMessageFromKey,
+  useKeyboardNavigation,
+} from './useKeyboardNavigation';
 
-// Mock react-router-dom since the hook depends on it
+const router = vi.hoisted(() => ({ navigate: vi.fn(), pathname: '/chat' }));
 vi.mock('react-router-dom', () => ({
-  useNavigate: vi.fn(() => vi.fn()),
-  useLocation: vi.fn(() => ({ pathname: '/chat' })),
+  useNavigate: () => router.navigate,
+  useLocation: () => ({ pathname: router.pathname }),
 }));
 
-describe('KEYBOARD_SHORTCUTS', () => {
-  it('should define shortcuts for all pages', () => {
-    const descriptions = KEYBOARD_SHORTCUTS.map((s) => s.description);
-
-    expect(descriptions).toContain('Go to Messages');
-    expect(descriptions).toContain('Go to Journal');
-    expect(descriptions).toContain('Go to Feed');
-    expect(descriptions).toContain('Go to Network');
-    expect(descriptions).toContain('Go to Settings');
+describe('keyboard shortcut registry', () => {
+  it('defines the required navigation, action, and editing shortcuts', () => {
+    const ids = KEYBOARD_SHORTCUTS.map((shortcut) => shortcut.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'messages',
+        'wall',
+        'feed',
+        'boards',
+        'network',
+        'settings-page',
+        'search',
+        'new-message',
+        'new-post',
+        'settings',
+        'shortcuts',
+        'close',
+        'send',
+        'new-line',
+      ]),
+    );
   });
 
-  it('should define Ctrl+N for new action', () => {
-    const shortcut = KEYBOARD_SHORTCUTS.find((s) => s.description === 'New message/post');
-    expect(shortcut).toBeDefined();
-    expect(shortcut?.key).toBe('N');
-    expect(shortcut?.ctrlKey).toBe(true);
+  it('formats platform-aware labels from the same registry', () => {
+    const search = KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === 'search')!;
+    const newPost = KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === 'new-post')!;
+
+    expect(formatShortcut(search, 'windows-linux')).toBe('Ctrl + K');
+    expect(formatShortcut(search, 'mac')).toBe('⌘ K');
+    expect(formatShortcut(newPost, 'windows-linux')).toBe('Ctrl + Shift + N');
+    expect(formatShortcut(newPost, 'mac')).toBe('⌘ ⇧ N');
   });
 
-  it('should define Ctrl+K for quick search', () => {
-    const shortcut = KEYBOARD_SHORTCUTS.find((s) => s.description === 'Quick search');
-    expect(shortcut).toBeDefined();
-    expect(shortcut?.key).toBe('K');
-    expect(shortcut?.ctrlKey).toBe(true);
-  });
-
-  it('should define Escape for close dialog', () => {
-    const shortcut = KEYBOARD_SHORTCUTS.find((s) => s.description === 'Close dialog/modal');
-    expect(shortcut).toBeDefined();
-    expect(shortcut?.key).toBe('Escape');
-  });
-
-  it('should define Alt+arrow keys for page navigation', () => {
-    const prev = KEYBOARD_SHORTCUTS.find((s) => s.description === 'Previous page');
-    const next = KEYBOARD_SHORTCUTS.find((s) => s.description === 'Next page');
-
-    expect(prev).toBeDefined();
-    expect(prev?.altKey).toBe(true);
-    expect(next).toBeDefined();
-    expect(next?.altKey).toBe(true);
-  });
-
-  it('should define vim-style list navigation', () => {
-    const descriptions = KEYBOARD_SHORTCUTS.map((s) => s.description);
-
-    expect(descriptions).toContain('Previous item in list');
-    expect(descriptions).toContain('Next item in list');
-    expect(descriptions).toContain('Select/activate item');
-  });
-
-  it('should have the correct number of shortcuts', () => {
-    expect(KEYBOARD_SHORTCUTS.length).toBeGreaterThanOrEqual(14);
+  it('sends on Enter while preserving Shift+Enter multiline editing', () => {
+    expect(shouldSendMessageFromKey({ key: 'Enter', shiftKey: false, altKey: false })).toBe(true);
+    expect(shouldSendMessageFromKey({ key: 'Enter', shiftKey: true, altKey: false })).toBe(false);
+    expect(shouldSendMessageFromKey({ key: 'Enter', shiftKey: false, altKey: true })).toBe(false);
   });
 });
 
-describe('useListKeyboardNavigation', () => {
-  let keydownHandlers: ((e: KeyboardEvent) => void)[] = [];
-
+describe('useKeyboardNavigation', () => {
   beforeEach(() => {
-    keydownHandlers = [];
-    vi.spyOn(window, 'addEventListener').mockImplementation((event: string, handler: any) => {
-      if (event === 'keydown') {
-        keydownHandlers.push(handler);
-      }
-    });
-    vi.spyOn(window, 'removeEventListener').mockImplementation(() => {});
+    router.navigate.mockReset();
+    router.pathname = '/chat';
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
-  it('should handle keyboard events for list navigation logic', () => {
-    // Test the logic that would be used by the hook
-    const items = ['a', 'b', 'c', 'd', 'e'];
-    let selectedIndex = 2;
-    const onSelect = (idx: number) => {
-      selectedIndex = idx;
-    };
+  it('focuses search with either Ctrl or Command', () => {
+    const onSearch = vi.fn();
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.focusSearch, onSearch);
+    const { unmount } = renderHook(() => useKeyboardNavigation());
 
-    // Simulate ArrowDown
-    const newIndexDown = Math.min(items.length - 1, selectedIndex + 1);
-    onSelect(newIndexDown);
-    expect(selectedIndex).toBe(3);
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
 
-    // Simulate ArrowUp
-    const newIndexUp = Math.max(0, selectedIndex - 1);
-    onSelect(newIndexUp);
-    expect(selectedIndex).toBe(2);
-
-    // Simulate Home
-    onSelect(0);
-    expect(selectedIndex).toBe(0);
-
-    // Simulate End
-    onSelect(items.length - 1);
-    expect(selectedIndex).toBe(4);
+    expect(onSearch).toHaveBeenCalledTimes(2);
+    window.removeEventListener(HARBOR_SHORTCUT_EVENTS.focusSearch, onSearch);
+    unmount();
   });
 
-  it('should clamp at boundaries', () => {
+  it('routes new-message, new-post, and settings actions', () => {
+    vi.useFakeTimers();
+    const onMessage = vi.fn();
+    const onPost = vi.fn();
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newMessage, onMessage);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newPost, onPost);
+    const { unmount } = renderHook(() => useKeyboardNavigation());
+
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true });
+    expect(onMessage).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(window, { key: 'N', ctrlKey: true, shiftKey: true });
+    expect(router.navigate).not.toHaveBeenCalledWith('/wall');
+    expect(onPost).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true });
+    expect(router.navigate).toHaveBeenCalledWith('/settings');
+
+    window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newMessage, onMessage);
+    window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newPost, onPost);
+    unmount();
+  });
+
+  it('does not run global shortcuts while editing, but still permits Escape', () => {
+    const onMessage = vi.fn();
+    const onEscape = vi.fn();
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.newMessage, onMessage);
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.escape, onEscape);
+    const { unmount } = renderHook(() => useKeyboardNavigation());
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    expect(isEditableShortcutTarget(input)).toBe(true);
+    fireEvent.keyDown(input, { key: 'n', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onEscape).toHaveBeenCalledOnce();
+
+    input.remove();
+    window.removeEventListener(HARBOR_SHORTCUT_EVENTS.newMessage, onMessage);
+    window.removeEventListener(HARBOR_SHORTCUT_EVENTS.escape, onEscape);
+    unmount();
+  });
+});
+
+describe('list keyboard navigation boundaries', () => {
+  it('clamps movement at the beginning and end of a list', () => {
     const items = ['a', 'b', 'c'];
-    let selectedIndex = 0;
-    const onSelect = (idx: number) => {
-      selectedIndex = idx;
-    };
-
-    // ArrowUp at index 0 should stay at 0
-    const newIndexUp = Math.max(0, selectedIndex - 1);
-    onSelect(newIndexUp);
-    expect(selectedIndex).toBe(0);
-
-    // ArrowDown at last index should stay
-    selectedIndex = 2;
-    const newIndexDown = Math.min(items.length - 1, selectedIndex + 1);
-    onSelect(newIndexDown);
-    expect(selectedIndex).toBe(2);
+    expect(Math.max(0, 0 - 1)).toBe(0);
+    expect(Math.min(items.length - 1, 2 + 1)).toBe(2);
   });
 });

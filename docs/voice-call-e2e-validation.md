@@ -2,6 +2,8 @@
 
 This scenario validates the production voice-call path across two isolated Harbor profiles. It is intentionally not satisfied by command-signing tests alone: the evidence must show two profiles, libp2p signaling, persisted call state, WebRTC runtime state, UI state transitions, ICE exchange, connected media state, and clean hangup.
 
+For final packaged Windows to macOS hardware acceptance, use [Packaged Windows and macOS call acceptance](windows-macos-call-acceptance.md). The commands below are source-build development validation only.
+
 ## Preconditions
 
 - Run from the repository root.
@@ -9,18 +11,18 @@ This scenario validates the production voice-call path across two isolated Harbo
 - No production relay credentials are required. The default LAN/mDNS path is acceptable; an operator-provided test TURN server may be added in Settings when validating strict NAT behavior.
 - Use a machine with microphone permission available to both app windows, or a controlled virtual audio device.
 - For headless Linux/Xvfb/WebKitGTK validation only, launch Harbor with `HARBOR_HEADLESS_MEDIA_CAPTURE=1` after provisioning a virtual PulseAudio source. This opt-in flag enables WebKitGTK WebRTC/media-stream settings, mirrors frontend WebRTC availability to stdout, and auto-allows WebKitGTK permission requests in the validation environment. It is not needed for normal desktop use.
-- The validation host's WebKitGTK build must expose `RTCPeerConnection` to JavaScript. On Ubuntu/WebKitGTK hosts this may also require GStreamer WebRTC packages such as `gstreamer1.0-plugins-bad`, `gstreamer1.0-nice`, and `gstreamer1.0-libav`; if Harbor logs `hasRTCPeerConnection:false`, record the runtime as unsupported and use a WebKitGTK build/display stack that exposes WebRTC before continuing the manual scenario.
+- The validation host's WebKitGTK build must expose `RTCPeerConnection` to JavaScript. On Ubuntu/WebKitGTK hosts this also requires the GStreamer WebRTC, libnice, and codec plugins. If Harbor logs `hasRTCPeerConnection:false`, record the runtime as unsupported and do not attempt signaling. ARM64 release validation must use the private packaged runtime described in [ARM64 Linux WebRTC runtime](linux-arm64-webrtc-runtime.md), not an unverified distro WebKitGTK build.
 
 ## Automated regression gates
 
 Run these before and after the manual two-profile scenario:
 
 ```bash
-pnpm exec vitest run src/services/voiceCallE2e.test.ts src/services/callingRuntime.test.ts src/stores/calling.test.ts
+pnpm exec vitest run src/services/voiceCallE2e.test.ts src/services/callingRuntime.test.ts src/services/callingIce.test.ts src/stores/calling.test.ts
 cargo test --manifest-path src-tauri/Cargo.toml offer_answer_ice_hangup_cross_libp2p_signaling_protocol
 ```
 
-The Vitest regression drives two isolated frontend audio runtimes through offer, answer, ICE, connected, and hangup states. The Cargo regression drives the real libp2p request-response signaling protocol across two swarms. These are not a substitute for the two-profile app scenario below, but they prevent closing voice work with only local signing tests.
+The Vitest regression drives isolated frontend profiles through audio and video in both directions, reject, offer/answer, ICE/TURN configuration, connected state, mute/camera controls, hangup, and clean relaunch. It also rejects stale or wrong-peer signaling and asserts transient signaling and credential markers do not enter runtime snapshots. The Cargo regression drives the real libp2p request-response signaling protocol across two swarms. These are not a substitute for the two-profile app scenario below, but they prevent closing voice work with only local signing tests.
 
 ## Two-profile app scenario
 

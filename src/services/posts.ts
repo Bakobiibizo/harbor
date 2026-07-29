@@ -1,12 +1,13 @@
-import { invoke } from '@tauri-apps/api/core';
 import type {
   Post,
   PostMedia,
   PostVisibility,
   CreatePostResult,
   CreatePostMediaInput,
+  PostMutationResult,
 } from '../types';
 import { publishingPolicy } from './publishingPolicy';
+import { invokeCommand } from './command';
 
 /** Posts service - wraps Tauri commands for wall/blog functionality */
 export const postsService = {
@@ -18,7 +19,7 @@ export const postsService = {
     media?: CreatePostMediaInput[],
   ): Promise<CreatePostResult> {
     publishingPolicy.assertAllowed();
-    return invoke<CreatePostResult>('create_post', {
+    return invokeCommand('create_post', {
       contentType,
       contentText,
       visibility,
@@ -27,23 +28,23 @@ export const postsService = {
   },
 
   /** Update a post's content */
-  async updatePost(postId: string, contentText?: string): Promise<void> {
-    return invoke<void>('update_post', { postId, contentText });
+  async updatePost(postId: string, contentText?: string): Promise<PostMutationResult> {
+    return invokeCommand('update_post', { postId, contentText });
   },
 
   /** Delete a post (soft delete) */
-  async deletePost(postId: string): Promise<void> {
-    return invoke<void>('delete_post', { postId });
+  async deletePost(postId: string): Promise<PostMutationResult> {
+    return invokeCommand('delete_post', { postId });
   },
 
   /** Get a single post by ID */
   async getPost(postId: string): Promise<Post | null> {
-    return invoke<Post | null>('get_post', { postId });
+    return invokeCommand('get_post', { postId });
   },
 
   /** Get the local user's posts (their wall) */
   async getMyPosts(limit?: number, beforeTimestamp?: number): Promise<Post[]> {
-    return invoke<Post[]>('get_my_posts', { limit, beforeTimestamp });
+    return invokeCommand('get_my_posts', { limit, beforeTimestamp });
   },
 
   /** Get posts by a specific author */
@@ -52,7 +53,7 @@ export const postsService = {
     limit?: number,
     beforeTimestamp?: number,
   ): Promise<Post[]> {
-    return invoke<Post[]>('get_posts_by_author', {
+    return invokeCommand('get_posts_by_author', {
       authorPeerId,
       limit,
       beforeTimestamp,
@@ -72,7 +73,7 @@ export const postsService = {
     durationSeconds?: number,
     sortOrder?: number,
   ): Promise<void> {
-    return invoke<void>('add_post_media', {
+    return invokeCommand('add_post_media', {
       params: {
         postId,
         mediaHash,
@@ -90,6 +91,6 @@ export const postsService = {
 
   /** Get media for a post */
   async getPostMedia(postId: string): Promise<PostMedia[]> {
-    return invoke<PostMedia[]>('get_post_media', { postId });
+    return invokeCommand('get_post_media', { postId });
   },
 };

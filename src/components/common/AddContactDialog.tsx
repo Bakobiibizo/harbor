@@ -1,9 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { XIcon } from '../icons';
 import { Button } from './Button';
 import { addContactFromString } from '../../services/network';
+import { identityService } from '../../services/identity';
 import { safePeerLabel } from '../../utils/relayName';
+import { parseContactInvite } from '../../utils/contactInvite';
+import { qualifiedRelayName, type RelayNameClaim } from '../../types';
+import { HARBOR_SHORTCUT_EVENTS } from '../../hooks/useKeyboardNavigation';
+import { getErrorMessage } from '../../utils/errors';
 
 interface Props {
   contactString: string;
@@ -14,23 +19,17 @@ interface ContactPreview {
   displayName: string;
   peerId: string;
   bio?: string;
+  relayNameClaim?: RelayNameClaim;
 }
 
 function parseContactString(contactString: string): ContactPreview | null {
   try {
-    const base64 = contactString.replace('harbor://', '');
-    // URL-safe base64 uses - and _ instead of + and /; atob needs standard base64 with padding
-    const b64 = base64.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-    const json = atob(padded);
-    const bundle = JSON.parse(json);
-    // Peer ID is the last segment of the multiaddr: /ip4/.../p2p/<peer_id>
-    const parts: string[] = bundle.multiaddr.split('/');
-    const peerId = parts[parts.length - 1];
+    const bundle = parseContactInvite(contactString);
     return {
       displayName: bundle.displayName,
-      peerId,
+      peerId: bundle.peerId,
       bio: bundle.bio ?? undefined,
+      relayNameClaim: bundle.relayNameClaim,
     };
   } catch {
     return null;
@@ -39,16 +38,46 @@ function parseContactString(contactString: string): ContactPreview | null {
 
 export function AddContactDialog({ contactString, onClose }: Props) {
   const [isLoading, setIsLoading] = useState(false);
+  const [verifiedQualifiedName, setVerifiedQualifiedName] = useState<string | null>(null);
   const preview = parseContactString(contactString);
+
+  useEffect(() => {
+    window.addEventListener(HARBOR_SHORTCUT_EVENTS.escape, onClose);
+    return () => window.removeEventListener(HARBOR_SHORTCUT_EVENTS.escape, onClose);
+  }, [onClose]);
+
+  useEffect(() => {
+    let current = true;
+    setVerifiedQualifiedName(null);
+    const claim = preview?.relayNameClaim;
+    if (!claim) {
+      return () => {
+        current = false;
+      };
+    }
+    void identityService.verifyNameClaim(claim).then(
+      (verified) => {
+        if (current && verified) setVerifiedQualifiedName(qualifiedRelayName(claim));
+      },
+      (error) => {
+        if (current) console.warn('Could not verify relay name claim from contact invite:', error);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [contactString]);
 
   async function handleConfirm() {
     setIsLoading(true);
     try {
       await addContactFromString(contactString);
-      // contact_added event in useTauriEvents handles refreshContacts() and success toast
+      toast.success(
+        'Contact request sent. Keys and sharing access will be added after acceptance.',
+      );
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add contact');
+      toast.error(`Failed to add contact: ${getErrorMessage(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -91,7 +120,9 @@ export function AddContactDialog({ contactString, onClose }: Props) {
         {/* Content */}
         <div className="px-6 py-5 space-y-4">
           <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-            Do you want to add this person to your contacts?
+            {preview
+              ? 'Send this person a contact request? Their keys and sharing access are added only after they accept.'
+              : 'This contact invite is malformed or no longer supported.'}
           </p>
 
           <div
@@ -102,18 +133,19 @@ export function AddContactDialog({ contactString, onClose }: Props) {
               className="font-semibold text-base"
               style={{ color: 'hsl(var(--harbor-text-primary))' }}
             >
-              {preview ? safePeerLabel(preview.peerId) : 'Unknown contact'}
+              {preview
+                ? safePeerLabel(preview.peerId, verifiedQualifiedName, preview.displayName)
+                : 'Unknown contact'}
             </p>
             {preview?.bio && (
               <p className="text-sm" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
                 {preview.bio}
               </p>
             )}
-            <p
-              className="text-xs font-mono break-all"
-              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-            >
-              {preview?.peerId ?? '—'}
+            <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+              {verifiedQualifiedName
+                ? 'Relay-qualified name verified against your pinned relay key.'
+                : 'Harbor will verify this person’s relay-qualified name before displaying it.'}
             </p>
           </div>
         </div>
@@ -126,8 +158,14 @@ export function AddContactDialog({ contactString, onClose }: Props) {
           <Button variant="secondary" size="sm" onClick={onClose} disabled={isLoading}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" loading={isLoading} onClick={handleConfirm}>
-            Add Contact
+          <Button
+            variant="primary"
+            size="sm"
+            loading={isLoading}
+            disabled={isLoading || !preview}
+            onClick={handleConfirm}
+          >
+            Send Request
           </Button>
         </div>
       </div>

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_CIPHERTEXT_BYTES: usize = 64 * 1024;
 const MAX_QUEUE_PER_TARGET: i64 = 100;
-const MAX_QUEUE_GLOBAL: i64 = 10_000;
+const FALLBACK_MAX_QUEUE_GLOBAL: i64 = 10_000;
 const MAX_TTL_SECS: i64 = 24 * 60 * 60;
 const GENERIC_RETRY_AFTER: u32 = 3600;
 
@@ -60,6 +60,51 @@ impl AcceptedResponse {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionCode {
+    Queued,
+    Duplicate,
+    AuthRejected,
+    EnvelopeInvalid,
+    WorkBindingRejected,
+    WorkRejected,
+    TargetUnavailable,
+    CapacityRejected,
+    StorageFailure,
+}
+
+impl AdmissionCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Duplicate => "duplicate",
+            Self::AuthRejected => "auth_rejected",
+            Self::EnvelopeInvalid => "envelope_invalid",
+            Self::WorkBindingRejected => "work_binding_rejected",
+            Self::WorkRejected => "work_rejected",
+            Self::TargetUnavailable => "target_unavailable",
+            Self::CapacityRejected => "capacity_rejected",
+            Self::StorageFailure => "storage_failure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmissionOutcome {
+    pub response: AcceptedResponse,
+    pub code: AdmissionCode,
+}
+
+impl AdmissionOutcome {
+    fn new(response: &AcceptedResponse, code: AdmissionCode) -> Self {
+        Self {
+            response: response.clone(),
+            code,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedEnvelope {
     pub request_id: String,
@@ -86,19 +131,20 @@ impl<'a> IntroductionService<'a> {
         Ok(Self { conn, auth, abuse })
     }
 
-    /// Admit an opaque envelope. All policy and lookup failures return the
-    /// exact same response as successful queueing to avoid a name oracle.
-    pub fn submit(
+    /// Admit an opaque envelope with an internal-only typed decision suitable
+    /// for metrics and structured logs. Every decision carries the exact same
+    /// peer response shape, and the admission code is never serialized.
+    pub fn submit_with_outcome(
         &mut self,
         session_token: &str,
         source_network: &str,
         envelope: IntroductionEnvelope,
         at: i64,
         _known_contact_hint: bool,
-    ) -> AcceptedResponse {
+    ) -> AdmissionOutcome {
         let response = AcceptedResponse::generic(envelope.request_id.clone());
         let Ok(peer_id) = self.auth.authorize(session_token, "introduce", at) else {
-            return response;
+            return AdmissionOutcome::new(&response, AdmissionCode::AuthRejected);
         };
         if peer_id.to_string() != envelope.requester_peer_id
             || envelope.version != 1
@@ -110,13 +156,33 @@ impl<'a> IntroductionService<'a> {
             || envelope.expires_at <= at
             || envelope.expires_at - envelope.issued_at > MAX_TTL_SECS
         {
-            return response;
+            return AdmissionOutcome::new(&response, AdmissionCode::EnvelopeInvalid);
         }
-        self.purge_expired(at);
-        let target_peer: Option<String> = self.conn.query_row(
+        if envelope.work_challenge.requester != envelope.requester_peer_id
+            || envelope.work_challenge.target != envelope.target
+            || envelope.work_challenge.action != "introduce"
+            || envelope.work_challenge.audience != "introduce"
+            || envelope.work_challenge.relay != self.auth.relay_name()
+            || envelope.work_challenge.key_id != self.auth.key_id()
+        {
+            return AdmissionOutcome::new(&response, AdmissionCode::WorkBindingRejected);
+        }
+        if self.purge_expired(at).is_err() {
+            return AdmissionOutcome::new(&response, AdmissionCode::StorageFailure);
+        }
+        let target_peer: Option<String> = match self.conn.query_row(
             "SELECT peer_id FROM relay_name_claims WHERE ('@' || local_name || '@' || relay)=? AND status='active' AND not_before<=? AND not_after>=? ORDER BY sequence DESC LIMIT 1",
-            params![envelope.target, at, at], |r| r.get(0)).optional().unwrap_or(None);
-        let known_contact=target_peer.as_ref().is_some_and(|target|self.conn.query_row("SELECT EXISTS(SELECT 1 FROM wall_read_grants WHERE issuer_peer_id=? AND subject_peer_id=? AND capability IN ('wall_read','wall:read') AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?))",params![target,envelope.requester_peer_id,at],|r|r.get::<_,bool>(0)).unwrap_or(false));
+            params![envelope.target, at, at], |r| r.get(0)).optional() {
+                Ok(target) => target,
+                Err(_) => return AdmissionOutcome::new(&response, AdmissionCode::StorageFailure),
+            };
+        let known_contact = match target_peer.as_ref() {
+            Some(target) => match self.conn.query_row("SELECT EXISTS(SELECT 1 FROM wall_read_grants WHERE issuer_peer_id=? AND subject_peer_id=? AND capability IN ('wall_read','wall:read') AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?))",params![target,envelope.requester_peer_id,at],|r|r.get::<_,bool>(0)) {
+                Ok(value) => value,
+                Err(_) => return AdmissionOutcome::new(&response, AdmissionCode::StorageFailure),
+            },
+            None => false,
+        };
         if self
             .abuse
             .check_and_record(
@@ -128,29 +194,54 @@ impl<'a> IntroductionService<'a> {
             )
             .is_err()
         {
-            return response;
+            return AdmissionOutcome::new(&response, AdmissionCode::WorkRejected);
         }
         let Some(target_peer) = target_peer else {
-            return response;
+            return AdmissionOutcome::new(&response, AdmissionCode::TargetUnavailable);
         };
-        let target_count: i64 = self
+        let target_count: i64 = match self.conn.query_row(
+            "SELECT COUNT(*) FROM introduction_envelopes WHERE target_peer_id=?",
+            [&target_peer],
+            |r| r.get(0),
+        ) {
+            Ok(count) => count,
+            Err(_) => return AdmissionOutcome::new(&response, AdmissionCode::StorageFailure),
+        };
+        let global_count: i64 =
+            match self
+                .conn
+                .query_row("SELECT COUNT(*) FROM introduction_envelopes", [], |r| {
+                    r.get(0)
+                }) {
+                Ok(count) => count,
+                Err(_) => return AdmissionOutcome::new(&response, AdmissionCode::StorageFailure),
+            };
+        let has_resource_limits = self
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM introduction_envelopes WHERE target_peer_id=?",
-                [&target_peer],
-                |r| r.get(0),
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_resource_limits')",
+                [],
+                |row| row.get::<_, bool>(0),
             )
-            .unwrap_or(MAX_QUEUE_PER_TARGET);
-        let global_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM introduction_envelopes", [], |r| {
-                r.get(0)
-            })
-            .unwrap_or(MAX_QUEUE_GLOBAL);
-        if target_count >= MAX_QUEUE_PER_TARGET || global_count >= MAX_QUEUE_GLOBAL {
-            return response;
+            .unwrap_or(false);
+        let max_global = if has_resource_limits {
+            self.conn
+                .query_row(
+                    "SELECT max_introductions FROM relay_resource_limits WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .unwrap_or(FALLBACK_MAX_QUEUE_GLOBAL)
+        } else {
+            FALLBACK_MAX_QUEUE_GLOBAL
+        };
+        if target_count >= MAX_QUEUE_PER_TARGET || global_count >= max_global {
+            return AdmissionOutcome::new(&response, AdmissionCode::CapacityRejected);
         }
-        let _ = self.conn.execute(
+        let inserted = self.conn.execute(
             "INSERT OR IGNORE INTO introduction_envelopes VALUES(?,?,?,?,?,?,?,?)",
             params![
                 envelope.request_id,
@@ -163,7 +254,14 @@ impl<'a> IntroductionService<'a> {
                 at
             ],
         );
-        response
+        match inserted {
+            Ok(1) => AdmissionOutcome::new(&response, AdmissionCode::Queued),
+            Ok(_) => AdmissionOutcome::new(&response, AdmissionCode::Duplicate),
+            Err(error) if error.to_string().contains("RELAY_CAPACITY_INTRODUCTIONS") => {
+                AdmissionOutcome::new(&response, AdmissionCode::CapacityRejected)
+            }
+            Err(_) => AdmissionOutcome::new(&response, AdmissionCode::StorageFailure),
+        }
     }
 
     /// Fetch and consume envelopes for the authenticated target identity.
@@ -177,7 +275,7 @@ impl<'a> IntroductionService<'a> {
             .auth
             .authorize(session_token, "introductions:read", at)?
             .to_string();
-        self.purge_expired(at);
+        self.purge_expired(at).map_err(|error| error.to_string())?;
         let mut statement = self.conn.prepare("SELECT request_id,requester_peer_id,requester_ephemeral_key,ciphertext,issued_at,expires_at FROM introduction_envelopes WHERE target_peer_id=? ORDER BY stored_at LIMIT ?").map_err(|e|e.to_string())?;
         let rows = statement
             .query_map(params![peer, limit.clamp(1, 100)], |r| {
@@ -217,11 +315,11 @@ impl<'a> IntroductionService<'a> {
         Ok(removed)
     }
 
-    fn purge_expired(&self, at: i64) {
-        let _ = self.conn.execute(
+    fn purge_expired(&self, at: i64) -> rusqlite::Result<usize> {
+        self.conn.execute(
             "DELETE FROM introduction_envelopes WHERE expires_at<=?",
             [at],
-        );
+        )
     }
 }
 
@@ -248,7 +346,7 @@ mod tests {
     }
     fn db(target: &str) -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE relay_name_claims(local_name TEXT,relay TEXT,peer_id TEXT,sequence INTEGER,status TEXT,not_before INTEGER,not_after INTEGER);").unwrap();
+        c.execute_batch("CREATE TABLE relay_name_claims(local_name TEXT,relay TEXT,peer_id TEXT,sequence INTEGER,status TEXT,not_before INTEGER,not_after INTEGER); CREATE TABLE wall_read_grants(issuer_peer_id TEXT,subject_peer_id TEXT,capability TEXT,revoked_at INTEGER,expires_at INTEGER);").unwrap();
         c.execute(
             "INSERT INTO relay_name_claims VALUES('alice','relay.test',?,1,'active',0,9999)",
             [target],
@@ -273,6 +371,7 @@ mod tests {
             requester: requester.clone(),
             target: "@alice@relay.test".into(),
             action: "introduce".into(),
+            audience: "introduce".into(),
             expires_at: 300,
             difficulty,
             key_id: "k1".into(),
@@ -309,14 +408,15 @@ mod tests {
         service.abuse.remember(
             envelope(requester.public().to_peer_id().to_string(), id.clone(), 4).work_challenge,
         );
-        let response = service.submit(
+        let outcome = service.submit_with_outcome(
             &submit,
             "10.0.0.0/24",
             envelope(requester.public().to_peer_id().to_string(), id.clone(), 4),
             100,
             false,
         );
-        assert_eq!(response.status, "accepted-for-processing");
+        assert_eq!(outcome.response.status, "accepted-for-processing");
+        assert_eq!(outcome.code, AdmissionCode::Queued);
         let queued = service.take(&read, 101, 10).unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].message_ciphertext, vec![9; 48]);
@@ -335,8 +435,12 @@ mod tests {
         let mut service = IntroductionService::new(&conn, &auth, &mut abuse).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let valid = envelope(requester.public().to_peer_id().to_string(), id.clone(), 4);
-        let first = service.submit(&submit, "net", valid.clone(), 100, false);
-        let replay = service.submit(&submit, "net", valid, 100, false);
+        let first = service
+            .submit_with_outcome(&submit, "net", valid.clone(), 100, false)
+            .response;
+        let replay = service
+            .submit_with_outcome(&submit, "net", valid, 100, false)
+            .response;
         let mut unknown = envelope(
             requester.public().to_peer_id().to_string(),
             uuid::Uuid::new_v4().to_string(),
@@ -347,7 +451,9 @@ mod tests {
         unknown.work_nonce = (0..)
             .find(|n| unknown.work_challenge.verify(*n, 100))
             .unwrap();
-        let absent = service.submit(&submit, "net", unknown, 100, false);
+        let absent = service
+            .submit_with_outcome(&submit, "net", unknown, 100, false)
+            .response;
         assert_eq!(first.status, replay.status);
         assert_eq!(first.status, absent.status);
     }
@@ -368,14 +474,69 @@ mod tests {
             0,
         );
         expired.expires_at = 99;
-        service.submit(&submit, "net", expired, 100, false);
+        service.submit_with_outcome(&submit, "net", expired, 100, false);
         let mut large = envelope(
             requester.public().to_peer_id().to_string(),
             uuid::Uuid::new_v4().to_string(),
             0,
         );
         large.message_ciphertext = vec![0; MAX_CIPHERTEXT_BYTES + 1];
-        service.submit(&submit, "net", large, 100, false);
+        service.submit_with_outcome(&submit, "net", large, 100, false);
         assert!(service.take(&read, 101, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn every_work_binding_dimension_rejects_with_the_same_external_response() {
+        let relay = Keypair::generate_ed25519();
+        let requester = Keypair::generate_ed25519();
+        let target = Keypair::generate_ed25519();
+        let mut auth = AuthService::new("relay.test", "k1", relay);
+        let submit = token(&mut auth, &requester, "introduce", 100);
+        let conn = db(&target.public().to_peer_id().to_string());
+        let mut abuse = AbuseGuard::new(limits());
+        let mut service = IntroductionService::new(&conn, &auth, &mut abuse).unwrap();
+        let requester_peer = requester.public().to_peer_id().to_string();
+        let baseline = envelope(requester_peer.clone(), uuid::Uuid::new_v4().to_string(), 0);
+        let expected = AcceptedResponse::generic(baseline.request_id.clone());
+
+        for mutation in 0..5 {
+            let mut candidate = baseline.clone();
+            match mutation {
+                0 => candidate.work_challenge.requester = "other-peer".into(),
+                1 => candidate.work_challenge.target = "@other@relay.test".into(),
+                2 => candidate.work_challenge.action = "fetch".into(),
+                3 => candidate.work_challenge.relay = "other-relay.test".into(),
+                _ => candidate.work_challenge.audience = "other".into(),
+            }
+            let outcome = service.submit_with_outcome(&submit, "net", candidate, 100, false);
+            assert_eq!(outcome.response, expected);
+            assert_eq!(outcome.code, AdmissionCode::WorkBindingRejected);
+        }
+    }
+
+    #[test]
+    fn storage_failure_is_typed_internally_but_oracle_resistant_externally() {
+        let relay = Keypair::generate_ed25519();
+        let requester = Keypair::generate_ed25519();
+        let target = Keypair::generate_ed25519();
+        let mut auth = AuthService::new("relay.test", "k1", relay);
+        let submit = token(&mut auth, &requester, "introduce", 100);
+        let conn = db(&target.public().to_peer_id().to_string());
+        let mut abuse = AbuseGuard::new(limits());
+        let mut service = IntroductionService::new(&conn, &auth, &mut abuse).unwrap();
+        service
+            .conn
+            .execute("DROP TABLE relay_name_claims", [])
+            .unwrap();
+        let candidate = envelope(
+            requester.public().to_peer_id().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            0,
+        );
+        let expected = AcceptedResponse::generic(candidate.request_id.clone());
+
+        let outcome = service.submit_with_outcome(&submit, "net", candidate, 100, false);
+        assert_eq!(outcome.response, expected);
+        assert_eq!(outcome.code, AdmissionCode::StorageFailure);
     }
 }

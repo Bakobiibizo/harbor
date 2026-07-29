@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+package_root="$(cd -- "$launcher_dir/.." && pwd -P)"
+runtime_root="$package_root/runtime"
+harbor_binary="$package_root/libexec/harbor-bin"
+
+webkit_library="$runtime_root/lib/libwebkit2gtk-4.1.so.0"
+webkit_process_dir="$runtime_root/libexec/webkit2gtk-4.1"
+webkit_bundle_dir="$runtime_root/lib/webkit2gtk-4.1/injected-bundle"
+
+if [[ ! -x "$harbor_binary" ]]; then
+  printf 'Harbor installation is incomplete: %s is missing or not executable.\n' "$harbor_binary" >&2
+  exit 78
+fi
+
+if [[ ! -e "$webkit_library" ||
+      ! -x "$webkit_process_dir/WebKitWebProcess" ||
+      ! -x "$webkit_process_dir/WebKitNetworkProcess" ||
+      ! -x "$webkit_process_dir/WebKitGPUProcess" ]]; then
+  printf 'Harbor WebRTC runtime is incomplete under %s. Reinstall this Harbor package.\n' "$runtime_root" >&2
+  exit 78
+fi
+
+export HARBOR_WEBKIT_RUNTIME_DIR="$runtime_root"
+export LD_LIBRARY_PATH="$runtime_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export WEBKIT_EXEC_PATH="$webkit_process_dir"
+export WEBKIT_INJECTED_BUNDLE_PATH="$webkit_bundle_dir"
+
+exec "$harbor_binary" "$@"

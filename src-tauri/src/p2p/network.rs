@@ -8,7 +8,8 @@ use libp2p::{
     Multiaddr, PeerId, Swarm,
 };
 use std::collections::HashMap;
-use std::time::Instant;
+use std::hash::Hash;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -19,6 +20,28 @@ const PUBLIC_RELAYS: &[&str] = &[
     // Harbor community relay (primary)
     "/ip4/100.49.236.191/tcp/4001/p2p/12D3KooWMfwHKfzDrZ2V3Zniw3Qu797bHrKsFKAdG9CtQiaEhbQ3",
 ];
+
+/// Application-level deadline for a direct-message request. This is kept
+/// independent of libp2p's timeout so abandoned or stalled requests cannot
+/// retain callers indefinitely.
+const MESSAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const PENDING_REQUEST_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
+const MESSAGE_OUTBOX_CLAIM_LEASE_SECONDS: u32 = 30;
+const MESSAGE_OUTBOX_MAX_IN_FLIGHT: usize = 32;
+const MESSAGE_OUTBOX_BATCH_SIZE: usize = 16;
+const POST_RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const POST_RELAY_OUTBOX_CLAIM_LEASE_SECONDS: i64 = 35;
+const POST_RELAY_OUTBOX_MAX_IN_FLIGHT: usize = 16;
+const POST_RELAY_OUTBOX_BATCH_SIZE: usize = 8;
+
+fn message_runtime_unavailable(event_id: &str, message_id: &str) -> MessageDeliveryFailure {
+    MessageDeliveryFailure {
+        event_id: event_id.to_string(),
+        message_id: message_id.to_string(),
+        kind: MessageDeliveryFailureKind::RuntimeUnavailable,
+        detail: "network service is unavailable".into(),
+    }
+}
 
 use super::behaviour::{
     ChatBehaviour, ChatBehaviourEvent, ContentSyncRequest, ContentSyncResponse,
@@ -31,7 +54,7 @@ use super::protocols::board_sync::{
     NameClaimRequest, SignedNameClaimRequest, WallSocialEventItem,
 };
 use super::protocols::messaging::{MessagingCodec, MessagingMessage};
-use super::protocols::signaling::{SignalingEnvelope, SignalingResponse};
+use super::protocols::signaling::{SignalingEnvelope, SignalingPayload, SignalingResponse};
 use super::swarm::build_swarm;
 use super::types::*;
 use crate::db::Capability;
@@ -39,17 +62,46 @@ use crate::error::{AppError, Result};
 use crate::services::board_service::StorableBoardPost;
 use crate::services::content_sync_service::RemotePostParams;
 use crate::services::mentions_service::IncomingMentionEnvelope;
-use crate::services::messaging_service::IncomingMessageParams;
+use crate::services::messaging_service::{IncomingMessageEditParams, IncomingMessageParams};
 use crate::services::{
     BoardService, CallingService, ContactsService, ContentSyncService, IdentityService,
-    IncomingWallSocialEventParams, MediaStorageService, MentionsService, MessagingService,
-    PermissionsService, PostsService, SignableGetWallPosts, SignableGetWallSocialEvents,
-    SignableWallPostSubmit, SignableWallSocialEventSubmit, WallSocialService,
+    IncomingWallSocialEventParams, MediaStorageService, MediaTransferUpdate, MentionsService,
+    MessagingService, PermissionsService, PostsService, SignableGetWallPosts,
+    SignableGetWallSocialEvents, SignableWallPostSubmit, SignableWallSocialEventSubmit,
+    WallSocialService,
 };
-use std::sync::Arc;
-fn solve_work(c: &super::protocols::board_sync::WorkChallenge) -> u64 {
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+const POW_MAX_DIFFICULTY: u8 = 24;
+const POW_MAX_DURATION: Duration = Duration::from_secs(10);
+const POW_MAX_ATTEMPTS: u64 = 25_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkSolveError {
+    Cancelled,
+    DeadlineExceeded,
+    WorkBudgetExceeded,
+}
+
+fn solve_work_bounded(
+    c: &super::protocols::board_sync::WorkChallenge,
+    cancelled: &AtomicBool,
+    deadline: Instant,
+    max_attempts: u64,
+) -> std::result::Result<u64, WorkSolveError> {
     use sha2::{Digest, Sha256};
-    for nonce in 0..u64::MAX {
+    for nonce in 0..max_attempts {
+        if nonce % 1024 == 0 {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(WorkSolveError::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                return Err(WorkSolveError::DeadlineExceeded);
+            }
+        }
         let mut h = Sha256::new();
         for part in [
             "harbor-pow-v1",
@@ -58,6 +110,7 @@ fn solve_work(c: &super::protocols::board_sync::WorkChallenge) -> u64 {
             &c.requester,
             &c.target,
             &c.action,
+            &c.audience,
             &c.expires_at.to_string(),
             &nonce.to_string(),
         ] {
@@ -70,13 +123,439 @@ fn solve_work(c: &super::protocols::board_sync::WorkChallenge) -> u64 {
                 .find(|b| **b != 0)
                 .map_or(0, |b| b.leading_zeros() as u8);
         if bits >= c.difficulty {
-            return nonce;
+            return Ok(nonce);
         }
     }
-    0
+    Err(WorkSolveError::WorkBudgetExceeded)
+}
+
+fn spawn_work_solver(
+    challenge: super::protocols::board_sync::WorkChallenge,
+    cancelled: Arc<AtomicBool>,
+    deadline: Instant,
+) -> tokio::task::JoinHandle<std::result::Result<u64, WorkSolveError>> {
+    tokio::task::spawn_blocking(move || {
+        solve_work_bounded(&challenge, &cancelled, deadline, POW_MAX_ATTEMPTS)
+    })
+}
+
+fn validate_relay_auth_challenge(
+    peer: PeerId,
+    local_peer_id: &str,
+    expected_audience: &str,
+    challenge: &super::protocols::board_sync::RelayAuthChallenge,
+    now: i64,
+) -> std::result::Result<libp2p::identity::PublicKey, &'static str> {
+    if challenge.domain != "harbor/relay-challenge/1"
+        || challenge.version != 1
+        || challenge.peer_id != local_peer_id
+        || challenge.audience != expected_audience
+        || challenge.id.is_empty()
+        || challenge.id.len() > 128
+        || challenge.relay.is_empty()
+        || challenge.relay.len() > 255
+        || challenge.key_id.is_empty()
+        || challenge.key_id.len() > 128
+        || challenge.nonce.is_empty()
+        || challenge.nonce.len() > 128
+        || challenge.relay_public_key.is_empty()
+        || challenge.relay_public_key.len() > 128
+        || challenge.relay_signature.is_empty()
+        || challenge.relay_signature.len() > 256
+        || challenge.issued_at > now + 30
+        || challenge.expires_at < now
+        || challenge.expires_at < challenge.issued_at
+        || challenge.expires_at - challenge.issued_at > 180
+    {
+        return Err("RELAY_AUTH_CHALLENGE_INVALID");
+    }
+    let public = libp2p::identity::PublicKey::try_decode_protobuf(&challenge.relay_public_key)
+        .map_err(|_| "RELAY_AUTH_KEY_INVALID")?;
+    if PeerId::from_public_key(&public) != peer {
+        return Err("RELAY_AUTH_TRANSPORT_MISMATCH");
+    }
+    let mut unsigned = challenge.clone();
+    unsigned.relay_signature.clear();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&unsigned, &mut bytes)
+        .map_err(|_| "RELAY_AUTH_CHALLENGE_INVALID")?;
+    if !public.verify(&bytes, &challenge.relay_signature) {
+        return Err("RELAY_AUTH_SIGNATURE_INVALID");
+    }
+    Ok(public)
+}
+
+fn validate_work_challenge(
+    peer: PeerId,
+    local_peer_id: &str,
+    expected_target: &str,
+    expected_relay: &str,
+    expected_key_id: &str,
+    relay_public_key: &[u8],
+    challenge: &super::protocols::board_sync::WorkChallenge,
+    now: i64,
+) -> std::result::Result<(), &'static str> {
+    if challenge.id.is_empty()
+        || challenge.id.len() > 128
+        || challenge.relay.len() > 255
+        || challenge.requester.len() > 128
+        || challenge.target.len() > 512
+        || challenge.action.len() > 64
+        || challenge.audience != "introduce"
+        || challenge.key_id.len() > 128
+        || challenge.relay != expected_relay
+        || challenge.requester != local_peer_id
+        || challenge.target != expected_target
+        || challenge.action != "introduce"
+        || challenge.key_id != expected_key_id
+        || challenge.difficulty > POW_MAX_DIFFICULTY
+        || challenge.expires_at < now
+        || challenge.expires_at > now + 330
+        || challenge.delivery_key.len() != 32
+        || challenge.relay_signature.is_empty()
+        || challenge.relay_signature.len() > 256
+    {
+        return Err("INTRODUCTION_WORK_INVALID");
+    }
+    let public = libp2p::identity::PublicKey::try_decode_protobuf(relay_public_key)
+        .map_err(|_| "INTRODUCTION_WORK_KEY_INVALID")?;
+    if PeerId::from_public_key(&public) != peer {
+        return Err("INTRODUCTION_WORK_TRANSPORT_MISMATCH");
+    }
+    let mut unsigned = challenge.clone();
+    unsigned.relay_signature.clear();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&unsigned, &mut bytes).map_err(|_| "INTRODUCTION_WORK_INVALID")?;
+    if !public.verify(&bytes, &challenge.relay_signature) {
+        return Err("INTRODUCTION_WORK_SIGNATURE_INVALID");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pow_budget_tests {
+    use super::super::protocols::board_sync::{RelayAuthChallenge, WorkChallenge};
+    use super::*;
+
+    fn signed_auth_challenge(
+        relay_key: &libp2p::identity::Keypair,
+        local_peer_id: &str,
+        now: i64,
+    ) -> RelayAuthChallenge {
+        let mut challenge = RelayAuthChallenge {
+            domain: "harbor/relay-challenge/1".into(),
+            version: 1,
+            id: "auth-1".into(),
+            relay: "relay.test".into(),
+            peer_id: local_peer_id.into(),
+            audience: "introduce".into(),
+            issued_at: now,
+            expires_at: now + 120,
+            nonce: "0123456789abcdef".into(),
+            key_id: "key-1".into(),
+            relay_public_key: relay_key.public().encode_protobuf(),
+            relay_signature: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&challenge, &mut bytes).unwrap();
+        challenge.relay_signature = relay_key.sign(&bytes).unwrap();
+        challenge
+    }
+
+    fn signed_work_challenge(
+        relay_key: &libp2p::identity::Keypair,
+        local_peer_id: &str,
+        now: i64,
+        difficulty: u8,
+    ) -> WorkChallenge {
+        let mut challenge = WorkChallenge {
+            id: "work-1".into(),
+            relay: "relay.test".into(),
+            requester: local_peer_id.into(),
+            target: "@alice@relay.test".into(),
+            action: "introduce".into(),
+            audience: "introduce".into(),
+            expires_at: now + 300,
+            difficulty,
+            key_id: "key-1".into(),
+            relay_signature: Vec::new(),
+            delivery_key: vec![7; 32],
+        };
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&challenge, &mut bytes).unwrap();
+        challenge.relay_signature = relay_key.sign(&bytes).unwrap();
+        challenge
+    }
+
+    #[test]
+    fn relay_auth_and_work_are_transport_bound_before_computation() {
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let relay_peer = relay_key.public().to_peer_id();
+        let local_peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_string();
+        let now = 1_000;
+        let auth = signed_auth_challenge(&relay_key, &local_peer, now);
+        assert!(
+            validate_relay_auth_challenge(relay_peer, &local_peer, "introduce", &auth, now,)
+                .is_ok()
+        );
+
+        let work = signed_work_challenge(&relay_key, &local_peer, now, 14);
+        assert!(validate_work_challenge(
+            relay_peer,
+            &local_peer,
+            "@alice@relay.test",
+            "relay.test",
+            "key-1",
+            &auth.relay_public_key,
+            &work,
+            now,
+        )
+        .is_ok());
+
+        let attacker = libp2p::identity::Keypair::generate_ed25519();
+        let forged = signed_work_challenge(&attacker, &local_peer, now, 14);
+        assert_eq!(
+            validate_work_challenge(
+                relay_peer,
+                &local_peer,
+                "@alice@relay.test",
+                "relay.test",
+                "key-1",
+                &auth.relay_public_key,
+                &forged,
+                now,
+            ),
+            Err("INTRODUCTION_WORK_SIGNATURE_INVALID")
+        );
+    }
+
+    #[test]
+    fn excessive_difficulty_and_tampered_bindings_reject_without_solving() {
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let relay_peer = relay_key.public().to_peer_id();
+        let local_peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_string();
+        let now = 1_000;
+        let auth = signed_auth_challenge(&relay_key, &local_peer, now);
+        let excessive = signed_work_challenge(&relay_key, &local_peer, now, POW_MAX_DIFFICULTY + 1);
+        assert_eq!(
+            validate_work_challenge(
+                relay_peer,
+                &local_peer,
+                "@alice@relay.test",
+                "relay.test",
+                "key-1",
+                &auth.relay_public_key,
+                &excessive,
+                now,
+            ),
+            Err("INTRODUCTION_WORK_INVALID")
+        );
+
+        let mut swapped = signed_work_challenge(&relay_key, &local_peer, now, 14);
+        swapped.target = "@mallory@relay.test".into();
+        assert!(validate_work_challenge(
+            relay_peer,
+            &local_peer,
+            "@alice@relay.test",
+            "relay.test",
+            "key-1",
+            &auth.relay_public_key,
+            &swapped,
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn solver_obeys_deadline_and_work_budget() {
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let local_peer = relay_key.public().to_peer_id().to_string();
+        let easy = signed_work_challenge(&relay_key, &local_peer, 1_000, 0);
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            solve_work_bounded(&easy, &cancel, Instant::now() + Duration::from_secs(1), 1),
+            Ok(0)
+        );
+
+        let hard = signed_work_challenge(&relay_key, &local_peer, 1_000, 255);
+        assert_eq!(
+            solve_work_bounded(&hard, &cancel, Instant::now(), 1_024),
+            Err(WorkSolveError::DeadlineExceeded)
+        );
+        assert_eq!(
+            solve_work_bounded(&hard, &cancel, Instant::now() + Duration::from_secs(1), 1,),
+            Err(WorkSolveError::WorkBudgetExceeded)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn offloaded_solver_keeps_async_polling_responsive_and_cancels() {
+        let relay_key = libp2p::identity::Keypair::generate_ed25519();
+        let local_peer = relay_key.public().to_peer_id().to_string();
+        let hard = signed_work_challenge(&relay_key, &local_peer, 1_000, 255);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let handle = spawn_work_solver(
+            hard,
+            cancelled.clone(),
+            Instant::now() + Duration::from_secs(5),
+        );
+
+        tokio::time::timeout(Duration::from_millis(250), async {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        })
+        .await
+        .expect("async actor polling was blocked by proof-of-work");
+
+        cancelled.store(true, Ordering::Relaxed);
+        let result = tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("proof-of-work did not observe cancellation")
+            .expect("blocking solver panicked");
+        assert_eq!(result, Err(WorkSolveError::Cancelled));
+    }
 }
 fn should_ack_ingest<T, E>(result: &std::result::Result<T, E>) -> bool {
     result.is_ok()
+}
+
+fn messaging_sender_matches_transport(peer: &PeerId, claimed_sender_peer_id: &str) -> bool {
+    peer.to_string() == claimed_sender_peer_id
+}
+
+fn post_relay_request_matches(
+    request: &WireBoardSyncRequest,
+    post_id: &str,
+    mutation_type: &str,
+) -> bool {
+    match (request, mutation_type) {
+        (
+            WireBoardSyncRequest::SubmitWallPost {
+                post_id: wire_id, ..
+            },
+            "create" | "update",
+        ) => wire_id == post_id,
+        (
+            WireBoardSyncRequest::DeleteWallPost {
+                post_id: wire_id, ..
+            },
+            "delete",
+        ) => wire_id == post_id,
+        _ => false,
+    }
+}
+
+fn post_relay_error_is_conflict(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    ["conflict", "stale", "lamport", "newer", "tombstone"]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn identity_request_signing_bytes(request: &IdentityExchangeRequest) -> Result<Vec<u8>> {
+    let mut unsigned = request.clone();
+    unsigned.signature.clear();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&unsigned, &mut bytes)
+        .map_err(|error| AppError::Serialization(error.to_string()))?;
+    Ok(bytes)
+}
+
+fn identity_response_signing_bytes(response: &IdentityExchangeResponse) -> Result<Vec<u8>> {
+    let mut unsigned = response.clone();
+    unsigned.signature.clear();
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&unsigned, &mut bytes)
+        .map_err(|error| AppError::Serialization(error.to_string()))?;
+    Ok(bytes)
+}
+
+fn verify_identity_request(peer: PeerId, request: &IdentityExchangeRequest, now: i64) -> bool {
+    if request.requester_peer_id != peer.to_string()
+        || uuid::Uuid::parse_str(&request.request_id).is_err()
+        || !matches!(
+            request.action.as_str(),
+            "request" | "accepted" | "declined" | "revoked" | "profile"
+        )
+        || request.public_key.len() != 32
+        || request.x25519_public.len() != 32
+        || request.display_name.is_empty()
+        || request.display_name.chars().count() > 128
+        || (request.action == "profile" && request.profile_revision == 0)
+        || request.profile_revision > i64::MAX as u64
+        || request.timestamp > now + 30
+        || now - request.timestamp > 300
+    {
+        return false;
+    }
+    let Ok(raw) = <[u8; 32]>::try_from(request.public_key.as_slice()) else {
+        return false;
+    };
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(&raw) else {
+        return false;
+    };
+    let Ok(derived) =
+        crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)
+    else {
+        return false;
+    };
+    if derived != request.requester_peer_id {
+        return false;
+    }
+    let Ok(signature) = ed25519_dalek::Signature::from_slice(&request.signature) else {
+        return false;
+    };
+    let Ok(bytes) = identity_request_signing_bytes(request) else {
+        return false;
+    };
+    use ed25519_dalek::Verifier;
+    verifying_key.verify(&bytes, &signature).is_ok()
+}
+
+fn verify_identity_response(peer: PeerId, response: &IdentityExchangeResponse, now: i64) -> bool {
+    if response.peer_id != peer.to_string()
+        || uuid::Uuid::parse_str(&response.request_id).is_err()
+        || !matches!(
+            response.status.as_str(),
+            "review" | "accepted" | "declined" | "revoked" | "failed" | "profile_updated"
+        )
+        || response.public_key.len() != 32
+        || response.x25519_public.len() != 32
+        || response.display_name.is_empty()
+        || response.display_name.chars().count() > 128
+        || response.timestamp > now + 30
+        || now - response.timestamp > 300
+    {
+        return false;
+    }
+    let Ok(raw) = <[u8; 32]>::try_from(response.public_key.as_slice()) else {
+        return false;
+    };
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(&raw) else {
+        return false;
+    };
+    let Ok(derived) =
+        crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)
+    else {
+        return false;
+    };
+    if derived != response.peer_id {
+        return false;
+    }
+    let Ok(signature) = ed25519_dalek::Signature::from_slice(&response.signature) else {
+        return false;
+    };
+    let Ok(bytes) = identity_response_signing_bytes(response) else {
+        return false;
+    };
+    use ed25519_dalek::Verifier;
+    verifying_key.verify(&bytes, &signature).is_ok()
 }
 
 /// Handle to interact with the network service
@@ -85,7 +564,40 @@ pub struct NetworkHandle {
     command_tx: mpsc::Sender<(NetworkCommand, Option<oneshot::Sender<NetworkResponse>>)>,
 }
 
+async fn await_name_registration(
+    rx: oneshot::Receiver<NetworkResponse>,
+    timeout: Duration,
+) -> Result<(super::protocols::board_sync::NameClaim, Vec<u8>)> {
+    match tokio::time::timeout(timeout, rx).await {
+        Err(_) => Err(AppError::Network(
+            "Name registration timed out. Check your relay connection and retry.".into(),
+        )),
+        Ok(Ok(NetworkResponse::RelayNameClaim {
+            claim,
+            relay_public_key,
+        })) => Ok((*claim, relay_public_key)),
+        Ok(Ok(NetworkResponse::Error(e))) => Err(AppError::Network(e)),
+        Ok(_) => Err(AppError::Internal("Unexpected relay-name response".into())),
+    }
+}
+
 impl NetworkHandle {
+    #[cfg(test)]
+    pub(crate) fn test_shutdown_runtime(
+    ) -> (Self, tokio::task::JoinHandle<()>, oneshot::Receiver<()>) {
+        let (command_tx, mut command_rx) = mpsc::channel(4);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let actor = tokio::spawn(async move {
+            while let Some((command, _)) = command_rx.recv().await {
+                if matches!(command, NetworkCommand::Shutdown) {
+                    let _ = shutdown_tx.send(());
+                    break;
+                }
+            }
+        });
+        (Self { command_tx }, actor, shutdown_rx)
+    }
+
     pub async fn resolve_delivery_key(
         &self,
         relay_peer_id: PeerId,
@@ -215,14 +727,7 @@ impl NetworkHandle {
             .map_err(|_| {
                 AppError::NetworkServiceUnavailable("Network service unavailable".into())
             })?;
-        match rx.await {
-            Ok(NetworkResponse::RelayNameClaim {
-                claim,
-                relay_public_key,
-            }) => Ok((*claim, relay_public_key)),
-            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
-            _ => Err(AppError::Internal("Unexpected relay-name response".into())),
-        }
+        await_name_registration(rx, Duration::from_secs(12)).await
     }
     /// Dial a peer at the given addresses
     pub async fn dial(&self, peer_id: PeerId, addresses: Vec<Multiaddr>) -> Result<()> {
@@ -238,6 +743,23 @@ impl NetworkHandle {
             Ok(NetworkResponse::Ok) => Ok(()),
             Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
             _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Tear down a peer transport and cancel its pending message attempts.
+    /// Relationship revocation uses this only after the durable local commit.
+    pub async fn disconnect(&self, peer_id: PeerId) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((NetworkCommand::Disconnect { peer_id }, Some(tx)))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+        match rx.await {
+            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::Error(error)) => Err(AppError::Network(error)),
+            _ => Err(AppError::Internal("Unexpected disconnect response".into())),
         }
     }
 
@@ -308,27 +830,57 @@ impl NetworkHandle {
         &self,
         peer_id: PeerId,
         protocol: String,
+        event_id: String,
+        message_id: String,
         payload: Vec<u8>,
-    ) -> Result<()> {
+    ) -> Result<MessageDeliveryReceipt> {
+        self.send_message_attempt(peer_id, protocol, event_id, message_id, payload)
+            .await
+            .map_err(|failure| AppError::Network(failure.stable_message()))
+    }
+
+    /// Submit one exact wire event and return a typed terminal attempt outcome
+    /// suitable for durable outbox transitions.
+    pub async fn send_message_attempt(
+        &self,
+        peer_id: PeerId,
+        protocol: String,
+        event_id: String,
+        message_id: String,
+        payload: Vec<u8>,
+    ) -> std::result::Result<MessageDeliveryReceipt, MessageDeliveryFailure> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send((
                 NetworkCommand::SendMessage {
                     peer_id,
                     protocol,
+                    event_id: event_id.clone(),
+                    message_id: message_id.clone(),
                     payload,
+                    response_tx: tx,
                 },
-                Some(tx),
+                None,
             ))
             .await
-            .map_err(|_| {
-                AppError::NetworkServiceUnavailable("Network service unavailable".into())
-            })?;
+            .map_err(|_| message_runtime_unavailable(&event_id, &message_id))?;
 
         match rx.await {
-            Ok(NetworkResponse::Ok) => Ok(()),
-            Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
-            _ => Err(AppError::Internal("Unexpected response".into())),
+            Ok(NetworkResponse::MessageDelivered(receipt)) => Ok(receipt),
+            Ok(NetworkResponse::MessageDeliveryFailed(failure)) => Err(failure),
+            Ok(NetworkResponse::Error(detail)) => Err(MessageDeliveryFailure {
+                event_id,
+                message_id,
+                kind: MessageDeliveryFailureKind::InvalidResponse,
+                detail,
+            }),
+            Ok(_) => Err(MessageDeliveryFailure {
+                event_id,
+                message_id,
+                kind: MessageDeliveryFailureKind::InvalidResponse,
+                detail: "network actor returned an unexpected response".into(),
+            }),
+            Err(_) => Err(message_runtime_unavailable(&event_id, &message_id)),
         }
     }
 
@@ -358,19 +910,65 @@ impl NetworkHandle {
     }
 
     /// Request identity from a peer
-    pub async fn request_identity(&self, peer_id: PeerId) -> Result<()> {
+    pub async fn request_identity_action(
+        &self,
+        peer_id: PeerId,
+        request_id: String,
+        action: String,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
-            .send((NetworkCommand::RequestIdentity { peer_id }, Some(tx)))
+            .send((
+                NetworkCommand::RequestIdentity {
+                    peer_id,
+                    request_id,
+                    action,
+                    permission_grants: None,
+                    permission_revocations: None,
+                },
+                Some(tx),
+            ))
             .await
             .map_err(|_| {
                 AppError::NetworkServiceUnavailable("Network service unavailable".into())
             })?;
 
         match rx.await {
-            Ok(NetworkResponse::Ok) => Ok(()),
+            Ok(NetworkResponse::IdentityQueued { .. }) | Ok(NetworkResponse::Ok) => Ok(()),
             Ok(NetworkResponse::Error(e)) => Err(AppError::Network(e)),
             _ => Err(AppError::Internal("Unexpected response".into())),
+        }
+    }
+
+    /// Queue an identity action carrying the exact capability grants that were
+    /// committed atomically with local acceptance.
+    pub async fn request_identity_action_with_grants(
+        &self,
+        peer_id: PeerId,
+        request_id: String,
+        action: String,
+        permission_grants: Vec<crate::services::PermissionGrantMessage>,
+    ) -> Result<bool> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send((
+                NetworkCommand::RequestIdentity {
+                    peer_id,
+                    request_id,
+                    action,
+                    permission_grants: Some(permission_grants),
+                    permission_revocations: None,
+                },
+                Some(tx),
+            ))
+            .await
+            .map_err(|_| {
+                AppError::NetworkServiceUnavailable("Network service unavailable".into())
+            })?;
+        match rx.await {
+            Ok(NetworkResponse::IdentityQueued { connected }) => Ok(connected),
+            Ok(NetworkResponse::Error(error)) => Err(AppError::Network(error)),
+            _ => Err(AppError::Internal("Unexpected identity response".into())),
         }
     }
 
@@ -881,10 +1479,249 @@ pub struct NetworkService {
     /// Pending signaling requests waiting for a request-response outcome.
     pending_signaling_requests:
         HashMap<request_response::OutboundRequestId, oneshot::Sender<NetworkResponse>>,
+    /// Direct-message requests are keyed by libp2p's unique outbound request
+    /// ID, never by peer. This keeps simultaneous requests to one peer from
+    /// resolving the wrong caller when responses arrive out of order.
+    pending_messaging_requests: PendingMessagingRequests<request_response::OutboundRequestId>,
+    pending_identity_requests: HashMap<request_response::OutboundRequestId, (String, String)>,
     pending_name_registration: HashMap<PeerId, PendingNameRegistration>,
     pending_introduction_submit: HashMap<PeerId, PendingIntroductionSubmit>,
     pending_introduction_fetch: HashMap<PeerId, PendingIntroductionFetch>,
-    pending_delivery_resolution: HashMap<PeerId, (String, oneshot::Sender<NetworkResponse>)>,
+    pending_delivery_resolution: HashMap<PeerId, PendingDeliveryResolution>,
+    pow_result_tx: mpsc::Sender<PowCompletion>,
+    pow_result_rx: mpsc::Receiver<PowCompletion>,
+    pending_media_fetches: HashMap<request_response::OutboundRequestId, PendingMediaFetch>,
+    pending_media_fetch_by_hash: HashMap<String, request_response::OutboundRequestId>,
+    /// Durable local post mutations correlated to their exact board protocol request.
+    pending_post_relay_requests:
+        HashMap<request_response::OutboundRequestId, PendingPostRelayRequest>,
+}
+
+struct PendingPostRelayRequest {
+    event_id: String,
+    post_id: String,
+    mutation_type: String,
+    relay_peer_id: PeerId,
+    deadline: Instant,
+    attempt_count: i64,
+    max_attempts: i64,
+}
+
+struct PendingMediaFetch {
+    peer_id: PeerId,
+    media_hash: String,
+    profile_id: String,
+    offset: u64,
+}
+
+struct PendingMessagingRequest {
+    event_id: String,
+    message_id: String,
+    peer_id: PeerId,
+    deadline: Instant,
+    /// Foreground submissions have a waiter. Restart/background outbox
+    /// attempts do not, but still retain full correlation and terminal state.
+    response_tx: Option<oneshot::Sender<NetworkResponse>>,
+}
+
+/// Small request-correlation state machine kept independent of the swarm so
+/// its cleanup and terminal-state invariants can be tested deterministically.
+struct PendingMessagingRequests<K> {
+    requests: HashMap<K, PendingMessagingRequest>,
+}
+
+impl<K> Default for PendingMessagingRequests<K> {
+    fn default() -> Self {
+        Self {
+            requests: HashMap::new(),
+        }
+    }
+}
+
+impl<K> PendingMessagingRequests<K>
+where
+    K: Eq + Hash + Clone,
+{
+    fn insert(
+        &mut self,
+        request_id: K,
+        event_id: String,
+        message_id: String,
+        peer_id: PeerId,
+        deadline: Instant,
+        response_tx: Option<oneshot::Sender<NetworkResponse>>,
+    ) {
+        if let Some(replaced) = self.requests.insert(
+            request_id,
+            PendingMessagingRequest {
+                event_id,
+                message_id,
+                peer_id,
+                deadline,
+                response_tx,
+            },
+        ) {
+            if let Some(response_tx) = replaced.response_tx {
+                let _ = response_tx.send(NetworkResponse::MessageDeliveryFailed(
+                    MessageDeliveryFailure {
+                        event_id: replaced.event_id,
+                        message_id: replaced.message_id,
+                        kind: MessageDeliveryFailureKind::Cancelled,
+                        detail: "duplicate outbound request ID replaced the pending attempt".into(),
+                    },
+                ));
+            }
+        }
+    }
+
+    fn fail(
+        &mut self,
+        request_id: &K,
+        kind: MessageDeliveryFailureKind,
+        detail: impl Into<String>,
+    ) -> Option<MessageDeliveryFailure> {
+        let Some(pending) = self.requests.remove(request_id) else {
+            return None;
+        };
+        let failure = MessageDeliveryFailure {
+            event_id: pending.event_id,
+            message_id: pending.message_id,
+            kind,
+            detail: detail.into(),
+        };
+        if let Some(response_tx) = pending.response_tx {
+            let _ = response_tx.send(NetworkResponse::MessageDeliveryFailed(failure.clone()));
+        }
+        Some(failure)
+    }
+
+    fn complete_remote(
+        &mut self,
+        request_id: &K,
+        peer_id: &PeerId,
+        response: MessagingResponse,
+    ) -> Option<MessageDeliveryAttemptOutcome> {
+        let Some(pending) = self.requests.remove(request_id) else {
+            return None;
+        };
+        let outcome = if pending.peer_id != *peer_id {
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                event_id: pending.event_id,
+                message_id: pending.message_id,
+                kind: MessageDeliveryFailureKind::InvalidResponse,
+                detail: "response arrived from an unexpected peer".into(),
+            })
+        } else if response.success {
+            if response.message_id.as_deref() == Some(pending.message_id.as_str()) {
+                NetworkResponse::MessageDelivered(MessageDeliveryReceipt {
+                    event_id: pending.event_id,
+                    message_id: pending.message_id,
+                })
+            } else {
+                NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                    event_id: pending.event_id,
+                    message_id: pending.message_id.clone(),
+                    kind: MessageDeliveryFailureKind::InvalidResponse,
+                    detail: format!(
+                        "acknowledgement message ID mismatch: expected {}, received {:?}",
+                        pending.message_id, response.message_id
+                    ),
+                })
+            }
+        } else {
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                event_id: pending.event_id,
+                message_id: pending.message_id,
+                kind: MessageDeliveryFailureKind::Rejected,
+                detail: response
+                    .error
+                    .unwrap_or_else(|| "remote peer rejected the message".into()),
+            })
+        };
+        let terminal = match &outcome {
+            NetworkResponse::MessageDelivered(receipt) => {
+                MessageDeliveryAttemptOutcome::Delivered(receipt.clone())
+            }
+            NetworkResponse::MessageDeliveryFailed(failure) => {
+                MessageDeliveryAttemptOutcome::Failed(failure.clone())
+            }
+            _ => unreachable!("messaging completion must be a typed terminal outcome"),
+        };
+        if let Some(response_tx) = pending.response_tx {
+            let _ = response_tx.send(outcome);
+        }
+        Some(terminal)
+    }
+
+    fn fail_peer(
+        &mut self,
+        peer_id: &PeerId,
+        kind: MessageDeliveryFailureKind,
+        detail: &str,
+    ) -> Vec<MessageDeliveryFailure> {
+        let request_ids: Vec<K> = self
+            .requests
+            .iter()
+            .filter_map(|(request_id, pending)| {
+                (pending.peer_id == *peer_id).then(|| request_id.clone())
+            })
+            .collect();
+        request_ids
+            .into_iter()
+            .filter_map(|request_id| self.fail(&request_id, kind, detail))
+            .collect()
+    }
+
+    fn maintain(&mut self, now: Instant) -> (usize, Vec<MessageDeliveryFailure>) {
+        let cancelled_ids: Vec<K> = self
+            .requests
+            .iter()
+            .filter_map(|(request_id, pending)| {
+                pending
+                    .response_tx
+                    .as_ref()
+                    .is_some_and(oneshot::Sender::is_closed)
+                    .then(|| request_id.clone())
+            })
+            .collect();
+        let cancelled = cancelled_ids.len();
+        for request_id in cancelled_ids {
+            self.requests.remove(&request_id);
+        }
+
+        let expired_ids: Vec<K> = self
+            .requests
+            .iter()
+            .filter_map(|(request_id, pending)| {
+                (pending.deadline <= now).then(|| request_id.clone())
+            })
+            .collect();
+        let expired = expired_ids
+            .into_iter()
+            .filter_map(|request_id| {
+                self.fail(
+                    &request_id,
+                    MessageDeliveryFailureKind::Timeout,
+                    "peer did not acknowledge the message before its deadline",
+                )
+            })
+            .collect();
+        (cancelled, expired)
+    }
+
+    fn fail_all(&mut self, error: &str) -> Vec<MessageDeliveryFailure> {
+        let request_ids: Vec<K> = self.requests.keys().cloned().collect();
+        request_ids
+            .into_iter()
+            .filter_map(|request_id| {
+                self.fail(&request_id, MessageDeliveryFailureKind::Shutdown, error)
+            })
+            .collect()
+    }
+
+    fn len(&self) -> usize {
+        self.requests.len()
+    }
 }
 
 struct PendingNameRegistration {
@@ -901,12 +1738,31 @@ struct PendingIntroductionSubmit {
     ciphertext: Vec<u8>,
     expires_at: i64,
     session_token: Option<String>,
+    relay_name: Option<String>,
+    relay_key_id: Option<String>,
+    relay_public_key: Vec<u8>,
+    pow_challenge_id: Option<String>,
+    pow_cancel: Arc<AtomicBool>,
     response_tx: oneshot::Sender<NetworkResponse>,
 }
 struct PendingIntroductionFetch {
     limit: u32,
     session_token: Option<String>,
     response_tx: oneshot::Sender<NetworkResponse>,
+}
+
+struct PendingDeliveryResolution {
+    target: String,
+    relay_name: Option<String>,
+    relay_key_id: Option<String>,
+    relay_public_key: Vec<u8>,
+    response_tx: oneshot::Sender<NetworkResponse>,
+}
+
+struct PowCompletion {
+    peer: PeerId,
+    challenge: super::protocols::board_sync::WorkChallenge,
+    result: std::result::Result<u64, WorkSolveError>,
 }
 
 impl NetworkService {
@@ -920,6 +1776,7 @@ impl NetworkService {
 
         let (command_tx, command_rx) = mpsc::channel(256);
         let (event_tx, event_rx) = mpsc::channel(256);
+        let (pow_result_tx, pow_result_rx) = mpsc::channel(8);
 
         let handle = NetworkHandle { command_tx };
 
@@ -953,10 +1810,17 @@ impl NetworkService {
             community_relays: HashMap::new(),
             pending_board_registrations: std::collections::HashSet::new(),
             pending_signaling_requests: HashMap::new(),
+            pending_messaging_requests: PendingMessagingRequests::default(),
+            pending_identity_requests: HashMap::new(),
             pending_name_registration: HashMap::new(),
             pending_introduction_submit: HashMap::new(),
             pending_introduction_fetch: HashMap::new(),
             pending_delivery_resolution: HashMap::new(),
+            pow_result_tx,
+            pow_result_rx,
+            pending_media_fetches: HashMap::new(),
+            pending_media_fetch_by_hash: HashMap::new(),
+            pending_post_relay_requests: HashMap::new(),
         };
 
         Ok((service, handle, event_rx))
@@ -1016,55 +1880,394 @@ impl NetworkService {
     }
 
     /// Create an identity exchange request
-    fn create_identity_request(&self) -> Result<IdentityExchangeRequest> {
+    fn create_identity_request(
+        &self,
+        request_id: String,
+        action: String,
+        subject_peer_id: &str,
+        committed_grants: Option<Vec<crate::services::PermissionGrantMessage>>,
+        committed_revocations: Option<Vec<crate::services::PermissionRevokeMessage>>,
+    ) -> Result<IdentityExchangeRequest> {
         let info = self
             .identity_service
             .get_identity_info()?
             .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
 
         let timestamp = chrono::Utc::now().timestamp();
-        let signature = self
-            .identity_service
-            .sign_raw(format!("{}:{}", info.peer_id, timestamp).as_bytes())?;
-
-        Ok(IdentityExchangeRequest {
+        let (profile_revision, avatar_mime_type) = self.identity_service.profile_revision()?;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let permission_grants = if action == "accepted" {
+            match committed_grants {
+                Some(grants) => grants,
+                None => self.create_contact_acceptance_grants(subject_peer_id)?,
+            }
+        } else {
+            Vec::new()
+        };
+        let permission_revocations = if action == "revoked" {
+            committed_revocations.ok_or_else(|| {
+                AppError::Validation("Revocation delivery requires committed envelopes".into())
+            })?
+        } else {
+            Vec::new()
+        };
+        let mut request = IdentityExchangeRequest {
+            request_id,
+            action,
             requester_peer_id: info.peer_id,
+            public_key: engine
+                .decode(info.public_key)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            x25519_public: engine
+                .decode(info.x25519_public)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            display_name: info.display_name,
+            avatar_hash: info.avatar_hash,
+            avatar_mime_type,
+            profile_revision,
+            bio: info.bio,
             timestamp,
-            signature,
-        })
+            permission_grants,
+            permission_revocations,
+            signature: Vec::new(),
+        };
+        let bytes = identity_request_signing_bytes(&request)?;
+        request.signature = self.identity_service.sign_raw(&bytes)?;
+        Ok(request)
     }
 
-    /// Start listening on configured addresses
-    pub fn start_listening(&mut self) -> Result<()> {
+    fn create_identity_response(
+        &self,
+        request_id: String,
+        status: String,
+        subject_peer_id: &str,
+        committed_grants: Option<Vec<crate::services::PermissionGrantMessage>>,
+    ) -> Result<IdentityExchangeResponse> {
+        let info = self
+            .identity_service
+            .get_identity_info()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+        let timestamp = chrono::Utc::now().timestamp();
+        let (profile_revision, avatar_mime_type) = self.identity_service.profile_revision()?;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let permission_grants = if status == "accepted" {
+            match committed_grants {
+                Some(grants) => grants,
+                None => self.create_contact_acceptance_grants(subject_peer_id)?,
+            }
+        } else {
+            Vec::new()
+        };
+        let mut response = IdentityExchangeResponse {
+            request_id,
+            status,
+            peer_id: info.peer_id,
+            public_key: engine
+                .decode(info.public_key)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            x25519_public: engine
+                .decode(info.x25519_public)
+                .map_err(|error| AppError::Crypto(error.to_string()))?,
+            display_name: info.display_name,
+            avatar_hash: info.avatar_hash,
+            avatar_mime_type,
+            profile_revision,
+            bio: info.bio,
+            timestamp,
+            permission_grants,
+            permission_revocations: Vec::new(),
+            signature: Vec::new(),
+        };
+        response.signature = self
+            .identity_service
+            .sign_raw(&identity_response_signing_bytes(&response)?)?;
+        Ok(response)
+    }
+
+    fn create_contact_acceptance_grants(
+        &self,
+        subject_peer_id: &str,
+    ) -> Result<Vec<crate::services::PermissionGrantMessage>> {
+        let Some(permissions) = self.permissions_service.as_ref() else {
+            return Err(AppError::Internal(
+                "Permissions service unavailable during contact acceptance".into(),
+            ));
+        };
+        [Capability::Chat, Capability::WallRead, Capability::Call]
+            .into_iter()
+            .map(|capability| {
+                permissions.create_permission_grant(subject_peer_id, capability, None)
+            })
+            .collect()
+    }
+
+    fn validate_contact_acceptance_grants(
+        &self,
+        expected_issuer: &str,
+        issuer_public_key: &[u8],
+        grants: &[crate::services::PermissionGrantMessage],
+    ) -> Result<()> {
+        let Some(permissions) = self.permissions_service.as_ref() else {
+            return Err(AppError::Internal(
+                "Permissions service unavailable during contact acceptance".into(),
+            ));
+        };
+        for grant in grants {
+            if grant.issuer_peer_id != expected_issuer {
+                return Err(AppError::Unauthorized(
+                    "Contact acceptance contained a grant from another issuer".into(),
+                ));
+            }
+            permissions.validate_incoming_grant(grant, issuer_public_key)?;
+        }
+        for capability in [Capability::Chat, Capability::WallRead, Capability::Call] {
+            if !grants
+                .iter()
+                .any(|grant| grant.capability == capability.as_str())
+            {
+                return Err(AppError::PermissionDenied(format!(
+                    "Contact acceptance is missing signed {} capability",
+                    capability.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Existing beta contacts may predate capability exchange. Replaying a
+    /// signed acceptance on their next connection repairs both sides without
+    /// weakening the requirement for an author-issued WallRead signature.
+    fn reconcile_contact_acceptance_grants(&mut self, peer_id: PeerId) {
+        let peer = peer_id.to_string();
+        let is_contact = self
+            .contacts_service
+            .as_ref()
+            .and_then(|service| service.get_contact(&peer).ok().flatten())
+            .is_some_and(|contact| !contact.is_blocked);
+        if !is_contact {
+            return;
+        }
+        let needs_reconciliation = self
+            .permissions_service
+            .as_ref()
+            .map(|permissions| {
+                !permissions
+                    .peer_has_capability(&peer, Capability::WallRead)
+                    .unwrap_or(false)
+                    || !permissions
+                        .we_have_capability(&peer, Capability::WallRead)
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !needs_reconciliation {
+            return;
+        }
+
+        // Use a transient correlation ID so a failed repair attempt cannot
+        // regress the durable accepted request row back to `failed`.
+        let request_id = uuid::Uuid::new_v4().to_string();
+
+        match self.create_identity_request(request_id.clone(), "accepted".into(), &peer, None, None)
+        {
+            Ok(request) => {
+                let outbound_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .identity_exchange
+                    .send_request(&peer_id, request);
+                self.pending_identity_requests
+                    .insert(outbound_id, (request_id, "accepted".into()));
+            }
+            Err(error) => warn!("Could not reconcile contact grants with {peer}: {error}"),
+        }
+    }
+
+    /// Publish the current signed monotonic profile revision whenever an
+    /// authorized contact reconnects, covering offline updates and restarts.
+    fn publish_profile_to_contact(&mut self, peer_id: PeerId) {
+        let peer = peer_id.to_string();
+        let authorized = self
+            .contacts_service
+            .as_ref()
+            .and_then(|service| service.get_contact(&peer).ok().flatten())
+            .is_some_and(|contact| !contact.is_blocked);
+        if !authorized {
+            return;
+        }
+        let request_id = uuid::Uuid::new_v4().to_string();
+        match self.create_identity_request(request_id.clone(), "profile".into(), &peer, None, None)
+        {
+            Ok(request) => {
+                let outbound_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .identity_exchange
+                    .send_request(&peer_id, request);
+                self.pending_identity_requests
+                    .insert(outbound_id, (request_id, "profile".into()));
+            }
+            Err(error) => warn!("Could not publish profile revision to {peer}: {error}"),
+        }
+    }
+
+    fn stage_signed_contact_profile(
+        &mut self,
+        peer: PeerId,
+        peer_id: &str,
+        revision: u64,
+        display_name: &str,
+        avatar_hash: Option<&str>,
+        avatar_mime_type: Option<&str>,
+        bio: Option<&str>,
+    ) -> Result<()> {
+        let contacts = self
+            .contacts_service
+            .clone()
+            .ok_or_else(|| AppError::Internal("Contacts service unavailable".into()))?;
+        if !contacts.stage_profile_update(
+            peer_id,
+            revision,
+            display_name,
+            avatar_hash,
+            avatar_mime_type,
+            bio,
+        )? {
+            return Ok(());
+        }
+        let Some(hash) = avatar_hash else {
+            return Ok(());
+        };
+        let media = self
+            .media_service
+            .clone()
+            .ok_or_else(|| AppError::Internal("Media service unavailable".into()))?;
+        if media.has_media(hash) {
+            let old = contacts
+                .get_contact(peer_id)?
+                .and_then(|contact| contact.avatar_hash);
+            if contacts.promote_verified_profile_avatar(peer_id, hash)? {
+                if let Some(old) = old.filter(|old| old != hash) {
+                    let _ = media.delete_media_if_orphaned(&old);
+                }
+            }
+            return Ok(());
+        }
+        media.ensure_transfer(
+            hash,
+            Some(peer_id),
+            "image",
+            avatar_mime_type,
+            Some("profile-avatar"),
+            None,
+        )?;
+        let profile_id = self.identity_service.get_peer_id()?;
+        self.queue_media_range(peer, hash.to_string(), profile_id, 0, true)
+            .map_err(AppError::Network)
+    }
+
+    /// Start listening on configured addresses and wait until both transports
+    /// report that their sockets are live. `Swarm::listen_on` only queues a
+    /// listener, so returning immediately would expose a handle for a swarm
+    /// whose bind can still fail on the next event-loop tick.
+    pub(crate) async fn start_listening(&mut self) -> Result<()> {
         // Listen on TCP
         let tcp_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", self.config.tcp_port)
             .parse()
             .map_err(|e| AppError::Network(format!("Invalid TCP address: {}", e)))?;
-        self.swarm.listen_on(tcp_addr.clone())?;
-        info!("Listening on TCP: {}", tcp_addr);
+        let tcp_listener = self.swarm.listen_on(tcp_addr.clone())?;
+        info!("Starting TCP listener: {}", tcp_addr);
 
         // Listen on QUIC
         let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", self.config.quic_port)
             .parse()
             .map_err(|e| AppError::Network(format!("Invalid QUIC address: {}", e)))?;
-        self.swarm.listen_on(quic_addr.clone())?;
-        info!("Listening on QUIC: {}", quic_addr);
+        let quic_listener = self.swarm.listen_on(quic_addr.clone())?;
+        info!("Starting QUIC listener: {}", quic_addr);
+
+        let readiness = async {
+            let mut tcp_ready = false;
+            let mut quic_ready = false;
+
+            while !tcp_ready || !quic_ready {
+                let event = self.swarm.select_next_some().await;
+                match &event {
+                    SwarmEvent::NewListenAddr { listener_id, .. } => {
+                        tcp_ready |= listener_id == &tcp_listener;
+                        quic_ready |= listener_id == &quic_listener;
+                    }
+                    SwarmEvent::ListenerError { listener_id, error }
+                        if listener_id == &tcp_listener || listener_id == &quic_listener =>
+                    {
+                        return Err(AppError::Network(format!(
+                            "Listener failed before startup completed: {error}"
+                        )));
+                    }
+                    _ => {}
+                }
+
+                self.handle_swarm_event(event).await;
+            }
+
+            Ok(())
+        };
+
+        tokio::time::timeout(Duration::from_secs(10), readiness)
+            .await
+            .map_err(|_| AppError::Network("Timed out waiting for network listeners".into()))??;
 
         Ok(())
+    }
+
+    fn connect_configured_bootstraps(&mut self) {
+        for address in self.config.bootstrap_nodes.clone() {
+            let Some(peer_id) = address.iter().find_map(|protocol| match protocol {
+                libp2p::multiaddr::Protocol::P2p(peer_id) => Some(peer_id),
+                _ => None,
+            }) else {
+                warn!("Ignoring bootstrap address without peer ID: {address}");
+                continue;
+            };
+
+            let address_without_peer: Multiaddr = address
+                .iter()
+                .filter(|protocol| !matches!(protocol, libp2p::multiaddr::Protocol::P2p(_)))
+                .collect();
+            self.swarm
+                .behaviour_mut()
+                .kademlia
+                .add_address(&peer_id, address_without_peer);
+
+            match self.swarm.dial(address.clone()) {
+                Ok(()) => info!("Dialing configured bootstrap node: {address}"),
+                Err(error) => warn!("Could not dial configured bootstrap node {address}: {error}"),
+            }
+        }
     }
 
     /// Run the network event loop
     pub async fn run(mut self) {
         info!("Network service starting...");
 
-        if let Err(e) = self.start_listening() {
+        if let Err(e) = self.start_listening().await {
             error!("Failed to start listening: {}", e);
             return;
         }
 
+        self.run_after_listening().await;
+    }
+
+    /// Run a service whose listeners were bound synchronously by its runtime
+    /// owner before the handle was published.
+    pub async fn run_after_listening(mut self) {
+        self.connect_configured_bootstraps();
+
         // Auto-connect to relay on start (don't wait for AutoNAT)
         info!("Auto-connecting to Harbor relay...");
         self.connect_to_relays().await;
+
+        let mut pending_request_maintenance =
+            tokio::time::interval(PENDING_REQUEST_MAINTENANCE_INTERVAL);
+        pending_request_maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -1074,19 +2277,492 @@ impl NetworkService {
                 }
 
                 // Handle commands from the application
-                Some((command, response_tx)) = self.command_rx.recv() => {
+                command = self.command_rx.recv() => {
+                    let Some((command, response_tx)) = command else {
+                        let failures = self.pending_messaging_requests.fail_all(
+                            "network command channel closed",
+                        );
+                        self.apply_message_attempt_failures(failures);
+                        self.fail_all_post_relay_requests(
+                            "Network service stopped before relay acknowledgement",
+                        );
+                        info!("Network service stopping because all handles were dropped");
+                        break;
+                    };
                     let should_shutdown = matches!(command, NetworkCommand::Shutdown);
                     let response = self.handle_command(command).await;
                     if let Some(tx) = response_tx {
                         let _ = tx.send(response);
                     }
                     if should_shutdown {
+                        let failures = self.pending_messaging_requests.fail_all(
+                            "MESSAGE_RUNTIME_SHUTDOWN: network service is shutting down",
+                        );
+                        self.apply_message_attempt_failures(failures);
+                        self.fail_all_post_relay_requests(
+                            "Network service shut down before relay acknowledgement",
+                        );
                         info!("Network service shutting down...");
                         break;
                     }
                 }
+
+                completion = self.pow_result_rx.recv() => {
+                    if let Some(completion) = completion {
+                        self.handle_pow_completion(completion);
+                    }
+                }
+
+                _ = pending_request_maintenance.tick() => {
+                    let (cancelled, expired) =
+                        self.pending_messaging_requests.maintain(Instant::now());
+                    if cancelled > 0 || !expired.is_empty() {
+                        debug!(
+                            "Cleaned pending message attempts: {} cancelled, {} expired",
+                            cancelled, expired.len()
+                        );
+                    }
+                    self.apply_message_attempt_failures(expired);
+                    self.dispatch_due_message_outbox();
+                    self.expire_post_relay_requests();
+                    self.dispatch_due_post_relay_outbox();
+                    self.dispatch_due_contact_revocations();
+                    self.maintain_pending_introduction_work();
+                }
             }
         }
+    }
+
+    fn maintain_pending_introduction_work(&mut self) {
+        let now = Utc::now().timestamp();
+        self.pending_introduction_submit.retain(|_, pending| {
+            let keep = !pending.response_tx.is_closed() && pending.expires_at >= now;
+            if !keep {
+                pending.pow_cancel.store(true, Ordering::Relaxed);
+            }
+            keep
+        });
+    }
+
+    fn handle_pow_completion(&mut self, completion: PowCompletion) {
+        let Some(pending) = self.pending_introduction_submit.get(&completion.peer) else {
+            return;
+        };
+        if pending.pow_challenge_id.as_deref() != Some(completion.challenge.id.as_str())
+            || pending.pow_cancel.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        let nonce = match completion.result {
+            Ok(nonce) if completion.challenge.expires_at >= Utc::now().timestamp() => nonce,
+            Ok(_) | Err(WorkSolveError::DeadlineExceeded) => {
+                let pending = self
+                    .pending_introduction_submit
+                    .remove(&completion.peer)
+                    .expect("pending introduction checked above");
+                pending.pow_cancel.store(true, Ordering::Relaxed);
+                let _ = pending
+                    .response_tx
+                    .send(NetworkResponse::Error("INTRODUCTION_WORK_TIMEOUT".into()));
+                return;
+            }
+            Err(WorkSolveError::Cancelled) => return,
+            Err(WorkSolveError::WorkBudgetExceeded) => {
+                let pending = self
+                    .pending_introduction_submit
+                    .remove(&completion.peer)
+                    .expect("pending introduction checked above");
+                pending.pow_cancel.store(true, Ordering::Relaxed);
+                let _ = pending.response_tx.send(NetworkResponse::Error(
+                    "INTRODUCTION_WORK_BUDGET_EXCEEDED".into(),
+                ));
+                return;
+            }
+        };
+        let Some(pending) = self.pending_introduction_submit.get(&completion.peer) else {
+            return;
+        };
+        let envelope = super::protocols::board_sync::IntroductionEnvelope {
+            version: 1,
+            request_id: pending.request_id.clone(),
+            target: pending.target.clone(),
+            requester_peer_id: self.identity_service.get_peer_id().unwrap_or_default(),
+            requester_ephemeral_x25519_key: pending.ephemeral_public_key.clone(),
+            message_ciphertext: pending.ciphertext.clone(),
+            issued_at: Utc::now().timestamp(),
+            expires_at: pending.expires_at,
+            work_challenge: completion.challenge,
+            work_nonce: nonce,
+        };
+        self.swarm.behaviour_mut().board_sync.send_request(
+            &completion.peer,
+            WireBoardSyncRequest::SubmitIntroduction {
+                session_token: pending.session_token.clone().unwrap_or_default(),
+                envelope,
+            },
+        );
+    }
+
+    fn dispatch_due_contact_revocations(&mut self) {
+        let Some(contacts) = self.contacts_service.clone() else {
+            return;
+        };
+        let now = Utc::now().timestamp();
+        let entries = match contacts.claim_due_contact_revocations(now, 30, 8) {
+            Ok(entries) => entries,
+            Err(error) => {
+                warn!("Could not claim contact-revocation outbox: {error}");
+                return;
+            }
+        };
+        for entry in entries {
+            let Ok(peer_id) = entry.peer_id.parse::<PeerId>() else {
+                let _ =
+                    contacts.retry_contact_revocation(&entry.request_id, "invalid peer ID", now);
+                continue;
+            };
+            let request = self.create_identity_request(
+                entry.request_id.clone(),
+                "revoked".into(),
+                &entry.peer_id,
+                None,
+                Some(entry.revocations),
+            );
+            match request {
+                Ok(request) => {
+                    let outbound_id = self
+                        .swarm
+                        .behaviour_mut()
+                        .identity_exchange
+                        .send_request(&peer_id, request);
+                    self.pending_identity_requests
+                        .insert(outbound_id, (entry.request_id, "revoked".into()));
+                }
+                Err(error) => {
+                    let _ = contacts.retry_contact_revocation(
+                        &entry.request_id,
+                        &error.to_string(),
+                        now,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Integration point for the durable outbox driver. Keeping dispatch on
+    /// the actor maintenance tick serializes transport submission with pending
+    /// request registration without requiring another task to mutate the swarm.
+    /// The messaging service can claim due rows here during restart recovery
+    /// and on every subsequent tick.
+    fn dispatch_due_message_outbox(&mut self) {
+        let available =
+            MESSAGE_OUTBOX_MAX_IN_FLIGHT.saturating_sub(self.pending_messaging_requests.len());
+        if available == 0 {
+            return;
+        }
+        let Some(messaging_service) = self.messaging_service.clone() else {
+            return;
+        };
+        let now = Utc::now().timestamp();
+        let limit = available.min(MESSAGE_OUTBOX_BATCH_SIZE) as u32;
+        let entries = match messaging_service.claim_due_outbox(
+            now,
+            MESSAGE_OUTBOX_CLAIM_LEASE_SECONDS,
+            limit,
+        ) {
+            Ok(entries) => entries,
+            Err(error) => {
+                warn!("Could not claim due direct-message outbox events: {error}");
+                return;
+            }
+        };
+
+        for entry in entries {
+            match entry.peer_id.parse::<PeerId>() {
+                Ok(peer_id) => {
+                    let event_id = entry.event_id;
+                    let message_id = entry.message_id;
+                    self.enqueue_message_attempt(
+                        peer_id,
+                        "message".to_string(),
+                        event_id.clone(),
+                        message_id.clone(),
+                        entry.payload,
+                        None,
+                    );
+                    match messaging_service.record_outbox_sent(
+                        &event_id,
+                        &message_id,
+                        Utc::now().timestamp(),
+                    ) {
+                        Ok(Some(change)) => self.emit_message_delivery_change(change),
+                        Ok(None) => {}
+                        Err(error) => warn!("Could not mark queued message as sent: {error}"),
+                    }
+                }
+                Err(error) => self.apply_message_attempt_outcome(
+                    MessageDeliveryAttemptOutcome::Failed(MessageDeliveryFailure {
+                        event_id: entry.event_id,
+                        message_id: entry.message_id,
+                        kind: MessageDeliveryFailureKind::InvalidResponse,
+                        detail: format!("queued peer ID is invalid: {error}"),
+                    }),
+                ),
+            }
+        }
+    }
+
+    fn configured_connected_relay(&self) -> Option<PeerId> {
+        self.relay_addresses
+            .iter()
+            .filter_map(|address| {
+                address.iter().find_map(|protocol| match protocol {
+                    libp2p::multiaddr::Protocol::P2p(peer_id) => Some(peer_id),
+                    _ => None,
+                })
+            })
+            .find(|peer_id| self.connected_peers.contains_key(peer_id))
+            .or_else(|| {
+                PUBLIC_RELAYS.iter().find_map(|address| {
+                    address
+                        .parse::<Multiaddr>()
+                        .ok()?
+                        .iter()
+                        .find_map(|protocol| match protocol {
+                            libp2p::multiaddr::Protocol::P2p(peer_id)
+                                if self.connected_peers.contains_key(&peer_id) =>
+                            {
+                                Some(peer_id)
+                            }
+                            _ => None,
+                        })
+                })
+            })
+    }
+
+    fn dispatch_due_post_relay_outbox(&mut self) {
+        let available =
+            POST_RELAY_OUTBOX_MAX_IN_FLIGHT.saturating_sub(self.pending_post_relay_requests.len());
+        if available == 0 {
+            return;
+        }
+        let Some(posts_service) = self.posts_service.clone() else {
+            return;
+        };
+        let Some(relay_peer_id) = self.configured_connected_relay() else {
+            return;
+        };
+        let now = Utc::now().timestamp();
+        let limit = available.min(POST_RELAY_OUTBOX_BATCH_SIZE) as u32;
+        let entries = match posts_service.claim_due_relay_outbox(
+            &relay_peer_id.to_string(),
+            now,
+            POST_RELAY_OUTBOX_CLAIM_LEASE_SECONDS,
+            limit,
+        ) {
+            Ok(entries) => entries,
+            Err(error) => {
+                warn!("Could not claim durable post relay outbox: {error}");
+                return;
+            }
+        };
+
+        for entry in entries {
+            let request: WireBoardSyncRequest =
+                match ciborium::de::from_reader(entry.payload_cbor.as_slice()) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        let detail = format!("Persisted relay request is invalid CBOR: {error}");
+                        let _ = posts_service.fail_relay_outbox_attempt(
+                            &entry.event_id,
+                            &detail,
+                            false,
+                            now,
+                        );
+                        self.emit_post_relay_status(
+                            &entry,
+                            if entry.attempt_count >= entry.max_attempts {
+                                "failed"
+                            } else {
+                                "local_pending"
+                            },
+                            Some(detail),
+                        );
+                        continue;
+                    }
+                };
+            if !post_relay_request_matches(&request, &entry.post_id, &entry.mutation_type) {
+                let detail =
+                    "Persisted relay request does not match its outbox identity".to_string();
+                let _ =
+                    posts_service.fail_relay_outbox_attempt(&entry.event_id, &detail, true, now);
+                self.emit_post_relay_status(&entry, "conflict", Some(detail));
+                continue;
+            }
+            let request_id = self
+                .swarm
+                .behaviour_mut()
+                .board_sync
+                .send_request(&relay_peer_id, request);
+            self.pending_post_relay_requests.insert(
+                request_id,
+                PendingPostRelayRequest {
+                    event_id: entry.event_id,
+                    post_id: entry.post_id,
+                    mutation_type: entry.mutation_type,
+                    relay_peer_id,
+                    deadline: Instant::now() + POST_RELAY_REQUEST_TIMEOUT,
+                    attempt_count: entry.attempt_count,
+                    max_attempts: entry.max_attempts,
+                },
+            );
+        }
+    }
+
+    fn expire_post_relay_requests(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<_> = self
+            .pending_post_relay_requests
+            .iter()
+            .filter(|(_, pending)| pending.deadline <= now)
+            .map(|(request_id, _)| *request_id)
+            .collect();
+        for request_id in expired {
+            if let Some(pending) = self.pending_post_relay_requests.remove(&request_id) {
+                self.fail_post_relay_request(pending, "Relay acknowledgement timed out", false);
+            }
+        }
+    }
+
+    fn fail_all_post_relay_requests(&mut self, detail: &str) {
+        let pending = std::mem::take(&mut self.pending_post_relay_requests);
+        for (_, request) in pending {
+            self.fail_post_relay_request(request, detail, false);
+        }
+    }
+
+    fn fail_post_relay_request(
+        &self,
+        pending: PendingPostRelayRequest,
+        detail: &str,
+        conflict: bool,
+    ) {
+        let Some(posts_service) = self.posts_service.as_ref() else {
+            return;
+        };
+        if let Err(error) = posts_service.fail_relay_outbox_attempt(
+            &pending.event_id,
+            detail,
+            conflict,
+            Utc::now().timestamp(),
+        ) {
+            warn!("Could not persist post relay failure: {error}");
+            return;
+        }
+        let status = if conflict {
+            "conflict"
+        } else if pending.attempt_count >= pending.max_attempts {
+            "failed"
+        } else {
+            "local_pending"
+        };
+        let _ = self
+            .event_tx
+            .try_send(NetworkEvent::PostRelayStatusChanged {
+                post_id: pending.post_id,
+                event_id: pending.event_id,
+                status: status.to_string(),
+                error: Some(detail.to_string()),
+            });
+    }
+
+    fn emit_post_relay_status(
+        &self,
+        entry: &crate::db::PostRelayOutboxEntry,
+        status: &str,
+        error: Option<String>,
+    ) {
+        let _ = self
+            .event_tx
+            .try_send(NetworkEvent::PostRelayStatusChanged {
+                post_id: entry.post_id.clone(),
+                event_id: entry.event_id.clone(),
+                status: status.to_string(),
+                error,
+            });
+    }
+
+    fn apply_message_attempt_failures(&mut self, failures: Vec<MessageDeliveryFailure>) {
+        for failure in failures {
+            self.apply_message_attempt_outcome(MessageDeliveryAttemptOutcome::Failed(failure));
+        }
+    }
+
+    fn apply_message_attempt_outcome(&mut self, outcome: MessageDeliveryAttemptOutcome) {
+        let Some(messaging_service) = self.messaging_service.as_ref() else {
+            return;
+        };
+        let now = Utc::now().timestamp();
+        let transition = match &outcome {
+            MessageDeliveryAttemptOutcome::Delivered(receipt) => {
+                messaging_service.record_outbox_delivery(receipt, now)
+            }
+            MessageDeliveryAttemptOutcome::Failed(failure) => {
+                messaging_service.record_outbox_failure(failure, now)
+            }
+        };
+        match transition {
+            Ok(Some(change)) => self.emit_message_delivery_change(change),
+            Ok(None) => {}
+            Err(error) => warn!("Could not persist message delivery outcome: {error}"),
+        }
+    }
+
+    fn emit_message_delivery_change(
+        &self,
+        change: crate::services::messaging_service::MessageDeliveryStateChange,
+    ) {
+        if let Err(error) = self
+            .event_tx
+            .try_send(NetworkEvent::MessageDeliveryChanged {
+                message_id: change.message_id,
+                status: change.status,
+                timestamp: change.timestamp,
+                error: change.error,
+            })
+        {
+            warn!("Could not emit message delivery update: {error}");
+        }
+    }
+
+    /// Submit a foreground or background outbox attempt through the same
+    /// correlation path. Background attempts pass `None` for `response_tx` and
+    /// consume the typed outcome returned by response/failure maintenance.
+    fn enqueue_message_attempt(
+        &mut self,
+        peer_id: PeerId,
+        protocol: String,
+        event_id: String,
+        message_id: String,
+        payload: Vec<u8>,
+        response_tx: Option<oneshot::Sender<NetworkResponse>>,
+    ) -> request_response::OutboundRequestId {
+        let request_id = self.swarm.behaviour_mut().messaging.send_request(
+            &peer_id,
+            MessagingRequest {
+                message_type: protocol,
+                payload,
+            },
+        );
+        self.pending_messaging_requests.insert(
+            request_id.clone(),
+            event_id,
+            message_id,
+            peer_id,
+            Instant::now() + MESSAGE_REQUEST_TIMEOUT,
+            response_tx,
+        );
+        request_id
     }
 
     async fn handle_swarm_event(&mut self, event: SwarmEvent<ChatBehaviourEvent>) {
@@ -1114,7 +2790,7 @@ impl NetworkService {
                     is_connected: true,
                     last_seen: Some(chrono::Utc::now().timestamp()),
                 };
-                self.connected_peers.insert(peer_id, peer_info);
+                let first_connection = self.connected_peers.insert(peer_id, peer_info).is_none();
                 self.stats.connected_peers = self.connected_peers.len();
 
                 let _ = self
@@ -1123,12 +2799,37 @@ impl NetworkService {
                         peer_id: peer_id.to_string(),
                     })
                     .await;
+                if first_connection {
+                    self.reconcile_contact_acceptance_grants(peer_id);
+                    self.publish_profile_to_contact(peer_id);
+                }
             }
 
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                 info!("Disconnected from peer: {} (cause: {:?})", peer_id, cause);
                 self.connected_peers.remove(&peer_id);
                 self.stats.connected_peers = self.connected_peers.len();
+                let failures = self.pending_messaging_requests.fail_peer(
+                    &peer_id,
+                    MessageDeliveryFailureKind::Disconnected,
+                    "connection closed before acknowledgement",
+                );
+                self.apply_message_attempt_failures(failures);
+                let post_requests: Vec<_> = self
+                    .pending_post_relay_requests
+                    .iter()
+                    .filter(|(_, pending)| pending.relay_peer_id == peer_id)
+                    .map(|(request_id, _)| *request_id)
+                    .collect();
+                for request_id in post_requests {
+                    if let Some(pending) = self.pending_post_relay_requests.remove(&request_id) {
+                        self.fail_post_relay_request(
+                            pending,
+                            "Relay disconnected before acknowledging the mutation",
+                            false,
+                        );
+                    }
+                }
 
                 let _ = self
                     .event_tx
@@ -1695,8 +3396,8 @@ impl NetworkService {
         &mut self,
         event: request_response::Event<IdentityExchangeRequest, IdentityExchangeResponse>,
     ) {
-        if let request_response::Event::Message { peer, message, .. } = event {
-            match message {
+        match event {
+            request_response::Event::Message { peer, message, .. } => match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1714,7 +3415,57 @@ impl NetworkService {
                     self.handle_identity_response(peer, request_id, response)
                         .await;
                 }
+            },
+            request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            } => {
+                if let Some((contact_request_id, action)) =
+                    self.pending_identity_requests.remove(&request_id)
+                {
+                    if let Some(service) = &self.contacts_service {
+                        let message = format!("Contact request delivery failed: {error}");
+                        if action == "revoked" {
+                            let _ = service.retry_contact_revocation(
+                                &contact_request_id,
+                                &message,
+                                chrono::Utc::now().timestamp(),
+                            );
+                            let _ = self.swarm.disconnect_peer_id(peer);
+                        }
+                        // Acceptance is already a complete local transaction.
+                        // Transport failure is therefore an offline delivery
+                        // outcome, not permission to regress durable state.
+                        let failure_status = match action.as_str() {
+                            "revoked" => "revoked",
+                            "accepted" => "accepted",
+                            _ => "failed",
+                        };
+                        let _ = service.update_contact_request(
+                            &contact_request_id,
+                            failure_status,
+                            Some(&action),
+                            Some(&message),
+                            chrono::Utc::now().timestamp(),
+                        );
+                        if let Ok(Some(request)) = service.contact_request(&contact_request_id) {
+                            let _ = self
+                                .event_tx
+                                .send(NetworkEvent::ContactRequestChanged {
+                                    request_id: request.request_id,
+                                    peer_id: request.peer_id,
+                                    display_name: request.display_name,
+                                    direction: request.direction,
+                                    status: failure_status.into(),
+                                })
+                                .await;
+                        }
+                    }
+                }
             }
+            _ => {}
         }
     }
 
@@ -1723,8 +3474,8 @@ impl NetworkService {
         &mut self,
         event: request_response::Event<MessagingRequest, MessagingResponse>,
     ) {
-        if let request_response::Event::Message { peer, message, .. } = event {
-            match message {
+        match event {
+            request_response::Event::Message { peer, message, .. } => match message {
                 request_response::Message::Request {
                     request_id,
                     request,
@@ -1735,13 +3486,45 @@ impl NetworkService {
                         .await;
                 }
                 request_response::Message::Response {
-                    request_id: _,
-                    response: _,
+                    request_id,
+                    response,
                 } => {
                     debug!("Received message response from {}", peer);
-                    // Handle response (e.g., update message delivery status)
+                    if let Some(outcome) = self.pending_messaging_requests.complete_remote(
+                        &request_id,
+                        &peer,
+                        response,
+                    ) {
+                        self.apply_message_attempt_outcome(outcome);
+                    } else {
+                        debug!(
+                            "Received messaging response from {} without a pending request",
+                            peer
+                        );
+                    }
+                }
+            },
+            request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            } => {
+                warn!("Messaging outbound failure to {}: {}", peer, error);
+                if let Some(failure) = self.pending_messaging_requests.fail(
+                    &request_id,
+                    MessageDeliveryFailureKind::Network,
+                    error.to_string(),
+                ) {
+                    self.apply_message_attempt_outcome(MessageDeliveryAttemptOutcome::Failed(
+                        failure,
+                    ));
                 }
             }
+            request_response::Event::InboundFailure { peer, error, .. } => {
+                warn!("Messaging inbound failure from {}: {}", peer, error);
+            }
+            request_response::Event::ResponseSent { .. } => {}
         }
     }
 
@@ -1789,16 +3572,37 @@ impl NetworkService {
                         },
                     );
                 }
-                request_response::Message::Response { response, .. } => {
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
+                    self.resolve_post_relay_response(request_id, peer, &response);
                     self.handle_board_sync_response(peer, response).await;
                 }
             },
 
-            request_response::Event::OutboundFailure { peer, error, .. } => {
+            request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            } => {
+                if let Some(pending) = self.pending_post_relay_requests.remove(&request_id) {
+                    self.fail_post_relay_request(
+                        pending,
+                        &format!("Relay transport failed before acknowledgement: {error}"),
+                        false,
+                    );
+                }
                 // Clean up any pending community probe / registration state.
                 // This happens when the relay doesn't support the board sync protocol.
                 let was_probe = self.pending_community_probes.remove(&peer).is_some();
                 let was_registration = self.pending_board_registrations.remove(&peer);
+                if let Some(pending) = self.pending_name_registration.remove(&peer) {
+                    let _ = pending.response_tx.send(NetworkResponse::Error(format!(
+                        "Name registration failed while contacting the relay: {error}"
+                    )));
+                }
                 if was_probe || was_registration {
                     debug!(
                         "Relay {} does not support board sync protocol (outbound failure: {})",
@@ -1844,18 +3648,72 @@ impl NetworkService {
                         warn!("Failed to send media sync response: {:?}", e);
                     }
                 }
-                request_response::Message::Response { response, .. } => {
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
                     // Outbound: we received media bytes from a peer
-                    self.handle_media_fetch_response(peer, response).await;
+                    let pending = self.pending_media_fetches.remove(&request_id);
+                    if let Some(pending) = pending.as_ref() {
+                        self.pending_media_fetch_by_hash.remove(&pending.media_hash);
+                    }
+                    self.handle_media_chunk_response(peer, pending, response)
+                        .await;
                 }
             },
-            request_response::Event::OutboundFailure { peer, error, .. } => {
+            request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            } => {
                 warn!("Media fetch outbound failure to peer {}: {}", peer, error);
+                if let Some(pending) = self.pending_media_fetches.remove(&request_id) {
+                    self.pending_media_fetch_by_hash.remove(&pending.media_hash);
+                    self.transition_media(
+                        Some(&pending.profile_id),
+                        &pending.media_hash,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: None,
+                            total_bytes: None,
+                            error_code: Some("transport_timeout"),
+                            error_message: Some(
+                                "The attachment source did not respond. You can retry.",
+                            ),
+                            increment_attempt: false,
+                        },
+                    );
+                }
             }
             request_response::Event::InboundFailure { peer, error, .. } => {
                 warn!("Media fetch inbound failure from peer {}: {}", peer, error);
             }
             _ => {}
+        }
+    }
+
+    fn transition_media(
+        &self,
+        profile_id: Option<&str>,
+        hash: &str,
+        update: MediaTransferUpdate<'_>,
+    ) {
+        let Some(media_service) = self.media_service.as_ref() else {
+            return;
+        };
+        match media_service.update_transfer(hash, update) {
+            Ok(state) => {
+                let profile_id = profile_id
+                    .map(str::to_owned)
+                    .or_else(|| self.identity_service.get_peer_id().ok());
+                if let Some(profile_id) = profile_id {
+                    let _ = self
+                        .event_tx
+                        .try_send(NetworkEvent::MediaTransferChanged { profile_id, state });
+                }
+            }
+            Err(error) => warn!("Could not persist media lifecycle update: {error}"),
         }
     }
 
@@ -1944,7 +3802,7 @@ impl NetworkService {
         };
 
         match calling_service.process_incoming_signaling(&request) {
-            Ok(()) => {
+            Ok(crate::services::calling_service::IncomingSignalingOutcome::Applied) => {
                 let _ = self
                     .event_tx
                     .send(NetworkEvent::CallSignalingReceived {
@@ -1952,6 +3810,30 @@ impl NetworkService {
                         message: request.clone(),
                     })
                     .await;
+                SignalingResponse::accepted(request.call_id().to_string())
+            }
+            Ok(crate::services::calling_service::IncomingSignalingOutcome::Duplicate) => {
+                debug!(
+                    "Ignored duplicate signaling request {} from {}",
+                    request.call_id(),
+                    peer
+                );
+                // Offers and answers both carry SDP that the WebView cannot
+                // reconstruct from the persisted call session. Re-publish a
+                // verified replay so bounded sender retries can close a
+                // backend-to-frontend listener race without mutating state.
+                if matches!(
+                    &request.payload,
+                    SignalingPayload::Offer(_) | SignalingPayload::Answer(_)
+                ) {
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::CallSignalingReceived {
+                            peer_id: peer.to_string(),
+                            message: request.clone(),
+                        })
+                        .await;
+                }
                 SignalingResponse::accepted(request.call_id().to_string())
             }
             Err(error) => {
@@ -2000,32 +3882,55 @@ impl NetworkService {
     ) -> super::protocols::media_sync::MediaFetchResponse {
         use super::protocols::media_sync::MediaFetchResponse;
 
-        // Verify requester is in contacts
-        if let Some(ref contacts_service) = self.contacts_service {
-            match contacts_service.is_contact(&request.requester_peer_id) {
-                Ok(true) => {}
-                Ok(false) => {
-                    info!(
-                        "Media fetch denied: {} is not a contact",
-                        request.requester_peer_id
-                    );
-                    return MediaFetchResponse::Error {
-                        error: "Not a contact".to_string(),
-                    };
-                }
-                Err(e) => {
-                    warn!("Error checking contact status: {}", e);
-                    return MediaFetchResponse::Error {
-                        error: "Internal error".to_string(),
-                    };
-                }
-            }
-        }
-
         // Verify the requester_peer_id matches the actual peer
         if request.requester_peer_id != peer.to_string() {
             return MediaFetchResponse::Error {
                 error: "peer_id mismatch".to_string(),
+            };
+        }
+
+        let Some(contacts_service) = self.contacts_service.as_ref() else {
+            return MediaFetchResponse::Error {
+                error: "Authorization unavailable".to_string(),
+            };
+        };
+        if !contacts_service
+            .is_contact(&request.requester_peer_id)
+            .unwrap_or(false)
+            || contacts_service
+                .is_blocked(&request.requester_peer_id)
+                .unwrap_or(true)
+        {
+            info!("Media fetch denied for an unknown or blocked requester");
+            return MediaFetchResponse::Error {
+                error: "Not authorized".to_string(),
+            };
+        }
+        if (chrono::Utc::now().timestamp() - request.timestamp).abs() > 300 {
+            return MediaFetchResponse::Error {
+                error: "Request expired".to_string(),
+            };
+        }
+        let verified = contacts_service
+            .get_public_key(&request.requester_peer_id)
+            .ok()
+            .flatten()
+            .and_then(|key| <[u8; 32]>::try_from(key.as_slice()).ok())
+            .and_then(|key| ed25519_dalek::VerifyingKey::from_bytes(&key).ok())
+            .and_then(|key| {
+                let signable = crate::services::SignableMediaFetchRequest {
+                    media_hash: request.media_hash.clone(),
+                    offset: request.offset,
+                    max_bytes: request.max_bytes,
+                    requester_peer_id: request.requester_peer_id.clone(),
+                    timestamp: request.timestamp,
+                };
+                crate::services::verify(&key, &signable, &request.signature).ok()
+            })
+            .unwrap_or(false);
+        if !verified {
+            return MediaFetchResponse::Error {
+                error: "Not authorized".to_string(),
             };
         }
 
@@ -2045,45 +3950,23 @@ impl NetworkService {
             };
         }
 
-        match media_service.get_media(&request.media_hash) {
-            Ok(data) => {
-                // Determine mime type from stored file
-                let mime_type = media_service
-                    .get_media_path(&request.media_hash)
-                    .ok()
-                    .and_then(|p| {
-                        p.extension().and_then(|e| e.to_str()).map(|ext| match ext {
-                            "jpg" | "jpeg" => "image/jpeg",
-                            "png" => "image/png",
-                            "gif" => "image/gif",
-                            "webp" => "image/webp",
-                            "mp4" => "video/mp4",
-                            "webm" => "video/webm",
-                            "mov" => "video/quicktime",
-                            "avi" => "video/x-msvideo",
-                            "mkv" => "video/x-matroska",
-                            "mp3" => "audio/mpeg",
-                            "m4a" => "audio/mp4",
-                            "wav" => "audio/wav",
-                            "ogg" => "audio/ogg",
-                            _ => "application/octet-stream",
-                        })
-                    })
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-
-                info!(
-                    "Serving media {} ({} bytes, {}) to peer {}",
-                    request.media_hash,
-                    data.len(),
-                    mime_type,
+        match media_service.get_media_range(&request.media_hash, request.offset, request.max_bytes)
+        {
+            Ok(range) => {
+                debug!(
+                    "Serving bounded media range {}+{} of {} to {}",
+                    range.offset,
+                    range.data.len(),
+                    range.total_bytes,
                     peer
                 );
-
-                MediaFetchResponse::MediaData {
+                MediaFetchResponse::MediaChunk {
                     media_hash: request.media_hash.clone(),
-                    mime_type,
-                    data,
+                    mime_type: range.mime_type,
+                    offset: range.offset,
+                    total_bytes: range.total_bytes,
+                    data: range.data,
+                    eof: range.eof,
                 }
             }
             Err(e) => MediaFetchResponse::Error {
@@ -2092,120 +3975,254 @@ impl NetworkService {
         }
     }
 
-    /// Handle an outbound media fetch response (store received media)
-    async fn handle_media_fetch_response(
+    fn queue_media_range(
+        &mut self,
+        peer_id: PeerId,
+        media_hash: String,
+        profile_id: String,
+        offset: u64,
+        increment_attempt: bool,
+    ) -> std::result::Result<(), String> {
+        use super::protocols::media_sync::MediaFetchRequest;
+        if self.pending_media_fetch_by_hash.contains_key(&media_hash) {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().timestamp();
+        let signable = crate::services::SignableMediaFetchRequest {
+            media_hash: media_hash.clone(),
+            offset,
+            max_bytes: crate::services::media_service::DEFAULT_CHUNK_SIZE,
+            requester_peer_id: profile_id.clone(),
+            timestamp: now,
+        };
+        let signature = self
+            .identity_service
+            .sign(&signable)
+            .map_err(|error| error.to_string())?;
+        let request = MediaFetchRequest {
+            media_hash: media_hash.clone(),
+            offset,
+            max_bytes: crate::services::media_service::DEFAULT_CHUNK_SIZE,
+            requester_peer_id: profile_id.clone(),
+            timestamp: now,
+            signature,
+        };
+        self.transition_media(
+            Some(&profile_id),
+            &media_hash,
+            MediaTransferUpdate {
+                status: "transferring",
+                bytes_received: Some(offset),
+                total_bytes: None,
+                error_code: None,
+                error_message: None,
+                increment_attempt,
+            },
+        );
+        let request_id = self
+            .swarm
+            .behaviour_mut()
+            .media_sync
+            .send_request(&peer_id, request);
+        self.pending_media_fetch_by_hash
+            .insert(media_hash.clone(), request_id);
+        self.pending_media_fetches.insert(
+            request_id,
+            PendingMediaFetch {
+                peer_id,
+                media_hash,
+                profile_id,
+                offset,
+            },
+        );
+        Ok(())
+    }
+
+    async fn handle_media_chunk_response(
         &mut self,
         peer: PeerId,
+        pending: Option<PendingMediaFetch>,
         response: super::protocols::media_sync::MediaFetchResponse,
     ) {
         use super::protocols::media_sync::MediaFetchResponse;
-        use sha2::{Digest, Sha256};
-
+        let Some(pending) = pending else {
+            warn!("Ignoring uncorrelated media response from {peer}");
+            return;
+        };
         match response {
-            MediaFetchResponse::MediaData {
+            MediaFetchResponse::MediaChunk {
                 media_hash,
                 mime_type,
+                offset,
+                total_bytes,
                 data,
+                eof,
             } => {
-                // Verify hash matches actual SHA256 of received bytes
-                let mut hasher = Sha256::new();
-                hasher.update(&data);
-                let actual_hash = hex::encode(hasher.finalize());
-
-                if actual_hash != media_hash {
-                    warn!(
-                        "Media hash mismatch from {}: expected {} got {}",
-                        peer, media_hash, actual_hash
+                if pending.peer_id != peer
+                    || pending.media_hash != media_hash
+                    || pending.offset != offset
+                    || data.len() > crate::services::media_service::DEFAULT_CHUNK_SIZE as usize
+                    || eof != (offset.saturating_add(data.len() as u64) == total_bytes)
+                {
+                    self.transition_media(
+                        Some(&pending.profile_id),
+                        &pending.media_hash,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: Some(pending.offset),
+                            total_bytes: None,
+                            error_code: Some("response_mismatch"),
+                            error_message: Some("The attachment response could not be verified."),
+                            increment_attempt: false,
+                        },
                     );
                     return;
                 }
-
-                // Store via MediaStorageService
-                if let Some(ref media_service) = self.media_service {
-                    match media_service.store_media(&data, &mime_type) {
-                        Ok(hash) => {
-                            info!(
-                                "Stored media {} ({} bytes) from peer {}",
-                                hash,
-                                data.len(),
-                                peer
-                            );
-
-                            // Emit event to frontend
-                            Self::emit_wall_sync_status(
-                                self.event_tx.clone(),
-                                "media",
-                                "success",
-                                "media_fetched",
-                                None,
-                                Some(peer.to_string()),
-                                None,
-                                Some(media_hash.clone()),
-                                None,
-                                None,
-                                None,
-                            )
-                            .await;
-                            let _ = self
-                                .event_tx
-                                .send(NetworkEvent::MediaFetched {
-                                    peer_id: peer.to_string(),
-                                    media_hash,
-                                })
-                                .await;
+                let authorized = self
+                    .contacts_service
+                    .as_ref()
+                    .and_then(|service| service.get_contact(&peer.to_string()).ok().flatten())
+                    .is_some_and(|contact| !contact.is_blocked);
+                if !authorized {
+                    self.transition_media(
+                        Some(&pending.profile_id),
+                        &media_hash,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: Some(offset),
+                            total_bytes: Some(total_bytes),
+                            error_code: Some("authorization_revoked"),
+                            error_message: Some(
+                                "The attachment source is no longer an active contact.",
+                            ),
+                            increment_attempt: false,
+                        },
+                    );
+                    return;
+                }
+                let Some(service) = self.media_service.clone() else {
+                    self.transition_media(
+                        Some(&pending.profile_id),
+                        &media_hash,
+                        MediaTransferUpdate {
+                            status: "failed",
+                            bytes_received: Some(offset),
+                            total_bytes: Some(total_bytes),
+                            error_code: Some("service_unavailable"),
+                            error_message: Some(
+                                "Media storage is unavailable. Restart Harbor and retry.",
+                            ),
+                            increment_attempt: false,
+                        },
+                    );
+                    return;
+                };
+                match service.store_received_range(
+                    &media_hash,
+                    &mime_type,
+                    offset,
+                    total_bytes,
+                    &data,
+                ) {
+                    Ok(true) => {
+                        if let Some(contacts) = self.contacts_service.as_ref() {
+                            let old = contacts
+                                .get_contact(&peer.to_string())
+                                .ok()
+                                .flatten()
+                                .and_then(|contact| contact.avatar_hash);
+                            match contacts
+                                .promote_verified_profile_avatar(&peer.to_string(), &media_hash)
+                            {
+                                Ok(true) => {
+                                    if let Some(old) = old.filter(|old| old != &media_hash) {
+                                        let _ = service.delete_media_if_orphaned(&old);
+                                    }
+                                }
+                                Ok(false) => {}
+                                Err(error) => {
+                                    warn!("Could not promote verified profile avatar: {error}")
+                                }
+                            }
                         }
-                        Err(e) => {
-                            warn!("Failed to store media from {}: {}", peer, e);
-                            Self::emit_wall_sync_status(
-                                self.event_tx.clone(),
-                                "media",
-                                "partial_failure",
-                                "media_failed",
-                                None,
-                                Some(peer.to_string()),
-                                None,
-                                Some(media_hash.clone()),
-                                None,
-                                None,
-                                Some(e.to_string()),
-                            )
+                        let _ = self
+                            .event_tx
+                            .send(NetworkEvent::MediaFetched {
+                                peer_id: peer.to_string(),
+                                media_hash: media_hash.clone(),
+                            })
                             .await;
+                        if let Err(error) = service.enforce_cache_policy() {
+                            warn!("Failed to enforce media cache policy after transfer: {error}");
                         }
                     }
-                } else {
-                    warn!("Media service unavailable, cannot store received media");
-                    Self::emit_wall_sync_status(
-                        self.event_tx.clone(),
-                        "media",
-                        "partial_failure",
-                        "media_failed",
-                        None,
-                        Some(peer.to_string()),
-                        None,
-                        Some(media_hash),
-                        None,
-                        None,
-                        Some("Media service unavailable".to_string()),
-                    )
-                    .await;
+                    Ok(false) => {
+                        let next = offset + data.len() as u64;
+                        if let Err(error) = self.queue_media_range(
+                            peer,
+                            media_hash.clone(),
+                            pending.profile_id.clone(),
+                            next,
+                            false,
+                        ) {
+                            warn!("Failed to request next media range: {error}");
+                            self.transition_media(
+                                Some(&pending.profile_id),
+                                &media_hash,
+                                MediaTransferUpdate {
+                                    status: "failed",
+                                    bytes_received: Some(next),
+                                    total_bytes: Some(total_bytes),
+                                    error_code: Some("start_failed"),
+                                    error_message: Some(
+                                        "The next attachment range could not be requested.",
+                                    ),
+                                    increment_attempt: false,
+                                },
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        warn!("Failed to persist media range from {peer}: {error}");
+                        self.transition_media(
+                            Some(&pending.profile_id),
+                            &media_hash,
+                            MediaTransferUpdate {
+                                status: "failed",
+                                bytes_received: Some(offset),
+                                total_bytes: Some(total_bytes),
+                                error_code: Some("storage_failed"),
+                                error_message: Some(
+                                    "Harbor could not save this attachment. You can retry.",
+                                ),
+                                increment_attempt: false,
+                            },
+                        );
+                    }
                 }
             }
             MediaFetchResponse::Error { error } => {
-                warn!("Media fetch error from {}: {}", peer, error);
-                Self::emit_wall_sync_status(
-                    self.event_tx.clone(),
-                    "media",
-                    "partial_failure",
-                    "media_failed",
-                    None,
-                    Some(peer.to_string()),
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(error),
-                )
-                .await;
+                let unavailable = error.to_ascii_lowercase().contains("not found");
+                self.transition_media(
+                    Some(&pending.profile_id),
+                    &pending.media_hash,
+                    MediaTransferUpdate {
+                        status: if unavailable { "unavailable" } else { "failed" },
+                        bytes_received: Some(pending.offset),
+                        total_bytes: None,
+                        error_code: Some(if unavailable {
+                            "source_missing"
+                        } else {
+                            "remote_error"
+                        }),
+                        error_message: Some(if unavailable {
+                            "The source does not currently have this attachment."
+                        } else {
+                            "The source could not provide this attachment. You can retry."
+                        }),
+                        increment_attempt: false,
+                    },
+                );
             }
         }
     }
@@ -2562,6 +4579,98 @@ impl NetworkService {
             .await;
     }
 
+    fn resolve_post_relay_response(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        peer: PeerId,
+        response: &WireBoardSyncResponse,
+    ) {
+        let Some(pending) = self.pending_post_relay_requests.remove(&request_id) else {
+            return;
+        };
+        if pending.relay_peer_id != peer {
+            self.fail_post_relay_request(
+                pending,
+                "Relay response came from a different transport peer",
+                true,
+            );
+            return;
+        }
+        let matches = match response {
+            WireBoardSyncResponse::WallPostStored { post_id } => {
+                pending.mutation_type != "delete" && post_id == &pending.post_id
+            }
+            WireBoardSyncResponse::WallPostDeleted { post_id } => {
+                pending.mutation_type == "delete" && post_id == &pending.post_id
+            }
+            WireBoardSyncResponse::Error { error } => {
+                let conflict = post_relay_error_is_conflict(error);
+                self.fail_post_relay_request(pending, error, conflict);
+                return;
+            }
+            _ => false,
+        };
+        if !matches {
+            self.fail_post_relay_request(
+                pending,
+                "Relay returned a response that did not match the persisted mutation",
+                false,
+            );
+            return;
+        }
+        let Some(posts_service) = self.posts_service.as_ref() else {
+            return;
+        };
+        match posts_service.acknowledge_relay_outbox(
+            &pending.event_id,
+            &peer.to_string(),
+            Utc::now().timestamp(),
+        ) {
+            Ok(true) => {
+                let status = posts_service
+                    .get_post(&pending.post_id)
+                    .ok()
+                    .flatten()
+                    .map(|post| post.relay_status)
+                    .unwrap_or_else(|| "relay_acknowledged".to_string());
+                let _ = self
+                    .event_tx
+                    .try_send(NetworkEvent::PostRelayStatusChanged {
+                        post_id: pending.post_id,
+                        event_id: pending.event_id,
+                        status,
+                        error: None,
+                    });
+            }
+            Ok(false) => debug!("Ignored duplicate post relay acknowledgement"),
+            Err(error) => warn!("Could not persist post relay acknowledgement: {error}"),
+        }
+    }
+
+    fn fail_pending_relay_auth(&mut self, peer: PeerId, error: &str) {
+        if let Some(pending) = self.pending_introduction_submit.remove(&peer) {
+            pending.pow_cancel.store(true, Ordering::Relaxed);
+            let _ = pending
+                .response_tx
+                .send(NetworkResponse::Error(error.to_string()));
+        }
+        if let Some(pending) = self.pending_delivery_resolution.remove(&peer) {
+            let _ = pending
+                .response_tx
+                .send(NetworkResponse::Error(error.to_string()));
+        }
+        if let Some(pending) = self.pending_introduction_fetch.remove(&peer) {
+            let _ = pending
+                .response_tx
+                .send(NetworkResponse::Error(error.to_string()));
+        }
+        if let Some(pending) = self.pending_name_registration.remove(&peer) {
+            let _ = pending
+                .response_tx
+                .send(NetworkResponse::Error(error.to_string()));
+        }
+    }
+
     async fn handle_board_sync_response(&mut self, peer: PeerId, response: WireBoardSyncResponse) {
         let Some(ref board_service) = self.board_service else {
             return;
@@ -2570,13 +4679,40 @@ impl NetworkService {
 
         match response {
             WireBoardSyncResponse::RelayAuthChallenge { challenge } => {
+                let expected_audience = if self.pending_introduction_submit.contains_key(&peer)
+                    || self.pending_delivery_resolution.contains_key(&peer)
+                {
+                    "introduce"
+                } else if self.pending_introduction_fetch.contains_key(&peer) {
+                    "introductions:read"
+                } else if self.pending_name_registration.contains_key(&peer) {
+                    "name:register"
+                } else {
+                    return;
+                };
+                let local_peer_id = self.identity_service.get_peer_id().unwrap_or_default();
+                if let Err(error) = validate_relay_auth_challenge(
+                    peer,
+                    &local_peer_id,
+                    expected_audience,
+                    &challenge,
+                    Utc::now().timestamp(),
+                ) {
+                    self.fail_pending_relay_auth(peer, error);
+                    return;
+                }
                 if let Some(pending) = self.pending_name_registration.get_mut(&peer) {
                     pending.relay_public_key = challenge.relay_public_key.clone();
-                } else if !self.pending_introduction_submit.contains_key(&peer)
-                    && !self.pending_introduction_fetch.contains_key(&peer)
-                    && !self.pending_delivery_resolution.contains_key(&peer)
-                {
-                    return;
+                }
+                if let Some(pending) = self.pending_introduction_submit.get_mut(&peer) {
+                    pending.relay_name = Some(challenge.relay.clone());
+                    pending.relay_key_id = Some(challenge.key_id.clone());
+                    pending.relay_public_key = challenge.relay_public_key.clone();
+                }
+                if let Some(pending) = self.pending_delivery_resolution.get_mut(&peer) {
+                    pending.relay_name = Some(challenge.relay.clone());
+                    pending.relay_key_id = Some(challenge.key_id.clone());
+                    pending.relay_public_key = challenge.relay_public_key.clone();
                 }
                 let mut unsigned = challenge.clone();
                 unsigned.relay_signature.clear();
@@ -2627,12 +4763,12 @@ impl NetworkService {
                     );
                     return;
                 }
-                if let Some((target, _)) = self.pending_delivery_resolution.get(&peer) {
+                if let Some(pending) = self.pending_delivery_resolution.get(&peer) {
                     self.swarm.behaviour_mut().board_sync.send_request(
                         &peer,
                         WireBoardSyncRequest::RequestIntroductionWork {
                             session_token: token,
-                            target: target.clone(),
+                            target: pending.target.clone(),
                         },
                     );
                     return;
@@ -2685,43 +4821,85 @@ impl NetworkService {
                 }
             }
             WireBoardSyncResponse::IntroductionWork { challenge } => {
-                if let Some((target, tx)) = self.pending_delivery_resolution.remove(&peer) {
-                    let _ = tx.send(NetworkResponse::DeliveryKey {
-                        target,
-                        key: challenge.delivery_key,
-                        expires_at: challenge.expires_at,
-                    });
+                let local_peer_id = self.identity_service.get_peer_id().unwrap_or_default();
+                if self.pending_delivery_resolution.contains_key(&peer) {
+                    let validation = self
+                        .pending_delivery_resolution
+                        .get(&peer)
+                        .ok_or("INTRODUCTION_WORK_INVALID")
+                        .and_then(|pending| {
+                            validate_work_challenge(
+                                peer,
+                                &local_peer_id,
+                                &pending.target,
+                                pending.relay_name.as_deref().unwrap_or_default(),
+                                pending.relay_key_id.as_deref().unwrap_or_default(),
+                                &pending.relay_public_key,
+                                &challenge,
+                                Utc::now().timestamp(),
+                            )
+                        });
+                    let pending = self
+                        .pending_delivery_resolution
+                        .remove(&peer)
+                        .expect("pending delivery resolution checked above");
+                    let response = match validation {
+                        Ok(()) => NetworkResponse::DeliveryKey {
+                            target: pending.target,
+                            key: challenge.delivery_key,
+                            expires_at: challenge.expires_at,
+                        },
+                        Err(error) => NetworkResponse::Error(error.to_string()),
+                    };
+                    let _ = pending.response_tx.send(response);
                     return;
                 }
-                let Some(_p) = self.pending_introduction_submit.get(&peer) else {
+                let Some(pending) = self.pending_introduction_submit.get_mut(&peer) else {
                     return;
                 };
-                let c = challenge.clone();
-                let nonce = tokio::task::spawn_blocking(move || solve_work(&c))
-                    .await
-                    .unwrap_or(0);
-                let Some(p) = self.pending_introduction_submit.get(&peer) else {
-                    return;
-                };
-                let envelope = super::protocols::board_sync::IntroductionEnvelope {
-                    version: 1,
-                    request_id: p.request_id.clone(),
-                    target: p.target.clone(),
-                    requester_peer_id: self.identity_service.get_peer_id().unwrap_or_default(),
-                    requester_ephemeral_x25519_key: p.ephemeral_public_key.clone(),
-                    message_ciphertext: p.ciphertext.clone(),
-                    issued_at: Utc::now().timestamp(),
-                    expires_at: p.expires_at,
-                    work_challenge: challenge,
-                    work_nonce: nonce,
-                };
-                self.swarm.behaviour_mut().board_sync.send_request(
-                    &peer,
-                    WireBoardSyncRequest::SubmitIntroduction {
-                        session_token: p.session_token.clone().unwrap_or_default(),
-                        envelope,
-                    },
+                let validation = validate_work_challenge(
+                    peer,
+                    &local_peer_id,
+                    &pending.target,
+                    pending.relay_name.as_deref().unwrap_or_default(),
+                    pending.relay_key_id.as_deref().unwrap_or_default(),
+                    &pending.relay_public_key,
+                    &challenge,
+                    Utc::now().timestamp(),
                 );
+                if let Err(error) = validation {
+                    let pending = self
+                        .pending_introduction_submit
+                        .remove(&peer)
+                        .expect("pending introduction checked above");
+                    pending.pow_cancel.store(true, Ordering::Relaxed);
+                    let _ = pending
+                        .response_tx
+                        .send(NetworkResponse::Error(error.to_string()));
+                    return;
+                }
+                if pending.pow_challenge_id.is_some() {
+                    return;
+                }
+                pending.pow_challenge_id = Some(challenge.id.clone());
+                let cancelled = pending.pow_cancel.clone();
+                let completion_tx = self.pow_result_tx.clone();
+                let solve_challenge = challenge.clone();
+                let remaining = (challenge.expires_at - Utc::now().timestamp()).max(0) as u64;
+                let deadline =
+                    Instant::now() + POW_MAX_DURATION.min(Duration::from_secs(remaining));
+                tokio::spawn(async move {
+                    let result = spawn_work_solver(solve_challenge, cancelled, deadline)
+                        .await
+                        .unwrap_or(Err(WorkSolveError::Cancelled));
+                    let _ = completion_tx
+                        .send(PowCompletion {
+                            peer,
+                            challenge,
+                            result,
+                        })
+                        .await;
+                });
             }
             WireBoardSyncResponse::IntroductionAccepted {
                 request_id,
@@ -3271,6 +5449,14 @@ impl NetworkService {
                 debug!("Received {} wall social events from relay {}", count, peer);
             }
             WireBoardSyncResponse::Error { error } => {
+                if self.pending_introduction_submit.contains_key(&peer)
+                    || self.pending_introduction_fetch.contains_key(&peer)
+                    || self.pending_delivery_resolution.contains_key(&peer)
+                    || self.pending_name_registration.contains_key(&peer)
+                {
+                    self.fail_pending_relay_auth(peer, &error);
+                    return;
+                }
                 // If this was a community probe that failed (either RegisterPeer or
                 // ListBoards), just clean up silently. Non-community relays will return
                 // an error and that's expected.
@@ -3316,89 +5502,298 @@ impl NetworkService {
 
     async fn handle_identity_request(
         &mut self,
-        _peer: PeerId,
+        peer: PeerId,
         _request_id: request_response::InboundRequestId,
-        _request: IdentityExchangeRequest,
+        request: IdentityExchangeRequest,
         channel: ResponseChannel<IdentityExchangeResponse>,
     ) {
-        // Get our libp2p peer ID (this is what other peers see us as)
-        let local_peer_id = *self.swarm.local_peer_id();
+        let now = chrono::Utc::now().timestamp();
+        if !verify_identity_request(peer, &request, now) {
+            warn!("Rejected invalid signed contact request from {peer}");
+            return;
+        }
+        let Some(service) = self.contacts_service.clone() else {
+            return;
+        };
 
-        // Get our identity info to respond with
-        match self.identity_service.get_identity_info() {
-            Ok(Some(info)) => {
-                // Sign the response using the libp2p peer ID
-                let timestamp = chrono::Utc::now().timestamp();
-                let signature = match self.identity_service.sign_raw(
-                    format!("{}:{}:{}", local_peer_id, info.display_name, timestamp).as_bytes(),
+        let mut committed_response_grants = None;
+        let status = match request.action.as_str() {
+            "request" => {
+                if let Err(error) = service.record_contact_request(
+                    &request.request_id,
+                    &request.requester_peer_id,
+                    "incoming",
+                    Some(&request.display_name),
+                    Some(&request.public_key),
+                    Some(&request.x25519_public),
+                    request.avatar_hash.as_deref(),
+                    request.bio.as_deref(),
+                    "review",
+                    None,
+                    None,
+                    request.timestamp,
                 ) {
-                    Ok(sig) => sig,
-                    Err(e) => {
-                        warn!("Failed to sign identity response: {}", e);
+                    warn!("Failed to persist incoming contact request from {peer}: {error}");
+                    return;
+                }
+                "review"
+            }
+            "accepted" => {
+                let correlated_acceptance = service
+                    .get_contact(&request.requester_peer_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|contact| !contact.is_blocked)
+                    || service
+                        .contact_request_for_peer(&request.requester_peer_id, "outgoing")
+                        .ok()
+                        .flatten()
+                        .is_some_and(|existing| {
+                            existing.request_id == request.request_id
+                                && matches!(
+                                    existing.status.as_str(),
+                                    "pending" | "review" | "failed"
+                                )
+                        });
+                if !correlated_acceptance {
+                    warn!("Rejected uncorrelated contact acceptance from {peer}");
+                    return;
+                }
+                if let Err(error) = self.validate_contact_acceptance_grants(
+                    &request.requester_peer_id,
+                    &request.public_key,
+                    &request.permission_grants,
+                ) {
+                    warn!("Rejected contact acceptance grants from {peer}: {error}");
+                    return;
+                }
+                let Some(permissions) = self.permissions_service.as_ref() else {
+                    warn!("Permissions service unavailable during contact acceptance");
+                    return;
+                };
+                let outgoing_grants = match permissions.prepare_permission_grants(
+                    &request.requester_peer_id,
+                    &[Capability::Chat, Capability::WallRead, Capability::Call],
+                ) {
+                    Ok(grants) => grants,
+                    Err(error) => {
+                        warn!("Could not prepare reciprocal contact grants for {peer}: {error}");
                         return;
                     }
                 };
-
-                // Decode base64 public keys to bytes for the network protocol
-                let engine = base64::engine::general_purpose::STANDARD;
-                let public_key = match engine.decode(&info.public_key) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        warn!("Failed to decode public key: {}", e);
-                        return;
+                let mut all_grants = request.permission_grants.clone();
+                all_grants.extend(outgoing_grants.iter().cloned());
+                let contact = crate::db::ContactData {
+                    peer_id: request.requester_peer_id.clone(),
+                    public_key: request.public_key.clone(),
+                    x25519_public: request.x25519_public.clone(),
+                    display_name: request.display_name.clone(),
+                    avatar_hash: None,
+                    bio: request.bio.clone(),
+                };
+                let commit = service.accept_contact_request_atomically(
+                    &request.request_id,
+                    "outgoing",
+                    &contact,
+                    &all_grants,
+                    now,
+                );
+                if let Err(error) = commit {
+                    warn!("Failed atomic contact acceptance from {peer}: {error}");
+                    return;
+                }
+                if request.profile_revision > 0 {
+                    if let Err(error) = self.stage_signed_contact_profile(
+                        peer,
+                        &request.requester_peer_id,
+                        request.profile_revision,
+                        &request.display_name,
+                        request.avatar_hash.as_deref(),
+                        request.avatar_mime_type.as_deref(),
+                        request.bio.as_deref(),
+                    ) {
+                        warn!("Could not stage accepted contact profile from {peer}: {error}");
                     }
-                };
-                let x25519_public = match engine.decode(&info.x25519_public) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        warn!("Failed to decode x25519 public key: {}", e);
-                        return;
+                }
+                committed_response_grants = Some(outgoing_grants);
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::ContactAdded {
+                        peer_id: request.requester_peer_id.clone(),
+                        display_name: request.display_name.clone(),
+                    })
+                    .await;
+                "accepted"
+            }
+            "declined" => {
+                if let Ok(Some(existing)) =
+                    service.contact_request_for_peer(&request.requester_peer_id, "outgoing")
+                {
+                    if existing.request_id == request.request_id {
+                        let _ = service.update_contact_request(
+                            &existing.request_id,
+                            "declined",
+                            None,
+                            None,
+                            now,
+                        );
                     }
+                }
+                "declined"
+            }
+            "revoked" => {
+                let Some(permissions) = self.permissions_service.as_ref() else {
+                    return;
                 };
+                // The already-verified identity envelope binds this key to the
+                // transport peer. Do not depend on the contact row here: a
+                // duplicate delivery after a lost acknowledgement arrives
+                // after that row has intentionally been removed.
+                if request.permission_revocations.iter().any(|revoke| {
+                    permissions
+                        .validate_incoming_revoke(revoke, &request.public_key)
+                        .is_err()
+                }) {
+                    warn!("Rejected invalid signed contact revocation from {peer}");
+                    return;
+                }
+                if let Err(error) = service.apply_incoming_contact_revocation_atomically(
+                    &request.requester_peer_id,
+                    &request.permission_revocations,
+                    now,
+                ) {
+                    warn!("Failed atomic incoming contact revocation from {peer}: {error}");
+                    return;
+                }
+                "revoked"
+            }
+            "profile" => {
+                if let Err(error) = self.stage_signed_contact_profile(
+                    peer,
+                    &request.requester_peer_id,
+                    request.profile_revision,
+                    &request.display_name,
+                    request.avatar_hash.as_deref(),
+                    request.avatar_mime_type.as_deref(),
+                    request.bio.as_deref(),
+                ) {
+                    warn!("Rejected profile revision from {peer}: {error}");
+                    return;
+                }
+                "profile_updated"
+            }
+            _ => return,
+        };
 
-                let response = IdentityExchangeResponse {
-                    // Use the libp2p peer ID, not the stored Harbor peer_id
-                    peer_id: local_peer_id.to_string(),
-                    public_key,
-                    x25519_public,
-                    display_name: info.display_name,
-                    avatar_hash: info.avatar_hash,
-                    bio: info.bio,
-                    timestamp,
-                    signature,
-                };
+        if let Ok(Some(stored)) = service.contact_request_for_peer(
+            &request.requester_peer_id,
+            if request.action == "request" {
+                "incoming"
+            } else {
+                "outgoing"
+            },
+        ) {
+            let _ = self
+                .event_tx
+                .send(NetworkEvent::ContactRequestChanged {
+                    request_id: stored.request_id,
+                    peer_id: stored.peer_id,
+                    display_name: stored.display_name,
+                    direction: stored.direction,
+                    status: stored.status,
+                })
+                .await;
+        }
 
-                if let Err(e) = self
+        match self.create_identity_response(
+            request.request_id,
+            status.into(),
+            &request.requester_peer_id,
+            committed_response_grants,
+        ) {
+            Ok(response) => {
+                if let Err(error) = self
                     .swarm
                     .behaviour_mut()
                     .identity_exchange
                     .send_response(channel, response)
                 {
-                    warn!("Failed to send identity response: {:?}", e);
+                    warn!("Failed to send contact-request response: {error:?}");
                 }
             }
-            Ok(None) => {
-                warn!("No identity configured, cannot respond to identity request");
-            }
-            Err(e) => {
-                warn!("Failed to get identity info: {}", e);
-            }
+            Err(error) => warn!("Failed to create contact-request response: {error}"),
+        }
+        if status == "revoked" {
+            let _ = self.swarm.disconnect_peer_id(peer);
         }
     }
 
     async fn handle_identity_response(
         &mut self,
         peer: PeerId,
-        _request_id: request_response::OutboundRequestId,
+        outbound_id: request_response::OutboundRequestId,
         response: IdentityExchangeResponse,
     ) {
+        let Some((request_id, action)) = self.pending_identity_requests.remove(&outbound_id) else {
+            warn!("Ignoring uncorrelated identity response from {peer}");
+            return;
+        };
+        if response.request_id != request_id {
+            if action == "revoked" {
+                if let Some(service) = &self.contacts_service {
+                    let _ = service.retry_contact_revocation(
+                        &request_id,
+                        "revocation acknowledgement request ID mismatch",
+                        chrono::Utc::now().timestamp(),
+                    );
+                }
+            }
+            warn!("Ignoring identity response with mismatched request ID from {peer}");
+            return;
+        }
+        let response_now = chrono::Utc::now().timestamp();
+        if !verify_identity_response(peer, &response, response_now) {
+            if action == "revoked" {
+                if let Some(service) = &self.contacts_service {
+                    let _ = service.retry_contact_revocation(
+                        &request_id,
+                        "invalid or forged revocation acknowledgement",
+                        response_now,
+                    );
+                }
+                let _ = self.swarm.disconnect_peer_id(peer);
+            }
+            warn!("Ignoring invalid signed identity response from {peer}");
+            return;
+        }
+        if action == "revoked" && response.status != "revoked" {
+            if let Some(service) = &self.contacts_service {
+                let _ = service.retry_contact_revocation(
+                    &request_id,
+                    "peer did not acknowledge revocation",
+                    response_now,
+                );
+            }
+            let _ = self.swarm.disconnect_peer_id(peer);
+            return;
+        }
         info!(
             "Got identity from {}: {} ({})",
             peer, response.display_name, response.peer_id
         );
 
         // Store in contacts database if we have the contacts service
-        if let Some(ref contacts_service) = self.contacts_service {
+        if let Some(contacts_service) = self.contacts_service.clone() {
+            let now = chrono::Utc::now().timestamp();
+            if !matches!(
+                response.status.as_str(),
+                "review" | "accepted" | "declined" | "revoked" | "failed" | "profile_updated"
+            ) || response.timestamp > now + 30
+                || now - response.timestamp > 300
+            {
+                warn!("Rejected stale or invalid contact-request response from {peer}");
+                return;
+            }
             // Verify the response peer ID matches the peer we received from
             if response.peer_id != peer.to_string() {
                 warn!(
@@ -3459,16 +5854,9 @@ impl NetworkService {
                 return;
             }
 
-            // Step 3: Verify the Ed25519 signature on the identity response.
-            // The sender signs the string "{peer_id}:{display_name}:{timestamp}"
-            // using their Ed25519 signing key. We reconstruct that payload and
-            // verify against the public key included in the response.
+            // Step 3: Verify the entire identity response, including its status
+            // and any capability grants, against the bound Ed25519 public key.
             let signature_is_valid = {
-                let signed_payload = format!(
-                    "{}:{}:{}",
-                    response.peer_id, response.display_name, response.timestamp
-                );
-
                 let signature = match ed25519_dalek::Signature::from_slice(&response.signature) {
                     Ok(sig) => sig,
                     Err(error) => {
@@ -3482,7 +5870,16 @@ impl NetworkService {
 
                 use ed25519_dalek::Verifier;
                 verifying_key
-                    .verify(signed_payload.as_bytes(), &signature)
+                    .verify(
+                        &match identity_response_signing_bytes(&response) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                warn!("Could not encode identity response from {peer}: {error}");
+                                return;
+                            }
+                        },
+                        &signature,
+                    )
                     .is_ok()
             };
 
@@ -3494,50 +5891,133 @@ impl NetworkService {
                 return;
             }
 
+            if action == "revoked" {
+                if let Err(error) =
+                    contacts_service.mark_contact_revocation_delivered(&request_id, now)
+                {
+                    warn!("Could not acknowledge durable contact revocation: {error}");
+                    return;
+                }
+                let _ = self.swarm.disconnect_peer_id(peer);
+            }
+
             info!(
                 "Identity response from {} passed all verification: peer ID binding and signature",
                 peer
             );
 
-            match contacts_service.add_contact(
-                &response.peer_id,
-                &response.public_key,
-                &response.x25519_public,
-                &response.display_name,
-                response.avatar_hash.as_deref(),
-                response.bio.as_deref(),
-            ) {
-                Ok(contact_id) => {
-                    info!(
-                        "Added contact {} with ID {}",
-                        response.display_name, contact_id
-                    );
-
-                    // Grant chat permission to the new contact
-                    if let Some(ref permissions_service) = self.permissions_service {
-                        match permissions_service.create_permission_grant(
+            match response.status.as_str() {
+                "review" if action == "request" => {
+                    if let Err(error) = contacts_service.record_contact_request(
+                        &request_id,
+                        &response.peer_id,
+                        "outgoing",
+                        Some(&response.display_name),
+                        Some(&response.public_key),
+                        Some(&response.x25519_public),
+                        response.avatar_hash.as_deref(),
+                        response.bio.as_deref(),
+                        "pending",
+                        None,
+                        None,
+                        now,
+                    ) {
+                        warn!("Failed to persist contact request response from {peer}: {error}");
+                        return;
+                    }
+                }
+                "accepted" => {
+                    if let Err(error) = self.validate_contact_acceptance_grants(
+                        &response.peer_id,
+                        &response.public_key,
+                        &response.permission_grants,
+                    ) {
+                        warn!("Rejected contact acceptance grants from {peer}: {error}");
+                        return;
+                    }
+                    let contact = crate::db::ContactData {
+                        peer_id: response.peer_id.clone(),
+                        public_key: response.public_key.clone(),
+                        x25519_public: response.x25519_public.clone(),
+                        display_name: response.display_name.clone(),
+                        avatar_hash: None,
+                        bio: response.bio.clone(),
+                    };
+                    let commit = match contacts_service.contact_request(&request_id) {
+                        Ok(Some(stored)) => contacts_service.accept_contact_request_atomically(
+                            &request_id,
+                            &stored.direction,
+                            &contact,
+                            &response.permission_grants,
+                            now,
+                        ),
+                        Ok(None)
+                            if contacts_service
+                                .is_contact(&response.peer_id)
+                                .unwrap_or(false) =>
+                        {
+                            contacts_service.add_contact_with_grants_atomically(
+                                &contact,
+                                &response.permission_grants,
+                                now,
+                            )
+                        }
+                        Ok(None) => Err(AppError::Validation(
+                            "Uncorrelated accepted contact response".into(),
+                        )),
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = commit {
+                        warn!("Failed atomic contact response from {peer}: {error}");
+                        return;
+                    }
+                    if response.profile_revision > 0 {
+                        if let Err(error) = self.stage_signed_contact_profile(
+                            peer,
                             &response.peer_id,
-                            Capability::Chat,
-                            None, // No expiration
+                            response.profile_revision,
+                            &response.display_name,
+                            response.avatar_hash.as_deref(),
+                            response.avatar_mime_type.as_deref(),
+                            response.bio.as_deref(),
                         ) {
-                            Ok(_) => {
-                                info!("Granted chat permission to {}", response.peer_id);
-                            }
-                            Err(e) => {
-                                warn!("Failed to grant chat permission: {}", e);
-                            }
+                            warn!("Could not stage accepted contact profile from {peer}: {error}");
                         }
                     }
-
-                    // Emit event to notify frontend
-                    drop(self.event_tx.send(NetworkEvent::ContactAdded {
-                        peer_id: response.peer_id.clone(),
-                        display_name: response.display_name.clone(),
-                    }));
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::ContactAdded {
+                            peer_id: response.peer_id.clone(),
+                            display_name: response.display_name.clone(),
+                        })
+                        .await;
                 }
-                Err(e) => {
-                    warn!("Failed to add contact: {}", e);
+                "declined" => {
+                    let _ = contacts_service.update_contact_request(
+                        &request_id,
+                        "declined",
+                        None,
+                        None,
+                        now,
+                    );
                 }
+                "revoked" => {
+                    // The durable local teardown preceded this acknowledgement.
+                }
+                "profile_updated" if action == "profile" => {}
+                status => warn!("Unexpected contact-request response status: {status}"),
+            }
+            if let Ok(Some(stored)) = contacts_service.contact_request(&request_id) {
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::ContactRequestChanged {
+                        request_id: stored.request_id,
+                        peer_id: stored.peer_id,
+                        display_name: stored.display_name,
+                        direction: stored.direction,
+                        status: stored.status,
+                    })
+                    .await;
             }
         } else {
             warn!("No contacts service configured, cannot store identity");
@@ -3555,19 +6035,30 @@ impl NetworkService {
         let msg_result = MessagingCodec::decode(&request.payload);
 
         let (success, message_id, error) = match msg_result {
-            Ok(MessagingMessage::Message(direct_msg)) => {
+            Ok(MessagingMessage::MessageV2(direct_msg)) => {
                 info!(
                     "Received direct message {} from {}",
                     direct_msg.message_id, peer
                 );
 
+                if let Err(error) = direct_msg.validate_shape() {
+                    (false, Some(direct_msg.message_id), Some(error.to_string()))
+                } else if !messaging_sender_matches_transport(&peer, &direct_msg.sender_peer_id) {
+                    (
+                        false,
+                        Some(direct_msg.message_id),
+                        Some("Message sender does not match transport peer".to_string()),
+                    )
                 // Process the message if we have a messaging service
-                if let Some(ref messaging_service) = self.messaging_service {
+                } else if let Some(ref messaging_service) = self.messaging_service {
                     match messaging_service.process_incoming_message(&IncomingMessageParams {
+                        protocol_version: direct_msg.protocol_version,
                         message_id: &direct_msg.message_id,
+                        event_id: &direct_msg.event_id,
                         conversation_id: &direct_msg.conversation_id,
                         sender_peer_id: &direct_msg.sender_peer_id,
                         recipient_peer_id: &direct_msg.recipient_peer_id,
+                        nonce_id: &direct_msg.nonce_id,
                         content_encrypted: &direct_msg.content_encrypted,
                         content_type: &direct_msg.content_type,
                         reply_to: direct_msg.reply_to.as_deref(),
@@ -3650,32 +6141,53 @@ impl NetworkService {
                     )
                 }
             }
-            Ok(MessagingMessage::EditMessage {
-                message_id,
-                new_content,
-                edited_at,
-            }) => {
+            Ok(MessagingMessage::EditV2(edit)) => {
                 info!(
                     "Received edit for message {} from {} at {}",
-                    message_id, peer, edited_at
+                    edit.message_id, peer, edit.authored_at
                 );
 
-                if let Some(ref messaging_service) = self.messaging_service {
-                    match messaging_service.apply_incoming_edit(&message_id, &new_content) {
+                if let Err(error) = edit.validate_shape() {
+                    (false, Some(edit.message_id), Some(error.to_string()))
+                } else if !messaging_sender_matches_transport(&peer, &edit.author_peer_id) {
+                    (
+                        false,
+                        Some(edit.message_id),
+                        Some("Message-edit author does not match transport peer".to_string()),
+                    )
+                } else if let Some(ref messaging_service) = self.messaging_service {
+                    match messaging_service.apply_incoming_edit(&IncomingMessageEditParams {
+                        protocol_version: edit.protocol_version,
+                        event_id: &edit.event_id,
+                        message_id: &edit.message_id,
+                        conversation_id: &edit.conversation_id,
+                        author_peer_id: &edit.author_peer_id,
+                        recipient_peer_id: &edit.recipient_peer_id,
+                        revision: edit.revision,
+                        nonce_id: &edit.nonce_id,
+                        content_encrypted: &edit.content_encrypted,
+                        nonce_counter: edit.nonce_counter,
+                        lamport_clock: edit.lamport_clock,
+                        authored_at: edit.authored_at,
+                        signature: &edit.signature,
+                    }) {
                         Ok(()) => {
-                            info!("Successfully applied edit for message {}", message_id);
-                            (true, Some(message_id), None)
+                            info!("Successfully applied edit for message {}", edit.message_id);
+                            (true, Some(edit.message_id), None)
                         }
                         Err(e) => {
-                            warn!("Failed to apply edit for message {}: {}", message_id, e);
-                            (false, Some(message_id), Some(e.to_string()))
+                            warn!(
+                                "Failed to apply edit for message {}: {}",
+                                edit.message_id, e
+                            );
+                            (false, Some(edit.message_id), Some(e.to_string()))
                         }
                     }
                 } else {
                     warn!("No messaging service configured, cannot process edit");
                     (
                         false,
-                        Some(message_id),
+                        Some(edit.message_id),
                         Some("Messaging service not available".to_string()),
                     )
                 }
@@ -3730,8 +6242,16 @@ impl NetworkService {
                     return NetworkResponse::Ok;
                 }
                 let peer_id = self.identity_service.get_peer_id().unwrap_or_default();
-                self.pending_delivery_resolution
-                    .insert(relay_peer_id, (target, response_tx));
+                self.pending_delivery_resolution.insert(
+                    relay_peer_id,
+                    PendingDeliveryResolution {
+                        target,
+                        relay_name: None,
+                        relay_key_id: None,
+                        relay_public_key: Vec::new(),
+                        response_tx,
+                    },
+                );
                 self.swarm.behaviour_mut().board_sync.send_request(
                     &relay_peer_id,
                     WireBoardSyncRequest::RelayAuthChallenge {
@@ -3810,6 +6330,11 @@ impl NetworkService {
                         ciphertext,
                         expires_at,
                         session_token: None,
+                        relay_name: None,
+                        relay_key_id: None,
+                        relay_public_key: Vec::new(),
+                        pow_challenge_id: None,
+                        pow_cancel: Arc::new(AtomicBool::new(false)),
                         response_tx,
                     },
                 );
@@ -3828,6 +6353,15 @@ impl NetworkService {
                 namespace,
                 response_tx,
             } => {
+                // A timed-out caller drops its receiver. Remove that abandoned operation so a
+                // user retry cannot be trapped behind NAME_REGISTRATION_IN_PROGRESS forever.
+                if self
+                    .pending_name_registration
+                    .get(&relay_peer_id)
+                    .is_some_and(|pending| pending.response_tx.is_closed())
+                {
+                    self.pending_name_registration.remove(&relay_peer_id);
+                }
                 if self.pending_name_registration.contains_key(&relay_peer_id) {
                     let _ = response_tx.send(NetworkResponse::Error(
                         "NAME_REGISTRATION_IN_PROGRESS".into(),
@@ -3868,6 +6402,12 @@ impl NetworkService {
             }
 
             NetworkCommand::Disconnect { peer_id } => {
+                let failures = self.pending_messaging_requests.fail_peer(
+                    &peer_id,
+                    MessageDeliveryFailureKind::Cancelled,
+                    "peer was explicitly disconnected",
+                );
+                self.apply_message_attempt_failures(failures);
                 match self.swarm.disconnect_peer_id(peer_id) {
                     Ok(_) => NetworkResponse::Ok,
                     Err(e) => NetworkResponse::Error(format!("Failed to disconnect: {:?}", e)),
@@ -3877,16 +6417,19 @@ impl NetworkService {
             NetworkCommand::SendMessage {
                 peer_id,
                 protocol,
+                event_id,
+                message_id,
                 payload,
+                response_tx,
             } => {
-                let request = MessagingRequest {
-                    message_type: protocol,
+                self.enqueue_message_attempt(
+                    peer_id,
+                    protocol,
+                    event_id,
+                    message_id,
                     payload,
-                };
-                self.swarm
-                    .behaviour_mut()
-                    .messaging
-                    .send_request(&peer_id, request);
+                    Some(response_tx),
+                );
                 NetworkResponse::Ok
             }
 
@@ -3912,15 +6455,32 @@ impl NetworkService {
                 NetworkResponse::Ok
             }
 
-            NetworkCommand::RequestIdentity { peer_id } => {
+            NetworkCommand::RequestIdentity {
+                peer_id,
+                request_id,
+                action,
+                permission_grants,
+                permission_revocations,
+            } => {
                 // Create identity request
-                match self.create_identity_request() {
+                match self.create_identity_request(
+                    request_id.clone(),
+                    action.clone(),
+                    &peer_id.to_string(),
+                    permission_grants,
+                    permission_revocations,
+                ) {
                     Ok(request) => {
-                        self.swarm
+                        let outbound_id = self
+                            .swarm
                             .behaviour_mut()
                             .identity_exchange
                             .send_request(&peer_id, request);
-                        NetworkResponse::Ok
+                        self.pending_identity_requests
+                            .insert(outbound_id, (request_id, action));
+                        NetworkResponse::IdentityQueued {
+                            connected: self.connected_peers.contains_key(&peer_id),
+                        }
                     }
                     Err(e) => {
                         NetworkResponse::Error(format!("Failed to create identity request: {}", e))
@@ -4508,7 +7068,16 @@ impl NetworkService {
                 peer_id,
                 media_hash,
             } => {
-                use super::protocols::media_sync::MediaFetchRequest;
+                let source_is_authorized = self
+                    .contacts_service
+                    .as_ref()
+                    .and_then(|service| service.get_contact(&peer_id.to_string()).ok().flatten())
+                    .is_some_and(|contact| !contact.is_blocked);
+                if !source_is_authorized {
+                    return NetworkResponse::Error(
+                        "Attachment source is not an active contact".to_string(),
+                    );
+                }
 
                 let identity = match self.identity_service.get_identity() {
                     Ok(Some(id)) => id,
@@ -4520,29 +7089,18 @@ impl NetworkService {
                     }
                 };
 
-                let now = chrono::Utc::now().timestamp();
-                let signable = crate::services::SignableMediaFetchRequest {
-                    media_hash: media_hash.clone(),
-                    requester_peer_id: identity.peer_id.clone(),
-                    timestamp: now,
-                };
-
-                match self.identity_service.sign(&signable) {
-                    Ok(signature) => {
-                        let request = MediaFetchRequest {
-                            media_hash,
-                            requester_peer_id: identity.peer_id,
-                            timestamp: now,
-                            signature,
-                        };
-                        self.swarm
-                            .behaviour_mut()
-                            .media_sync
-                            .send_request(&peer_id, request);
-                        NetworkResponse::Ok
-                    }
-                    Err(e) => {
-                        NetworkResponse::Error(format!("Failed to sign media fetch request: {}", e))
+                if self.pending_media_fetch_by_hash.contains_key(&media_hash) {
+                    return NetworkResponse::Ok;
+                }
+                let offset = self
+                    .media_service
+                    .as_ref()
+                    .and_then(|service| service.partial_bytes(&media_hash).ok())
+                    .unwrap_or(0);
+                match self.queue_media_range(peer_id, media_hash, identity.peer_id, offset, true) {
+                    Ok(()) => NetworkResponse::Ok,
+                    Err(error) => {
+                        NetworkResponse::Error(format!("Failed to start media fetch: {error}"))
                     }
                 }
             }
@@ -4754,8 +7312,422 @@ impl NetworkService {
 }
 
 #[cfg(test)]
+mod signaling_replay_bridge_tests {
+    use super::*;
+    use crate::db::{Capability, ContactData, ContactsRepository};
+    use crate::models::CreateIdentityRequest;
+    use crate::p2p::protocols::signaling::{
+        SignalingAnswer, SignalingEnvelope, SignalingOffer, SignalingPayload,
+    };
+
+    struct TestPeer {
+        db: Arc<crate::Database>,
+        identity: Arc<IdentityService>,
+        permissions: Arc<PermissionsService>,
+        calling: Arc<CallingService>,
+        peer_id: String,
+    }
+
+    fn test_peer(display_name: &str) -> TestPeer {
+        let db = Arc::new(crate::Database::in_memory().unwrap());
+        let identity = Arc::new(IdentityService::new(db.clone()));
+        let contacts = Arc::new(ContactsService::new(db.clone(), identity.clone()));
+        let permissions = Arc::new(PermissionsService::new(db.clone(), identity.clone()));
+        let peer_id = identity
+            .create_identity(CreateIdentityRequest {
+                display_name: display_name.into(),
+                passphrase: "test-passphrase".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap()
+            .peer_id;
+        let calling = Arc::new(CallingService::new(
+            db.clone(),
+            identity.clone(),
+            contacts,
+            permissions.clone(),
+        ));
+        TestPeer {
+            db,
+            identity,
+            permissions,
+            calling,
+            peer_id,
+        }
+    }
+
+    fn add_call_relationship(local: &TestPeer, remote: &TestPeer) {
+        let identity = remote.identity.get_identity().unwrap().unwrap();
+        ContactsRepository::add_contact(
+            &local.db,
+            &ContactData {
+                peer_id: identity.peer_id,
+                public_key: identity.public_key,
+                x25519_public: identity.x25519_public,
+                display_name: identity.display_name,
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
+        local
+            .permissions
+            .create_permission_grant(&remote.peer_id, Capability::Call, None)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn duplicate_answer_is_accepted_and_republished_to_frontend() {
+        let caller = test_peer("Caller");
+        let callee = test_peer("Callee");
+        add_call_relationship(&caller, &callee);
+        add_call_relationship(&callee, &caller);
+
+        let offer = caller
+            .calling
+            .create_offer(&callee.peer_id, "v=0\r\ns=Harbor test\r\n")
+            .unwrap();
+        let offer_envelope = SignalingEnvelope {
+            sender_peer_id: offer.caller_peer_id.clone(),
+            recipient_peer_id: offer.callee_peer_id.clone(),
+            payload: SignalingPayload::Offer(SignalingOffer {
+                call_id: offer.call_id.clone(),
+                caller_peer_id: offer.caller_peer_id.clone(),
+                callee_peer_id: offer.callee_peer_id.clone(),
+                sdp: offer.sdp,
+                timestamp: offer.timestamp,
+                signature: offer.signature,
+            }),
+        };
+        callee
+            .calling
+            .process_incoming_signaling(&offer_envelope)
+            .unwrap();
+        let answer = callee
+            .calling
+            .create_answer(
+                &offer.call_id,
+                &caller.peer_id,
+                "v=0\r\ns=Harbor test answer\r\n",
+            )
+            .unwrap();
+        let answer_envelope = SignalingEnvelope {
+            sender_peer_id: answer.callee_peer_id.clone(),
+            recipient_peer_id: answer.caller_peer_id.clone(),
+            payload: SignalingPayload::Answer(SignalingAnswer {
+                call_id: answer.call_id,
+                caller_peer_id: answer.caller_peer_id,
+                callee_peer_id: answer.callee_peer_id,
+                sdp: answer.sdp,
+                timestamp: answer.timestamp,
+                signature: answer.signature,
+            }),
+        };
+
+        let network_key = libp2p::identity::Keypair::generate_ed25519();
+        let (mut network, _handle, mut events) = NetworkService::new(
+            NetworkConfig::default(),
+            caller.identity.clone(),
+            network_key,
+        )
+        .unwrap();
+        network.set_calling_service(caller.calling.clone());
+        let callee_transport: PeerId = callee.peer_id.parse().unwrap();
+
+        for _ in 0..2 {
+            let response = network
+                .handle_signaling_request(callee_transport, answer_envelope.clone())
+                .await;
+            assert!(response.accepted, "answer replay must be acknowledged");
+            let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("frontend answer event timed out")
+                .expect("frontend event channel closed");
+            assert!(matches!(
+                event,
+                NetworkEvent::CallSignalingReceived { peer_id, message }
+                    if peer_id == callee.peer_id && message == answer_envelope
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod messaging_request_correlation_tests {
+    use super::*;
+
+    fn peer() -> PeerId {
+        libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+    }
+
+    fn pending(
+        tracker: &mut PendingMessagingRequests<u64>,
+        request_id: u64,
+        event_id: &str,
+        message_id: &str,
+        peer_id: PeerId,
+        deadline: Instant,
+    ) -> oneshot::Receiver<NetworkResponse> {
+        let (tx, rx) = oneshot::channel();
+        tracker.insert(
+            request_id,
+            event_id.into(),
+            message_id.into(),
+            peer_id,
+            deadline,
+            Some(tx),
+        );
+        rx
+    }
+
+    #[tokio::test]
+    async fn reordered_same_peer_responses_complete_only_the_matching_waiter() {
+        let peer = peer();
+        let mut tracker = PendingMessagingRequests::default();
+        let first = pending(
+            &mut tracker,
+            11,
+            "event-1",
+            "message-1",
+            peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+        let second = pending(
+            &mut tracker,
+            12,
+            "event-2",
+            "message-2",
+            peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+
+        assert!(tracker
+            .complete_remote(
+                &12,
+                &peer,
+                MessagingResponse {
+                    success: true,
+                    message_id: Some("message-2".into()),
+                    error: None,
+                },
+            )
+            .is_some());
+        assert_eq!(tracker.len(), 1);
+        assert!(matches!(
+            second.await.unwrap(),
+            NetworkResponse::MessageDelivered(MessageDeliveryReceipt { event_id, message_id })
+                if event_id == "event-2" && message_id == "message-2"
+        ));
+
+        assert!(tracker
+            .complete_remote(
+                &11,
+                &peer,
+                MessagingResponse {
+                    success: true,
+                    message_id: Some("message-1".into()),
+                    error: None,
+                },
+            )
+            .is_some());
+        assert!(matches!(
+            first.await.unwrap(),
+            NetworkResponse::MessageDelivered(MessageDeliveryReceipt { event_id, message_id })
+                if event_id == "event-1" && message_id == "message-1"
+        ));
+        assert_eq!(tracker.len(), 0);
+        assert!(tracker
+            .complete_remote(
+                &11,
+                &peer,
+                MessagingResponse {
+                    success: true,
+                    message_id: Some("message-1".into()),
+                    error: None,
+                },
+            )
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn outbound_failure_and_bad_ack_are_typed_and_cleaned() {
+        let peer = peer();
+        let mut tracker = PendingMessagingRequests::default();
+        let failed = pending(
+            &mut tracker,
+            21,
+            "event-failed",
+            "message-failed",
+            peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(tracker
+            .fail(&21, MessageDeliveryFailureKind::Network, "connection reset",)
+            .is_some());
+        assert!(matches!(
+            failed.await.unwrap(),
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                kind: MessageDeliveryFailureKind::Network,
+                event_id,
+                ..
+            }) if event_id == "event-failed"
+        ));
+
+        let mismatch = pending(
+            &mut tracker,
+            22,
+            "event-mismatch",
+            "expected-message",
+            peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(tracker
+            .complete_remote(
+                &22,
+                &peer,
+                MessagingResponse {
+                    success: true,
+                    message_id: Some("other-message".into()),
+                    error: None,
+                },
+            )
+            .is_some());
+        assert!(matches!(
+            mismatch.await.unwrap(),
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                kind: MessageDeliveryFailureKind::InvalidResponse,
+                ..
+            })
+        ));
+        assert_eq!(tracker.len(), 0);
+    }
+
+    #[test]
+    fn background_attempt_without_waiter_still_produces_a_correlated_outcome() {
+        let peer = peer();
+        let mut tracker = PendingMessagingRequests::default();
+        tracker.insert(
+            25,
+            "background-event".into(),
+            "background-message".into(),
+            peer,
+            Instant::now() + Duration::from_secs(1),
+            None,
+        );
+
+        let outcome = tracker
+            .complete_remote(
+                &25,
+                &peer,
+                MessagingResponse {
+                    success: true,
+                    message_id: Some("background-message".into()),
+                    error: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            outcome,
+            MessageDeliveryAttemptOutcome::Delivered(MessageDeliveryReceipt {
+                event_id: "background-event".into(),
+                message_id: "background-message".into(),
+            })
+        );
+        assert_eq!(tracker.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn timeout_and_cancelled_caller_remove_pending_state() {
+        let peer = peer();
+        let mut tracker = PendingMessagingRequests::default();
+        let timed_out = pending(
+            &mut tracker,
+            31,
+            "event-timeout",
+            "message-timeout",
+            peer,
+            Instant::now() - Duration::from_millis(1),
+        );
+        let cancelled = pending(
+            &mut tracker,
+            32,
+            "event-cancelled",
+            "message-cancelled",
+            peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+        drop(cancelled);
+
+        let (cancelled_count, expired) = tracker.maintain(Instant::now());
+        assert_eq!(cancelled_count, 1);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].kind, MessageDeliveryFailureKind::Timeout);
+        assert!(matches!(
+            timed_out.await.unwrap(),
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                kind: MessageDeliveryFailureKind::Timeout,
+                ..
+            })
+        ));
+        assert_eq!(tracker.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn disconnect_and_shutdown_complete_each_live_waiter_once() {
+        let disconnected_peer = peer();
+        let other_peer = peer();
+        let mut tracker = PendingMessagingRequests::default();
+        let disconnected = pending(
+            &mut tracker,
+            41,
+            "event-disconnected",
+            "message-disconnected",
+            disconnected_peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+        let shutdown = pending(
+            &mut tracker,
+            42,
+            "event-shutdown",
+            "message-shutdown",
+            other_peer,
+            Instant::now() + Duration::from_secs(1),
+        );
+
+        let disconnected_failures = tracker.fail_peer(
+            &disconnected_peer,
+            MessageDeliveryFailureKind::Disconnected,
+            "connection closed",
+        );
+        assert_eq!(disconnected_failures.len(), 1);
+        assert!(matches!(
+            disconnected.await.unwrap(),
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                kind: MessageDeliveryFailureKind::Disconnected,
+                ..
+            })
+        ));
+        assert_eq!(tracker.fail_all("runtime stopped").len(), 1);
+        assert!(matches!(
+            shutdown.await.unwrap(),
+            NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
+                kind: MessageDeliveryFailureKind::Shutdown,
+                ..
+            })
+        ));
+        assert_eq!(tracker.len(), 0);
+        assert!(tracker.fail_all("second shutdown").is_empty());
+    }
+}
+
+#[cfg(test)]
 mod introduction_ack_tests {
-    use super::should_ack_ingest;
+    use super::{await_name_registration, should_ack_ingest};
+    use std::time::Duration;
+    use tokio::sync::oneshot;
     #[test]
     fn success_duplicate_and_blocked_are_acked() {
         assert!(should_ack_ingest(&Ok::<bool, &str>(true)));
@@ -4764,5 +7736,214 @@ mod introduction_ack_tests {
     #[test]
     fn tamper_or_validation_error_is_not_acked() {
         assert!(!should_ack_ingest(&Err::<bool, &str>("tampered")));
+    }
+
+    #[tokio::test]
+    async fn relay_name_registration_has_a_bounded_wait() {
+        // Keep the response sender alive to model a relay request that never completes.
+        let (response_tx, response_rx) = oneshot::channel();
+        let error = await_name_registration(response_rx, Duration::from_millis(10))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("timed out"));
+        assert!(
+            response_tx.is_closed(),
+            "timeout must abandon stale progress"
+        );
+    }
+}
+
+#[cfg(test)]
+mod contact_request_protocol_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey, Verifier};
+
+    fn signed_request(action: &str, now: i64) -> (PeerId, IdentityExchangeRequest) {
+        let key = SigningKey::from_bytes(&[42; 32]);
+        let peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&key.verifying_key())
+                .unwrap();
+        let peer: PeerId = peer_id.parse().unwrap();
+        let mut request = IdentityExchangeRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            action: action.into(),
+            requester_peer_id: peer_id,
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            x25519_public: vec![7; 32],
+            display_name: "Alice".into(),
+            avatar_hash: None,
+            avatar_mime_type: None,
+            profile_revision: if action == "profile" { 1 } else { 0 },
+            bio: None,
+            timestamp: now,
+            permission_grants: Vec::new(),
+            permission_revocations: Vec::new(),
+            signature: Vec::new(),
+        };
+        request.signature = key
+            .sign(&identity_request_signing_bytes(&request).unwrap())
+            .to_bytes()
+            .to_vec();
+        (peer, request)
+    }
+
+    #[test]
+    fn signed_request_actions_are_bound_and_tamper_evident() {
+        let now = 10_000;
+        let (peer, request) = signed_request("request", now);
+        assert!(verify_identity_request(peer, &request, now));
+        let mut altered = request.clone();
+        altered.action = "accepted".into();
+        assert!(!verify_identity_request(peer, &altered, now));
+        let mut stale = request;
+        stale.timestamp = now - 301;
+        assert!(!verify_identity_request(peer, &stale, now));
+
+        let (peer, profile) = signed_request("profile", now);
+        assert!(verify_identity_request(peer, &profile, now));
+        let mut altered_revision = profile;
+        altered_revision.profile_revision += 1;
+        assert!(!verify_identity_request(peer, &altered_revision, now));
+    }
+
+    #[test]
+    fn signed_response_status_is_bound_and_tamper_evident() {
+        let key = SigningKey::from_bytes(&[43; 32]);
+        let peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&key.verifying_key())
+                .unwrap();
+        let mut response = IdentityExchangeResponse {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            status: "review".into(),
+            peer_id,
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            x25519_public: vec![8; 32],
+            display_name: "Bob".into(),
+            avatar_hash: None,
+            avatar_mime_type: None,
+            profile_revision: 0,
+            bio: None,
+            timestamp: 10_000,
+            permission_grants: Vec::new(),
+            permission_revocations: Vec::new(),
+            signature: Vec::new(),
+        };
+        response.signature = key
+            .sign(&identity_response_signing_bytes(&response).unwrap())
+            .to_bytes()
+            .to_vec();
+        let signature = ed25519_dalek::Signature::from_slice(&response.signature).unwrap();
+        assert!(key
+            .verifying_key()
+            .verify(
+                &identity_response_signing_bytes(&response).unwrap(),
+                &signature
+            )
+            .is_ok());
+
+        response.status = "accepted".into();
+        assert!(key
+            .verifying_key()
+            .verify(
+                &identity_response_signing_bytes(&response).unwrap(),
+                &signature
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn forged_revocation_ack_is_not_authenticated() {
+        let now = 10_000;
+        let key = SigningKey::from_bytes(&[44; 32]);
+        let peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&key.verifying_key())
+                .unwrap();
+        let peer: PeerId = peer_id.parse().unwrap();
+        let mut response = IdentityExchangeResponse {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            status: "revoked".into(),
+            peer_id,
+            public_key: key.verifying_key().to_bytes().to_vec(),
+            x25519_public: vec![9; 32],
+            display_name: "Revoked peer".into(),
+            avatar_hash: None,
+            avatar_mime_type: None,
+            profile_revision: 0,
+            bio: None,
+            timestamp: now,
+            permission_grants: Vec::new(),
+            permission_revocations: Vec::new(),
+            signature: Vec::new(),
+        };
+        response.signature = key
+            .sign(&identity_response_signing_bytes(&response).unwrap())
+            .to_bytes()
+            .to_vec();
+        assert!(verify_identity_response(peer, &response, now));
+
+        let attacker = SigningKey::from_bytes(&[45; 32]);
+        response.signature = attacker
+            .sign(&identity_response_signing_bytes(&response).unwrap())
+            .to_bytes()
+            .to_vec();
+        assert!(!verify_identity_response(peer, &response, now));
+    }
+}
+
+#[cfg(test)]
+mod media_authorization_tests {
+    use super::*;
+    use crate::p2p::protocols::media_sync::{MediaFetchRequest, MediaFetchResponse};
+
+    #[tokio::test]
+    async fn media_request_fails_closed_without_authorized_contact_context() {
+        let db = Arc::new(crate::db::Database::in_memory().unwrap());
+        let identity = Arc::new(IdentityService::new(db));
+        let network_key = libp2p::identity::Keypair::generate_ed25519();
+        let requester_key = libp2p::identity::Keypair::generate_ed25519();
+        let requester = requester_key.public().to_peer_id();
+        let (service, _, _) =
+            NetworkService::new(NetworkConfig::default(), identity, network_key).unwrap();
+        let response = service.handle_media_fetch_request(
+            requester,
+            &MediaFetchRequest {
+                media_hash: "d".repeat(64),
+                offset: 0,
+                max_bytes: crate::services::media_service::DEFAULT_CHUNK_SIZE,
+                requester_peer_id: requester.to_string(),
+                timestamp: chrono::Utc::now().timestamp(),
+                signature: vec![0; 64],
+            },
+        );
+        assert!(matches!(
+            response,
+            MediaFetchResponse::Error { error } if error == "Authorization unavailable"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod messaging_ingress_tests {
+    use super::*;
+
+    #[test]
+    fn claimed_message_author_must_be_the_transport_peer() {
+        let transport = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let attacker = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+
+        assert!(messaging_sender_matches_transport(
+            &transport,
+            &transport.to_string()
+        ));
+        assert!(!messaging_sender_matches_transport(
+            &transport,
+            &attacker.to_string()
+        ));
+        assert!(!messaging_sender_matches_transport(&transport, ""));
     }
 }

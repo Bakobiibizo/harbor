@@ -2,6 +2,8 @@
 
 This checklist validates Harbor one-to-one video calls and the selected small-group calling scenario through production UI, Tauri commands, signed libp2p signaling, WebRTC media setup, roster/UI state, and cleanup. Passing automated tests alone is not release-ready evidence for this ticket; record the two-profile and group-call observations below when an interactive desktop session is available.
 
+For the release-candidate Windows to macOS run, exact packaged-app commands, privacy checks, three-profile partial-failure steps, and required evidence fields are in [Packaged Windows and macOS call acceptance](windows-macos-call-acceptance.md). This page remains the source-build validation checklist.
+
 ## Preconditions
 
 - Use disposable profiles and data directories only.
@@ -15,7 +17,7 @@ This checklist validates Harbor one-to-one video calls and the selected small-gr
 Run these before and after the manual app scenarios:
 
 ```bash
-pnpm exec vitest run src/services/voiceCallE2e.test.ts src/services/callingRuntime.test.ts src/components/calling/CallOverlay.test.tsx src/stores/calling.test.ts
+pnpm exec vitest run src/services/voiceCallE2e.test.ts src/services/callingRuntime.test.ts src/services/callingIce.test.ts src/components/calling/CallOverlay.test.tsx src/stores/calling.test.ts
 cargo test --manifest-path src-tauri/Cargo.toml offer_answer_ice_hangup_cross_libp2p_signaling_protocol
 dev check
 dev ci --language typescript

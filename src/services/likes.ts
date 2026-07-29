@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCommand } from './command';
 
 /** Summary of like/reaction state for a post. */
 export interface LikeSummary {
@@ -27,23 +27,23 @@ function normalizeLikeSummary(summary: RawLikeSummary): LikeSummary {
 /** Likes service - wraps Tauri commands for signed post reactions. */
 export const likesService = {
   async likePost(postId: string): Promise<LikeSummary> {
-    return normalizeLikeSummary(await invoke<RawLikeSummary>('like_post', { postId }));
+    return normalizeLikeSummary(await invokeCommand('like_post', { postId }));
   },
 
   async unlikePost(postId: string): Promise<LikeSummary> {
-    return normalizeLikeSummary(await invoke<RawLikeSummary>('unlike_post', { postId }));
+    return normalizeLikeSummary(await invokeCommand('unlike_post', { postId }));
   },
 
   async getPostLikes(postId: string): Promise<LikeSummary> {
-    return normalizeLikeSummary(await invoke<RawLikeSummary>('get_post_likes', { postId }));
+    return normalizeLikeSummary(await invokeCommand('get_post_likes', { postId }));
   },
 
   async getPostsLikesBatch(postIds: string[]): Promise<LikeSummary[]> {
-    const summaries = await invoke<RawLikeSummary[]>('get_posts_likes_batch', { postIds });
+    const summaries = await invokeCommand('get_posts_likes_batch', { postIds });
     return summaries.map(normalizeLikeSummary);
   },
 
   async getMyLikedPosts(): Promise<string[]> {
-    return invoke<string[]>('get_my_liked_posts');
+    return invokeCommand('get_my_liked_posts');
   },
 };

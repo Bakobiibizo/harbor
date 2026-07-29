@@ -1,81 +1,89 @@
-import { invoke } from '@tauri-apps/api/core';
-import type { PeerInfo, NetworkStats } from '../types';
+import type { AddContactResult, PeerInfo, NetworkStats } from '../types';
+import { normalizeContactInvite } from '../utils/contactInvite';
+import { invokeCommand } from './command';
+
+export interface NetworkStartupConfig {
+  enableMdns?: boolean;
+  bootstrapNodes?: string[];
+}
 
 /** Start the P2P network (requires unlocked identity) */
-export async function startNetwork(): Promise<void> {
-  return invoke('start_network');
+export async function startNetwork(config: NetworkStartupConfig = {}): Promise<void> {
+  return invokeCommand('start_network', config);
 }
 
 /** Stop the P2P network */
 export async function stopNetwork(): Promise<void> {
-  return invoke('stop_network');
+  return invokeCommand('stop_network');
 }
 
 /** Check if the network is running */
 export async function isNetworkRunning(): Promise<boolean> {
-  return invoke('is_network_running');
+  return invokeCommand('is_network_running');
 }
 
 /** Get list of connected peers */
 export async function getConnectedPeers(): Promise<PeerInfo[]> {
-  return invoke('get_connected_peers');
+  return invokeCommand('get_connected_peers');
 }
 
 /** Get network statistics */
 export async function getNetworkStats(): Promise<NetworkStats> {
-  return invoke('get_network_stats');
+  return invokeCommand('get_network_stats');
 }
 
 /** Bootstrap the DHT */
 export async function bootstrapNetwork(): Promise<void> {
-  return invoke('bootstrap_network');
+  return invokeCommand('bootstrap_network');
 }
 
 /** Get listening addresses (for sharing with remote peers) */
 export async function getListeningAddresses(): Promise<string[]> {
-  return invoke('get_listening_addresses');
+  return invokeCommand('get_listening_addresses');
 }
 
 /** Connect to a peer by multiaddress */
 export async function connectToPeer(multiaddr: string): Promise<void> {
-  return invoke('connect_to_peer', { multiaddr });
+  return invokeCommand('connect_to_peer', { multiaddr });
 }
 
 /** Add a bootstrap node address */
 export async function addBootstrapNode(multiaddr: string): Promise<void> {
-  return invoke<void>('add_bootstrap_node', { multiaddr });
+  return invokeCommand('add_bootstrap_node', { multiaddr });
 }
 
 /** Add a relay server by multiaddress */
 export async function addRelayServer(multiaddr: string): Promise<void> {
-  return invoke<void>('add_relay_server', { multiaddr });
+  return invokeCommand('add_relay_server', { multiaddr });
 }
 
 /** Connect to public/default relay servers */
 export async function connectToPublicRelays(): Promise<void> {
-  return invoke<void>('connect_to_public_relays');
+  return invokeCommand('connect_to_public_relays');
 }
 
 /** Get current NAT status */
 export async function getNatStatus(): Promise<string> {
-  return invoke<string>('get_nat_status');
+  return invokeCommand('get_nat_status');
 }
 
 /** Get shareable addresses (relay addresses that work globally) */
 export async function getShareableAddresses(): Promise<string[]> {
-  return invoke<string[]>('get_shareable_addresses');
+  return invokeCommand('get_shareable_addresses');
 }
 
-/** Get a shareable contact string that includes everything needed to add as contact */
+/** Get canonical public discovery metadata for starting a signed contact handshake. */
 export async function getShareableContactString(): Promise<string> {
-  return invoke<string>('get_shareable_contact_string');
+  return invokeCommand('get_shareable_contact_string');
 }
 
-/** Add a contact from a shareable contact string (harbor://...) */
-export async function addContactFromString(contactString: string): Promise<string> {
-  return invoke<string>('add_contact_from_string', { contactString });
+/** Start a signed contact request from a canonical v1 invite. */
+export async function addContactFromString(contactString: string): Promise<AddContactResult> {
+  return invokeCommand('add_contact_from_string', {
+    contactString: normalizeContactInvite(contactString),
+  });
 }
 
 export async function syncFeed(limit?: number): Promise<void> {
-  return invoke<void>('sync_feed', { limit });
+  return invokeCommand('sync_feed', { limit });
 }

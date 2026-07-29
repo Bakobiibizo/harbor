@@ -106,17 +106,12 @@ pub struct OutgoingWallPostDelete {
 
 impl BoardService {
     pub fn verified_qualified_name(&self, peer_id: &str) -> Result<Option<String>> {
-        let Some(bytes) = crate::db::repositories::RelayNamesRepository::new(&self.db)
-            .active_for_peer(peer_id, chrono::Utc::now().timestamp())?
-        else {
-            return Ok(None);
-        };
-        let claim: crate::models::NameClaim = ciborium::de::from_reader(bytes.as_slice())
-            .map_err(|e| AppError::Serialization(e.to_string()))?;
-        Ok(Some(format!(
-            "@{}@{}",
-            claim.request.local_name, claim.request.relay
-        )))
+        crate::services::name_claim_service::verified_qualified_name(
+            &crate::db::repositories::RelayNamesRepository::new(&self.db),
+            peer_id,
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|error| AppError::Crypto(error.to_string()))
     }
     pub fn new(db: Arc<Database>, identity_service: Arc<IdentityService>) -> Self {
         Self {
@@ -233,6 +228,8 @@ impl BoardService {
         let signable = SignableBoardPostsRequest {
             requester_peer_id: info.peer_id.clone(),
             board_id: board_id.to_string(),
+            after_timestamp,
+            limit,
             timestamp: now,
         };
         let signature = self.identity_service.sign(&signable)?;
@@ -546,7 +543,7 @@ mod tests {
             .unwrap();
         db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO identity_migration_state(peer_id, mode, updated_at) VALUES(?, 'compatibility', 1)",
+                "INSERT INTO identity_publishing_state(peer_id, mode, updated_at) VALUES(?, 'unverified', 1)",
                 [&info.peer_id],
             )?;
             Ok(())
@@ -770,6 +767,13 @@ mod tests {
         assert_eq!(reg.display_name, "Board User");
         assert!(!reg.public_key.is_empty());
         assert!(!reg.signature.is_empty());
+        let raw: [u8; 32] = reg.public_key.as_slice().try_into().unwrap();
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&raw).unwrap();
+        assert_eq!(
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)
+                .unwrap(),
+            reg.peer_id
+        );
     }
 
     #[test]

@@ -44,8 +44,30 @@ export type NetworkEvent =
   | { type: 'external_address_discovered'; address: string }
   | { type: 'listening_on'; address: string }
   | { type: 'message_received'; peer_id: string; protocol: string; payload: number[] }
+  | {
+      type: 'message_delivery_changed';
+      message_id: string;
+      status: import('./messaging').MessageStatus;
+      timestamp: number;
+      error: string | null;
+    }
+  | {
+      type: 'message_ack_received';
+      message_id: string;
+      conversation_id: string;
+      status: 'delivered' | 'read';
+      timestamp: number;
+    }
   | { type: 'status_changed'; status: ConnectionStatus }
   | { type: 'contact_added'; peer_id: string; display_name: string }
+  | {
+      type: 'contact_request_changed';
+      request_id: string;
+      peer_id: string;
+      display_name: string | null;
+      direction: 'incoming' | 'outgoing';
+      status: import('./contacts').ContactRequestStatus;
+    }
   | { type: 'nat_status_changed'; status: NatStatus }
   | { type: 'relay_connected'; relay_address: string }
   | { type: 'hole_punch_succeeded'; peer_id: string }
@@ -68,6 +90,13 @@ export type NetworkEvent =
     }
   | { type: 'wall_post_synced'; relay_peer_id: string; post_id: string }
   | {
+      type: 'post_relay_status_changed';
+      post_id: string;
+      event_id: string;
+      status: import('./posts').PostRelayStatus;
+      error: string | null;
+    }
+  | {
       type: 'wall_posts_received';
       relay_peer_id: string;
       author_peer_id: string;
@@ -75,5 +104,10 @@ export type NetworkEvent =
     }
   | { type: 'wall_post_deleted_on_relay'; relay_peer_id: string; post_id: string }
   | { type: 'media_fetched'; peer_id: string; media_hash: string }
+  | {
+      type: 'media_transfer_changed';
+      profile_id: string;
+      state: import('./media').MediaTransferState;
+    }
   | { type: 'call_signaling_received'; peer_id: string; message: SignalingEnvelope }
   | { type: 'call_signaling_error'; peer_id: string; error: string };

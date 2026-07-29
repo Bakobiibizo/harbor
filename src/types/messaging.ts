@@ -1,10 +1,17 @@
 /** A message in a conversation */
+export type MessageContentState =
+  | { kind: 'plaintext'; text: string }
+  | { kind: 'tampered' }
+  | { kind: 'wrong_key' }
+  | { kind: 'unsupported_version'; version: number }
+  | { kind: 'corrupt_payload' };
+
 export interface Message {
   messageId: string;
   conversationId: string;
   senderPeerId: string;
   recipientPeerId: string;
-  content: string;
+  contentState: MessageContentState;
   contentType: string;
   replyToMessageId: string | null;
   sentAt: number;
@@ -16,7 +23,7 @@ export interface Message {
 }
 
 /** Message delivery status */
-export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 
 /** A conversation summary */
 export interface Conversation {
@@ -31,4 +38,5 @@ export interface SendMessageResult {
   messageId: string;
   conversationId: string;
   sentAt: number;
+  status: MessageStatus;
 }

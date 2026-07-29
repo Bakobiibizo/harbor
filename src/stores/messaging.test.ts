@@ -1,9 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useMessagingStore } from './messaging';
+import { resetMessagingProfileMemory, useMessagingStore } from './messaging';
 import { invoke } from '@tauri-apps/api/core';
+import { activateProfile, suspendProfile } from '../services/profileSession';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('useMessagingStore', () => {
   beforeEach(() => {
+    suspendProfile();
+    activateProfile('test-profile');
+    localStorage.clear();
     useMessagingStore.setState({
       conversations: [],
       messages: {},
@@ -17,6 +31,29 @@ describe('useMessagingStore', () => {
   });
 
   describe('loadConversations', () => {
+    it('does not apply a delayed result after profile teardown', async () => {
+      let resolve!: (value: unknown) => void;
+      vi.mocked(invoke).mockImplementationOnce(
+        () => new Promise((resolvePromise) => (resolve = resolvePromise)),
+      );
+
+      const loading = useMessagingStore.getState().loadConversations();
+      resetMessagingProfileMemory();
+      resolve([
+        {
+          conversationId: 'profile-a-conversation',
+          peerId: 'peer-a',
+          lastMessage: 'secret',
+          lastMessageAt: 1,
+          unreadCount: 0,
+        },
+      ]);
+      await loading;
+
+      expect(useMessagingStore.getState().conversations).toEqual([]);
+      expect(useMessagingStore.getState().isLoading).toBe(false);
+    });
+
     it('should load conversations from backend', async () => {
       const mockConversations = [
         {
@@ -54,7 +91,7 @@ describe('useMessagingStore', () => {
           conversationId: 'conv-1',
           senderPeerId: 'peer-alice',
           recipientPeerId: 'peer-me',
-          content: 'Hello!',
+          contentState: { kind: 'plaintext' as const, text: 'Hello!' },
           contentType: 'text',
           replyToMessageId: null,
           sentAt: 1700000100,
@@ -80,6 +117,75 @@ describe('useMessagingStore', () => {
 
       expect(useMessagingStore.getState().error).toContain('Messages error');
     });
+
+    it('keeps the newest peer authoritative when an old peer resolves last', async () => {
+      const oldMessages = deferred<unknown>();
+      const messageB = {
+        messageId: 'msg-b',
+        conversationId: 'conv-b',
+        senderPeerId: 'peer-bob',
+        recipientPeerId: 'peer-me',
+        contentState: { kind: 'plaintext' as const, text: 'current peer' },
+        contentType: 'text',
+        replyToMessageId: null,
+        sentAt: 2,
+        deliveredAt: null,
+        readAt: null,
+        status: 'delivered' as const,
+        isOutgoing: false,
+        editedAt: null,
+      };
+      vi.mocked(invoke).mockImplementation((command, args) => {
+        if (command !== 'get_messages') return Promise.resolve([]);
+        return (args as { peerId: string }).peerId === 'peer-alice'
+          ? oldMessages.promise
+          : Promise.resolve([messageB]);
+      });
+
+      useMessagingStore.getState().setActiveConversation('peer-alice');
+      useMessagingStore.getState().setActiveConversation('peer-bob');
+      await vi.waitFor(() =>
+        expect(useMessagingStore.getState().messages['peer-bob']).toEqual([messageB]),
+      );
+      oldMessages.resolve([
+        {
+          ...messageB,
+          messageId: 'msg-a',
+          senderPeerId: 'peer-alice',
+          contentState: { kind: 'plaintext' as const, text: 'stale peer' },
+        },
+      ]);
+      await Promise.resolve();
+
+      expect(useMessagingStore.getState()).toMatchObject({
+        activeConversation: 'peer-bob',
+        isLoading: false,
+        error: null,
+      });
+      expect(useMessagingStore.getState().messages['peer-alice']).toBeUndefined();
+    });
+
+    it('does not let an old peer error replace the current peer state', async () => {
+      const oldMessages = deferred<unknown>();
+      vi.mocked(invoke).mockImplementation((command, args) => {
+        if (command !== 'get_messages') return Promise.resolve([]);
+        return (args as { peerId: string }).peerId === 'peer-alice'
+          ? oldMessages.promise
+          : Promise.resolve([]);
+      });
+
+      useMessagingStore.getState().setActiveConversation('peer-alice');
+      useMessagingStore.getState().setActiveConversation('peer-bob');
+      await vi.waitFor(() => expect(useMessagingStore.getState().isLoading).toBe(false));
+      oldMessages.reject(new Error('stale peer failure'));
+      await Promise.resolve();
+
+      expect(useMessagingStore.getState()).toMatchObject({
+        activeConversation: 'peer-bob',
+        isLoading: false,
+        error: null,
+      });
+    });
   });
 
   describe('sendMessage', () => {
@@ -88,6 +194,7 @@ describe('useMessagingStore', () => {
         messageId: 'msg-new',
         conversationId: 'conv-1',
         sentAt: 1700000200,
+        status: 'queued' as const,
       };
       // First call: send_message, subsequent calls: get_conversations (from loadConversations)
       vi.mocked(invoke).mockResolvedValueOnce(sendResult).mockResolvedValueOnce([]); // loadConversations
@@ -103,8 +210,9 @@ describe('useMessagingStore', () => {
 
       const messages = useMessagingStore.getState().messages['peer-alice'];
       expect(messages).toHaveLength(1);
-      expect(messages[0].content).toBe('Hi Alice!');
+      expect(messages[0].contentState).toEqual({ kind: 'plaintext', text: 'Hi Alice!' });
       expect(messages[0].isOutgoing).toBe(true);
+      expect(messages[0].status).toBe('queued');
     });
 
     it('should throw on send failure', async () => {
@@ -165,7 +273,7 @@ describe('useMessagingStore', () => {
         conversationId: 'conv-1',
         senderPeerId: 'peer-alice',
         recipientPeerId: 'peer-me',
-        content: 'Hey there!',
+        contentState: { kind: 'plaintext' as const, text: 'Hey there!' },
         contentType: 'text',
         replyToMessageId: null,
         sentAt: 1700000300,
@@ -180,7 +288,7 @@ describe('useMessagingStore', () => {
 
       const messages = useMessagingStore.getState().messages['peer-alice'];
       expect(messages).toHaveLength(1);
-      expect(messages[0].content).toBe('Hey there!');
+      expect(messages[0].contentState).toEqual({ kind: 'plaintext', text: 'Hey there!' });
     });
 
     it('should append to existing messages for a peer', () => {
@@ -192,7 +300,7 @@ describe('useMessagingStore', () => {
               conversationId: 'conv-1',
               senderPeerId: 'peer-alice',
               recipientPeerId: 'peer-me',
-              content: 'First message',
+              contentState: { kind: 'plaintext', text: 'First message' },
               contentType: 'text',
               replyToMessageId: null,
               sentAt: 1700000100,
@@ -212,7 +320,7 @@ describe('useMessagingStore', () => {
         conversationId: 'conv-1',
         senderPeerId: 'peer-alice',
         recipientPeerId: 'peer-me',
-        content: 'Second message',
+        contentState: { kind: 'plaintext' as const, text: 'Second message' },
         contentType: 'text',
         replyToMessageId: null,
         sentAt: 1700000200,
@@ -267,7 +375,7 @@ describe('useMessagingStore', () => {
               conversationId: 'conv-1',
               senderPeerId: 'peer-me',
               recipientPeerId: 'peer-alice',
-              content: 'Original',
+              contentState: { kind: 'plaintext', text: 'Original' },
               contentType: 'text',
               replyToMessageId: null,
               sentAt: 1700000100,
@@ -286,7 +394,7 @@ describe('useMessagingStore', () => {
       await useMessagingStore.getState().editMessage('msg-1', 'Edited content', 'peer-alice');
 
       const msg = useMessagingStore.getState().messages['peer-alice'][0];
-      expect(msg.content).toBe('Edited content');
+      expect(msg.contentState).toEqual({ kind: 'plaintext', text: 'Edited content' });
       expect(msg.editedAt).not.toBeNull();
     });
 
@@ -299,7 +407,7 @@ describe('useMessagingStore', () => {
               conversationId: 'conv-1',
               senderPeerId: 'peer-me',
               recipientPeerId: 'peer-alice',
-              content: 'Original',
+              contentState: { kind: 'plaintext', text: 'Original' },
               contentType: 'text',
               replyToMessageId: null,
               sentAt: 1700000100,
@@ -331,7 +439,7 @@ describe('useMessagingStore', () => {
               conversationId: 'conv-1',
               senderPeerId: 'peer-alice',
               recipientPeerId: 'peer-me',
-              content: 'message',
+              contentState: { kind: 'plaintext', text: 'message' },
               contentType: 'text',
               replyToMessageId: null,
               sentAt: 1700000100,
@@ -353,6 +461,36 @@ describe('useMessagingStore', () => {
 
       expect(useMessagingStore.getState().messages['peer-alice']).toBeUndefined();
     });
+
+    it('rejects a structured failure without clearing the confirmed message history', async () => {
+      const message = {
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        senderPeerId: 'peer-alice',
+        recipientPeerId: 'peer-me',
+        contentState: { kind: 'plaintext' as const, text: 'keep me' },
+        contentType: 'text',
+        replyToMessageId: null,
+        sentAt: 1700000100,
+        deliveredAt: null,
+        readAt: null,
+        status: 'delivered' as const,
+        isOutgoing: false,
+        editedAt: null,
+      };
+      useMessagingStore.setState({ messages: { 'peer-alice': [message] } });
+      vi.mocked(invoke).mockRejectedValue({
+        code: 'DATABASE_ERROR',
+        message: 'History could not be cleared',
+      });
+
+      await expect(
+        useMessagingStore.getState().clearConversationHistory('peer-alice'),
+      ).rejects.toMatchObject({ code: 'DATABASE_ERROR' });
+
+      expect(useMessagingStore.getState().messages['peer-alice']).toEqual([message]);
+      expect(useMessagingStore.getState().error).toBe('History could not be cleared');
+    });
   });
 
   describe('deleteConversation', () => {
@@ -365,7 +503,7 @@ describe('useMessagingStore', () => {
               conversationId: 'conv-1',
               senderPeerId: 'peer-alice',
               recipientPeerId: 'peer-me',
-              content: 'message',
+              contentState: { kind: 'plaintext', text: 'message' },
               contentType: 'text',
               replyToMessageId: null,
               sentAt: 1700000100,

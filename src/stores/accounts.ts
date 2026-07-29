@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AccountInfo } from '../types';
 import { accountsService } from '../services';
+import { getErrorMessage } from '../utils/errors';
 
 interface AccountsStore {
   accounts: AccountInfo[];
@@ -31,7 +32,7 @@ export const useAccountsStore = create<AccountsStore>((set) => ({
       set({ accounts, activeAccount, loading: false });
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
         loading: false,
       });
     }
@@ -43,7 +44,7 @@ export const useAccountsStore = create<AccountsStore>((set) => ({
       const activeAccount = await accountsService.setActiveAccount(accountId);
       set({ activeAccount });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
       throw err;
     }
   },
@@ -57,7 +58,7 @@ export const useAccountsStore = create<AccountsStore>((set) => ({
       const activeAccount = await accountsService.getActiveAccount();
       set({ accounts, activeAccount });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: getErrorMessage(err) });
       throw err;
     }
   },

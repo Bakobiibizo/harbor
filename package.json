@@ -2,6 +2,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
@@ -33,15 +34,22 @@
   "name": "harbor",
   "private": true,
   "scripts": {
-    "build": "node scripts/validate-relay-namespace.mjs && tsc && vite build && node scripts/validate-relay-namespace.mjs --dist",
+    "build": "node scripts/validate-release-webview-origin.mjs && node scripts/validate-relay-namespace.mjs && tsc && vite build && node scripts/validate-relay-namespace.mjs --dist",
+    "ci:platforms": "bash scripts/build-platform-matrix.sh",
+    "validate:release-origin": "node scripts/validate-release-webview-origin.mjs",
     "validate:namespace": "node scripts/validate-relay-namespace.mjs",
     "dev": "vite",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/run-tauri.mjs",
     "test": "vitest run",
+    "test:acceptance-gate": "node --test scripts/live-beta-acceptance.node-test.mjs",
+    "test:call-harness": "node --test scripts/cross-host-call-harness.node-test.mjs",
+    "test:linux-webrtc-runtime": "node --test scripts/linux-webrtc-runtime.node-test.mjs",
+    "test:release-origin": "node --test scripts/release-webview-origin.node-test.mjs",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "acceptance:live-beta": "node scripts/live-beta-acceptance.mjs"
   },
   "type": "module",
-  "version": "1.4.1-beta.6"
+  "version": "1.4.1-beta.7"
 }

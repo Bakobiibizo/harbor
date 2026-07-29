@@ -102,6 +102,14 @@
   --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-spring: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
+  /* Themeable interaction feedback. These inherit the active Harbor color theme. */
+  --harbor-interaction-hover-filter: brightness(1.08);
+  --harbor-interaction-pressed-filter: brightness(0.94);
+  --harbor-interaction-selected-ring: 0 0 0 2px hsl(var(--harbor-primary) / 0.55);
+  --harbor-interaction-focus-ring: 0 0 0 3px hsl(var(--harbor-primary) / 0.35);
+  --harbor-interaction-disabled-opacity: 0.48;
+  --harbor-interaction-loading-opacity: 0.72;
+
   /* Z-index Scale */
   --z-dropdown: 50;
   --z-sticky: 100;
@@ -333,6 +341,109 @@ body {
 :focus-visible {
   outline: 2px solid hsl(var(--harbor-primary));
   outline-offset: 2px;
+}
+
+/* ============================================
+   Shared Interaction Feedback
+   ============================================ */
+
+:where(button, a[href], [role='button'], .card-interactive, .harbor-interactive) {
+  cursor: pointer;
+  transition-property: color, background-color, border-color, box-shadow, filter, opacity;
+  transition-duration: var(--transition-fast);
+  transition-timing-function: ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, a[href], [role='button'], .card-interactive, .harbor-interactive):hover:not(
+    :disabled
+  ) {
+  filter: var(--harbor-interaction-hover-filter);
+}
+
+:where(button, a[href], [role='button'], .card-interactive, .harbor-interactive):active:not(
+    :disabled
+  ) {
+  filter: var(--harbor-interaction-pressed-filter);
+}
+
+:where(button, a[href], [role='button'], .card-interactive, .harbor-interactive):focus-visible {
+  outline: none;
+  box-shadow: var(--harbor-interaction-focus-ring);
+}
+
+:where(
+  [aria-current='page'],
+  [aria-pressed='true'],
+  [aria-selected='true'],
+  [data-selected='true']
+) {
+  box-shadow: var(--harbor-interaction-selected-ring);
+}
+
+:where(button:disabled, [aria-disabled='true']) {
+  cursor: not-allowed;
+  filter: none;
+  opacity: var(--harbor-interaction-disabled-opacity);
+}
+
+:where([aria-busy='true'], [data-loading='true']) {
+  cursor: progress;
+  opacity: var(--harbor-interaction-loading-opacity);
+}
+
+.harbor-button {
+  border: 1px solid transparent;
+  color: hsl(var(--harbor-text-inverse));
+}
+
+.harbor-button--primary {
+  background: hsl(var(--harbor-primary));
+  border-color: hsl(var(--harbor-primary-dark));
+  color: hsl(var(--harbor-text-inverse));
+}
+
+.harbor-button--secondary {
+  background: hsl(var(--harbor-surface-2));
+  border-color: hsl(var(--harbor-border-subtle));
+  color: hsl(var(--harbor-text-primary));
+}
+
+.harbor-button--ghost {
+  background: transparent;
+  color: hsl(var(--harbor-text-secondary));
+}
+
+.harbor-button--danger {
+  background: hsl(var(--harbor-error));
+  border-color: hsl(var(--harbor-error) / 0.75);
+  color: hsl(var(--harbor-text-inverse));
+}
+
+.harbor-field {
+  transition-property: background-color, border-color, box-shadow, color, opacity;
+  transition-duration: var(--transition-fast);
+}
+
+.harbor-field:focus-visible {
+  border-color: hsl(var(--harbor-primary));
+  box-shadow: var(--harbor-interaction-focus-ring);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ============================================

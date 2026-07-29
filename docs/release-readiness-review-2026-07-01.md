@@ -38,7 +38,7 @@ From UI/source inspection:
 
 - `src/pages/Feed.tsx` still uses placeholders for likes, saved posts, hiding posts, and snoozing contacts.
 - `src/pages/Wall.tsx` still shows “Comments coming soon!” for journal/wall post comments.
-- `src/pages/settings/SecuritySection.tsx` simulates passphrase change, account import/recovery, and account deletion. Export uses `ENCRYPTED_KEY_DATA_PLACEHOLDER` rather than a real encrypted identity backup payload.
+- `src/pages/settings/SecuritySection.tsx` simulates password change, account import/recovery, and account deletion. Export uses `ENCRYPTED_KEY_DATA_PLACEHOLDER` rather than a real encrypted identity backup payload.
 - `CLAUDE.md` still says chat/feed rely on mock peers for substantial testing/demo behavior.
 - `src/hooks/useKeyboardNavigation.ts` marks Ctrl+K quick search as a future feature.
 
@@ -68,7 +68,7 @@ Commands run during this review:
 2. Fix release docs/security docs/version support and normalize `CHANGELOG.md`.
 3. Fix GitHub CI so frontend TypeScript CI, Tauri/Rust CI, and relay checks all run intentionally.
 4. Resolve relay clippy warnings or adjust the release gate explicitly.
-5. Replace simulated security/account flows with real backend-backed passphrase change, encrypted backup export/import, and account deletion, or clearly mark them non-release features.
+5. Replace simulated security/account flows with real backend-backed password change, encrypted backup export/import, and account deletion, or clearly mark them non-release features.
 6. Decide whether mock peers are demo-only or still part of product behavior; document and gate accordingly.
 7. Finish or intentionally defer Feed likes/save/hide/snooze and Wall comments.
 8. Re-run full release validation: TypeScript CI, Tauri Rust CI, relay check/clippy/tests, Tauri build, and updater artifact verification.

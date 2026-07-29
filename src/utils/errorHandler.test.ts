@@ -1,12 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  safeInvoke,
-  showErrorToast,
-  showSuccessToast,
-  handleError,
-  HarborError,
-} from './errorHandler';
-import { invoke } from '@tauri-apps/api/core';
+import { showErrorToast, showSuccessToast, handleError, HarborError } from './errorHandler';
 import toast from 'react-hot-toast';
 
 vi.mock('./logger', () => ({
@@ -17,65 +10,6 @@ vi.mock('./logger', () => ({
     error: vi.fn(),
   }),
 }));
-
-describe('safeInvoke', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('should call invoke with command and args, returning the result', async () => {
-    vi.mocked(invoke).mockResolvedValue({ data: 'test' });
-
-    const result = await safeInvoke<{ data: string }>('test_command', { key: 'value' });
-
-    expect(invoke).toHaveBeenCalledWith('test_command', { key: 'value' });
-    expect(result).toEqual({ data: 'test' });
-  });
-
-  it('should throw HarborError on failure and show toast by default', async () => {
-    vi.mocked(invoke).mockRejectedValue(new Error('Command failed'));
-
-    await expect(safeInvoke('failing_command')).rejects.toThrow();
-    expect(toast.error).toHaveBeenCalled();
-  });
-
-  it('should not show toast when showToast is false', async () => {
-    vi.mocked(invoke).mockRejectedValue(new Error('Command failed'));
-
-    await expect(safeInvoke('failing_command', undefined, { showToast: false })).rejects.toThrow();
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it('should retry on recoverable errors when retryCount > 0', async () => {
-    vi.mocked(invoke)
-      .mockRejectedValueOnce(new HarborError({ code: 'NETWORK_TIMEOUT', message: 'Timeout' }))
-      .mockResolvedValueOnce('success');
-
-    const result = await safeInvoke<string>('retry_command', undefined, {
-      retryCount: 1,
-      retryDelay: 10,
-    });
-
-    expect(result).toBe('success');
-    expect(invoke).toHaveBeenCalledTimes(2);
-  });
-
-  it('should throw after all retries are exhausted', async () => {
-    const error = new HarborError({
-      code: 'NETWORK_TIMEOUT',
-      message: 'Timeout',
-    });
-    vi.mocked(invoke).mockRejectedValue(error);
-
-    await expect(
-      safeInvoke('retry_command', undefined, {
-        retryCount: 1,
-        retryDelay: 10,
-      }),
-    ).rejects.toThrow();
-    expect(invoke).toHaveBeenCalledTimes(2);
-  });
-});
 
 describe('showErrorToast', () => {
   beforeEach(() => {

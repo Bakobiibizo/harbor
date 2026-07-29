@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::protocols::board_sync::{WallPostMediaItem, WallSocialEventItem};
 use super::protocols::signaling::SignalingEnvelope;
+use crate::services::MediaTransferState;
 
 /// Network connection status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +87,14 @@ pub enum NetworkEvent {
         peer_id: String,
         display_name: String,
     },
+    /// A durable contact-request row changed state.
+    ContactRequestChanged {
+        request_id: String,
+        peer_id: String,
+        display_name: Option<String>,
+        direction: String,
+        status: String,
+    },
     /// NAT status changed
     NatStatusChanged { status: NatStatus },
     /// Successfully connected to a relay and have a relay address
@@ -151,6 +160,20 @@ pub enum NetworkEvent {
         status: String,
         timestamp: i64,
     },
+    /// Durable delivery state changed for an outgoing message.
+    MessageDeliveryChanged {
+        message_id: String,
+        status: String,
+        timestamp: i64,
+        error: Option<String>,
+    },
+    /// Durable publication state for the latest local mutation of a post.
+    PostRelayStatusChanged {
+        post_id: String,
+        event_id: String,
+        status: String,
+        error: Option<String>,
+    },
     /// A wall post was successfully stored on a relay
     WallPostSynced {
         relay_peer_id: String,
@@ -169,6 +192,11 @@ pub enum NetworkEvent {
     },
     /// Media was fetched from a peer and stored locally
     MediaFetched { peer_id: String, media_hash: String },
+    /// Canonical per-hash attachment lifecycle update for internal UI state.
+    MediaTransferChanged {
+        profile_id: String,
+        state: MediaTransferState,
+    },
     /// A verified call signaling message was received from a peer
     CallSignalingReceived {
         peer_id: String,
@@ -194,7 +222,14 @@ pub enum NetworkCommand {
     SendMessage {
         peer_id: PeerId,
         protocol: String,
+        /// Durable application event identifier for this exact wire payload.
+        event_id: String,
+        /// Logical message identifier expected in the remote acknowledgement.
+        message_id: String,
         payload: Vec<u8>,
+        /// Completed only when the matching libp2p request receives a response
+        /// or reaches a terminal transport/deadline/runtime state.
+        response_tx: tokio::sync::oneshot::Sender<NetworkResponse>,
     },
     /// Send a signed call signaling envelope to a peer.
     ///
@@ -209,6 +244,12 @@ pub enum NetworkCommand {
     /// Request identity from a peer
     RequestIdentity {
         peer_id: PeerId,
+        request_id: String,
+        action: String,
+        /// Exact grants already committed with the contact acceptance.
+        permission_grants: Option<Vec<crate::services::PermissionGrantMessage>>,
+        /// Exact revocations already committed with relationship teardown.
+        permission_revocations: Option<Vec<crate::services::PermissionRevokeMessage>>,
     },
     /// Get current network stats
     GetStats,
@@ -356,6 +397,11 @@ pub enum NetworkCommand {
 #[derive(Debug)]
 pub enum NetworkResponse {
     Ok,
+    IdentityQueued {
+        connected: bool,
+    },
+    MessageDelivered(MessageDeliveryReceipt),
+    MessageDeliveryFailed(MessageDeliveryFailure),
     Stats(NetworkStats),
     Peers(Vec<PeerInfo>),
     Addresses(Vec<String>),
@@ -375,6 +421,77 @@ pub enum NetworkResponse {
         expires_at: i64,
     },
     Error(String),
+}
+
+/// A remote peer accepted the exact message event submitted for this attempt.
+/// The durable event ID is the stable correlation key across retries/restarts;
+/// libp2p's outbound request ID remains an in-process transport correlation key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageDeliveryReceipt {
+    pub event_id: String,
+    pub message_id: String,
+}
+
+/// Stable terminal categories for one direct-message transport attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDeliveryFailureKind {
+    Rejected,
+    InvalidResponse,
+    Network,
+    Timeout,
+    Disconnected,
+    Cancelled,
+    Shutdown,
+    RuntimeUnavailable,
+}
+
+impl MessageDeliveryFailureKind {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Rejected => "MESSAGE_REJECTED",
+            Self::InvalidResponse => "MESSAGE_INVALID_RESPONSE",
+            Self::Network => "MESSAGE_NETWORK_FAILURE",
+            Self::Timeout => "MESSAGE_REQUEST_TIMEOUT",
+            Self::Disconnected => "MESSAGE_PEER_DISCONNECTED",
+            Self::Cancelled => "MESSAGE_REQUEST_CANCELLED",
+            Self::Shutdown => "MESSAGE_RUNTIME_SHUTDOWN",
+            Self::RuntimeUnavailable => "MESSAGE_RUNTIME_UNAVAILABLE",
+        }
+    }
+
+    pub fn retryable(self) -> bool {
+        matches!(
+            self,
+            Self::Network
+                | Self::Timeout
+                | Self::Disconnected
+                | Self::Cancelled
+                | Self::Shutdown
+                | Self::RuntimeUnavailable
+        )
+    }
+}
+
+/// Typed failure returned to the durable outbox driver. `event_id` is stable
+/// across retry attempts while libp2p request IDs are intentionally ephemeral.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageDeliveryFailure {
+    pub event_id: String,
+    pub message_id: String,
+    pub kind: MessageDeliveryFailureKind,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageDeliveryAttemptOutcome {
+    Delivered(MessageDeliveryReceipt),
+    Failed(MessageDeliveryFailure),
+}
+
+impl MessageDeliveryFailure {
+    pub fn stable_message(&self) -> String {
+        format!("{}: {}", self.kind.code(), self.detail)
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +521,45 @@ mod tests {
         assert_eq!(json["cursor"], 42);
         assert!(json.get("content_text").is_none());
         assert!(json.get("media_bytes").is_none());
+    }
+
+    #[test]
+    fn contact_request_event_exposes_state_but_not_identity_keys() {
+        let event = NetworkEvent::ContactRequestChanged {
+            request_id: "request-1".into(),
+            peer_id: "peer-1".into(),
+            display_name: Some("Alice".into()),
+            direction: "incoming".into(),
+            status: "review".into(),
+        };
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["type"], "contact_request_changed");
+        assert_eq!(json["status"], "review");
+        assert!(json.get("public_key").is_none());
+        assert!(json.get("x25519_public").is_none());
+    }
+
+    #[test]
+    fn media_transfer_event_is_correlated_to_its_profile() {
+        let event = NetworkEvent::MediaTransferChanged {
+            profile_id: "peer-a".into(),
+            state: crate::services::MediaTransferState {
+                media_hash: "a".repeat(64),
+                source_peer_id: Some("peer-b".into()),
+                media_type: "image".into(),
+                mime_type: Some("image/png".into()),
+                file_name: None,
+                total_bytes: Some(10),
+                bytes_received: 5,
+                status: "transferring".into(),
+                attempt_count: 1,
+                error_code: None,
+                error_message: None,
+                updated_at: 1,
+            },
+        };
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["type"], "media_transfer_changed");
+        assert_eq!(json["profile_id"], "peer-a");
     }
 }

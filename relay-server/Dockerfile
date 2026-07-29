@@ -14,10 +14,13 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/harbor-relay /usr/local/bin/harbor-relay
+COPY resource-limits.env /etc/harbor-relay/resource-limits.env
+COPY docker-entrypoint.sh /usr/local/bin/harbor-relay-entrypoint
 
 # Persist identity key and any future state
 RUN mkdir -p /var/lib/harbor-relay \
-    && chown -R relay:relay /var/lib/harbor-relay
+    && chown -R relay:relay /var/lib/harbor-relay \
+    && chmod 0755 /usr/local/bin/harbor-relay-entrypoint
 
 USER relay
 ENV RUST_LOG=info \
@@ -26,4 +29,4 @@ ENV RUST_LOG=info \
 EXPOSE 4001/tcp
 EXPOSE 4001/udp
 
-ENTRYPOINT ["/usr/local/bin/harbor-relay"]
+ENTRYPOINT ["/usr/local/bin/harbor-relay-entrypoint"]

@@ -1,4 +1,5 @@
 export * from './accounts';
+export * from './accountBackup';
 export * from './boards';
 export * from './identity';
 export * from './network';
@@ -9,3 +10,4 @@ export * from './posts';
 export * from './feed';
 export * from './calling';
 export * from './mentions';
+export * from './media';

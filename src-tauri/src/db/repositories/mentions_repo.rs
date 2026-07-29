@@ -23,6 +23,14 @@ pub struct QueuedMentionEnvelope {
     pub expires_at: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedNameClaim {
+    pub peer_id: String,
+    pub digest: String,
+    pub x25519_public_key: Vec<u8>,
+    pub claim: NameClaim,
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -59,8 +67,8 @@ impl<'a> MentionsRepository<'a> {
     pub fn new(db: &'a Database) -> Self {
         Self { db }
     }
-    pub fn resolve_claim(&self, name: &str) -> Result<Option<(String, String, Vec<u8>)>> {
-        self.db.with_connection(|c| c.query_row("SELECT peer_id,claim_cbor FROM relay_name_claims WHERE qualified_name=? AND status='active' AND not_after>=strftime('%s','now') ORDER BY sequence DESC LIMIT 1",[name],|r|{let peer:String=r.get(0)?;let bytes:Vec<u8>=r.get(1)?;let claim:NameClaim=ciborium::de::from_reader(bytes.as_slice()).map_err(|e|rusqlite::Error::FromSqlConversionFailure(bytes.len(),rusqlite::types::Type::Blob,Box::new(e)))?;Ok((peer,hex::encode(Sha256::digest(&bytes)),claim.request.x25519_public_key))}).optional())
+    pub fn resolve_claim(&self, name: &str) -> Result<Option<ResolvedNameClaim>> {
+        self.db.with_connection(|c| c.query_row("SELECT peer_id,claim_cbor FROM relay_name_claims WHERE qualified_name=? AND status='active' AND not_after>=strftime('%s','now') ORDER BY sequence DESC LIMIT 1",[name],|r|{let peer_id:String=r.get(0)?;let bytes:Vec<u8>=r.get(1)?;let claim:NameClaim=ciborium::de::from_reader(bytes.as_slice()).map_err(|e|rusqlite::Error::FromSqlConversionFailure(bytes.len(),rusqlite::types::Type::Blob,Box::new(e)))?;Ok(ResolvedNameClaim { peer_id, digest: hex::encode(Sha256::digest(&bytes)), x25519_public_key: claim.request.x25519_public_key.clone(), claim })}).optional())
     }
     #[allow(clippy::too_many_arguments)]
     pub fn insert(

@@ -9,8 +9,8 @@ Before tagging, confirm `src-tauri/tauri.conf.json` points at the canonical rele
 Run from the repository root:
 
 ```bash
-.dev/bin/dev ci --language typescript
-.dev/bin/dev ci --language rust
+dev ci --language typescript
+dev ci --language rust
 cargo fmt --manifest-path relay-server/Cargo.toml -- --check
 cargo check --manifest-path relay-server/Cargo.toml
 cargo clippy --manifest-path relay-server/Cargo.toml -- -D warnings

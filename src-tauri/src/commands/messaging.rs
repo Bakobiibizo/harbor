@@ -1,17 +1,15 @@
 //! Tauri commands for direct messaging
 
-use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use std::sync::Arc;
 use tauri::State;
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::commands::network::NetworkState;
 use crate::db::repositories::Conversation;
 use crate::error::AppError;
-use crate::p2p::protocols::messaging::{DirectMessage, MessagingCodec, MessagingMessage};
-use crate::services::{DecryptedMessage, MessagingService, OutgoingMessage};
+use crate::services::{
+    DecryptedMessage, MessageContentState, MessagingPrivacyPolicy, MessagingService,
+};
 
 /// Message info for the frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +19,7 @@ pub struct MessageInfo {
     pub conversation_id: String,
     pub sender_peer_id: String,
     pub recipient_peer_id: String,
-    pub content: String,
+    pub content_state: MessageContentState,
     pub content_type: String,
     pub reply_to_message_id: Option<String>,
     pub sent_at: i64,
@@ -39,7 +37,7 @@ impl From<DecryptedMessage> for MessageInfo {
             conversation_id: msg.conversation_id,
             sender_peer_id: msg.sender_peer_id,
             recipient_peer_id: msg.recipient_peer_id,
-            content: msg.content,
+            content_state: msg.content_state,
             content_type: msg.content_type,
             reply_to_message_id: msg.reply_to_message_id,
             sent_at: msg.sent_at,
@@ -80,30 +78,13 @@ pub struct SendMessageResult {
     pub message_id: String,
     pub conversation_id: String,
     pub sent_at: i64,
-}
-
-/// Convert OutgoingMessage to DirectMessage for network transmission
-fn outgoing_to_direct_message(outgoing: &OutgoingMessage) -> DirectMessage {
-    DirectMessage {
-        message_id: outgoing.message_id.clone(),
-        conversation_id: outgoing.conversation_id.clone(),
-        sender_peer_id: outgoing.sender_peer_id.clone(),
-        recipient_peer_id: outgoing.recipient_peer_id.clone(),
-        content_encrypted: outgoing.content_encrypted.clone(),
-        content_type: outgoing.content_type.clone(),
-        reply_to: outgoing.reply_to.clone(),
-        nonce_counter: outgoing.nonce_counter,
-        lamport_clock: outgoing.lamport_clock,
-        timestamp: outgoing.timestamp,
-        signature: outgoing.signature.clone(),
-    }
+    pub status: String,
 }
 
 /// Send a message to a peer
 #[tauri::command]
 pub async fn send_message(
     messaging_service: State<'_, Arc<MessagingService>>,
-    network: State<'_, NetworkState>,
     peer_id: String,
     content: String,
     content_type: Option<String>,
@@ -115,28 +96,16 @@ pub async fn send_message(
     let outgoing =
         messaging_service.send_message(&peer_id, &content, &content_type, reply_to.as_deref())?;
 
-    // Convert to DirectMessage and encode for network transmission
-    let direct_msg = outgoing_to_direct_message(&outgoing);
-    let msg_wrapper = MessagingMessage::Message(direct_msg);
-    let payload = MessagingCodec::encode(&msg_wrapper)
-        .map_err(|e| AppError::Internal(format!("Failed to encode message: {}", e)))?;
-
-    // Parse the peer ID
-    let libp2p_peer_id = PeerId::from_str(&peer_id)
-        .map_err(|e| AppError::Validation(format!("Invalid peer ID: {}", e)))?;
-
-    // Send over the network
-    let handle = network.get_handle().await?;
-    handle
-        .send_message(libp2p_peer_id, "message".to_string(), payload)
-        .await?;
-
-    info!("Message {} sent to peer {}", outgoing.message_id, peer_id);
+    info!(
+        "Message {} queued for peer {}",
+        outgoing.message_id, peer_id
+    );
 
     Ok(SendMessageResult {
         message_id: outgoing.message_id,
         conversation_id: outgoing.conversation_id,
         sent_at: outgoing.timestamp,
+        status: "queued".to_string(),
     })
 }
 
@@ -175,6 +144,23 @@ pub async fn mark_conversation_read(
     peer_id: String,
 ) -> Result<i64, AppError> {
     messaging_service.mark_conversation_read(&peer_id)
+}
+
+/// Return the selected profile's authoritative messaging privacy policy.
+#[tauri::command]
+pub async fn get_messaging_privacy_policy(
+    messaging_service: State<'_, Arc<MessagingService>>,
+) -> Result<MessagingPrivacyPolicy, AppError> {
+    messaging_service.privacy_policy()
+}
+
+/// Persist read-receipt policy before the UI reflects the requested value.
+#[tauri::command]
+pub async fn set_read_receipts_enabled(
+    messaging_service: State<'_, Arc<MessagingService>>,
+    enabled: bool,
+) -> Result<MessagingPrivacyPolicy, AppError> {
+    messaging_service.set_read_receipts_enabled(enabled)
 }
 
 /// Get unread count for a conversation
@@ -220,37 +206,68 @@ pub async fn delete_conversation(
 #[tauri::command]
 pub async fn edit_message(
     messaging_service: State<'_, Arc<MessagingService>>,
-    network: State<'_, NetworkState>,
     message_id: String,
     new_content: String,
     peer_id: String,
 ) -> Result<(), AppError> {
     info!("Editing message {}", message_id);
 
-    // Update locally
-    messaging_service.edit_message(&message_id, &new_content)?;
-
-    // Best-effort sync to peer: send an EditMessage over the network
-    let edit_msg = MessagingMessage::EditMessage {
-        message_id: message_id.clone(),
-        new_content: new_content.clone(),
-        edited_at: chrono::Utc::now().timestamp(),
-    };
-
-    if let Ok(payload) = MessagingCodec::encode(&edit_msg) {
-        let libp2p_peer_id = PeerId::from_str(&peer_id)
-            .map_err(|e| AppError::Validation(format!("Invalid peer ID: {}", e)))?;
-
-        if let Ok(handle) = network.get_handle().await {
-            let _ = handle
-                .send_message(libp2p_peer_id, "message".to_string(), payload)
-                .await;
-            info!(
-                "Edit for message {} sent to peer {} (best effort)",
-                message_id, peer_id
-            );
-        }
+    let outgoing = messaging_service.edit_message(&message_id, &new_content)?;
+    if outgoing.recipient_peer_id != peer_id {
+        warn!(
+            "Ignoring caller-supplied edit recipient {}; original message is bound to {}",
+            peer_id, outgoing.recipient_peer_id
+        );
     }
+    info!(
+        "Edit event {} for message {} queued for peer {}",
+        outgoing.event_id, message_id, outgoing.recipient_peer_id
+    );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message_with(content_state: MessageContentState) -> MessageInfo {
+        MessageInfo::from(DecryptedMessage {
+            message_id: "message-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            sender_peer_id: "sender".to_string(),
+            recipient_peer_id: "recipient".to_string(),
+            content_state,
+            content_type: "text".to_string(),
+            reply_to_message_id: None,
+            sent_at: 1,
+            delivered_at: None,
+            read_at: None,
+            status: "delivered".to_string(),
+            is_outgoing: false,
+            edited_at: None,
+        })
+    }
+
+    #[test]
+    fn message_ipc_serializes_plaintext_as_a_tagged_state() {
+        let json = serde_json::to_value(message_with(MessageContentState::Plaintext {
+            text: "hello".to_string(),
+        }))
+        .unwrap();
+
+        assert_eq!(json["contentState"]["kind"], "plaintext");
+        assert_eq!(json["contentState"]["text"], "hello");
+        assert!(json.get("content").is_none());
+    }
+
+    #[test]
+    fn message_ipc_failure_state_contains_no_authored_or_encrypted_material() {
+        let json = serde_json::to_value(message_with(MessageContentState::Tampered)).unwrap();
+
+        assert_eq!(json["contentState"]["kind"], "tampered");
+        assert!(json["contentState"].get("text").is_none());
+        assert!(json.get("content").is_none());
+        assert!(json.get("ciphertext").is_none());
+    }
 }

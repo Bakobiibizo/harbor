@@ -2,6 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useBoardsStore, useIdentityStore, useSettingsStore } from '../stores';
 import type { CommunityInfo, BoardInfo, BoardPost } from '../types/boards';
+import { safePeerLabel } from '../utils/relayName';
+import { getInitials } from '../utils/formatting';
+import { ModalityFilter } from '../components/common/ModalityFilter';
+import { matchesModalityFilter } from '../utils/postModality';
+import { getErrorMessage } from '../utils/errors';
 
 function formatTimeAgo(unixSeconds: number): string {
   const now = Date.now();
@@ -21,9 +26,8 @@ function formatTimeAgo(unixSeconds: number): string {
   return date.toLocaleDateString();
 }
 
-function shortPeerId(peerId: string): string {
-  if (peerId.length <= 16) return peerId;
-  return `${peerId.slice(0, 8)}...${peerId.slice(-6)}`;
+export function boardAuthorLabel(post: BoardPost): string {
+  return safePeerLabel(post.authorPeerId, post.authorVerifiedQualifiedName, post.authorDisplayName);
 }
 
 // Post card component
@@ -36,6 +40,7 @@ function PostCard({
   isOwnPost: boolean;
   onDelete: (postId: string) => void;
 }) {
+  const authorName = boardAuthorLabel(post);
   return (
     <div
       className="p-4 rounded-xl"
@@ -54,11 +59,11 @@ function PostCard({
                 'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
             }}
           >
-            {post.authorPeerId.slice(0, 2).toUpperCase()}
+            {getInitials(authorName)}
           </div>
           <div>
             <p className="text-sm font-medium" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
-              {post.authorVerifiedQualifiedName || `${shortPeerId(post.authorPeerId)} (unverified)`}
+              {authorName}
             </p>
             <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
               {formatTimeAgo(post.createdAt)}
@@ -255,7 +260,7 @@ function CommunityItem({
           {community.communityName || 'Harbor Community'}
         </p>
         <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-          {shortPeerId(community.relayPeerId)}
+          Community relay
         </p>
       </div>
       <button
@@ -295,7 +300,7 @@ function JoinCommunityForm({ onJoin }: { onJoin: (address: string) => Promise<vo
       setAddress('');
       toast.success('Joined community');
     } catch (error) {
-      toast.error(`Failed to join: ${error}`);
+      toast.error(`Failed to join: ${getErrorMessage(error)}`);
     } finally {
       setIsJoining(false);
     }
@@ -354,11 +359,13 @@ export function BoardsPage() {
     submitPost,
     deletePost,
     refreshBoard,
+    reset,
   } = useBoardsStore();
 
   useEffect(() => {
-    loadCommunities();
-  }, [loadCommunities]);
+    void loadCommunities();
+    return () => reset();
+  }, [loadCommunities, reset]);
 
   const handleDeletePost = async (postId: string) => {
     try {
@@ -383,10 +390,7 @@ export function BoardsPage() {
     }
   };
   const visibleBoardPosts = boardPosts.filter((post) => {
-    if (communityView === 'posts') return true;
-    const type =
-      communityView === 'images' ? 'image' : communityView === 'videos' ? 'video' : 'audio';
-    return post.contentType === type;
+    return matchesModalityFilter(communityView, post.contentType);
   });
 
   // Empty state - no communities joined
@@ -450,7 +454,10 @@ export function BoardsPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="p-6 border-b" style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}>
+      <div
+        className="harbor-page-gutter border-b"
+        style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
+      >
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold" style={{ color: 'hsl(var(--harbor-text-primary))' }}>
@@ -483,10 +490,10 @@ export function BoardsPage() {
         <JoinCommunityForm onJoin={joinCommunity} />
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="harbor-boards-content flex flex-1 overflow-hidden">
         {/* Community sidebar */}
         <div
-          className="w-56 border-r p-3 overflow-y-auto flex-shrink-0"
+          className="harbor-boards-community-sidebar w-56 flex-shrink-0 overflow-y-auto border-r p-3"
           style={{
             borderColor: 'hsl(var(--harbor-border-subtle))',
             background: 'hsl(var(--harbor-bg-elevated))',
@@ -498,7 +505,7 @@ export function BoardsPage() {
           >
             Communities
           </p>
-          <div className="space-y-1">
+          <div className="harbor-boards-community-list flex flex-col gap-1">
             {communities.map((community) => (
               <CommunityItem
                 key={community.relayPeerId}
@@ -520,33 +527,14 @@ export function BoardsPage() {
               </p>
             </div>
           ) : (
-            <div className="max-w-2xl mx-auto p-6 space-y-4">
+            <div className="harbor-page-gutter mx-auto max-w-2xl space-y-4">
               {/* Board tabs */}
               <BoardTabs boards={boards} activeBoard={activeBoard} onSelect={selectBoard} />
-              <div
-                className="grid grid-cols-4 border-b"
-                style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-              >
-                {(['posts', 'images', 'videos', 'audio'] as const).map((view) => (
-                  <button
-                    key={view}
-                    onClick={() => setCommunityView(view)}
-                    className="px-3 py-3 text-sm font-semibold capitalize"
-                    style={{
-                      color:
-                        communityView === view
-                          ? 'hsl(var(--harbor-primary))'
-                          : 'hsl(var(--harbor-text-secondary))',
-                      borderBottom:
-                        communityView === view
-                          ? '3px solid hsl(var(--harbor-primary))'
-                          : '3px solid transparent',
-                    }}
-                  >
-                    {view}
-                  </button>
-                ))}
-              </div>
+              <ModalityFilter
+                value={communityView}
+                onChange={setCommunityView}
+                label="Filter community posts"
+              />
 
               {/* Error display */}
               {error && (

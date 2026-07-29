@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
 import type { Message, Conversation, SendMessageResult } from '../types';
+import { invokeCommand } from './command';
 import { publishingPolicy } from './publishingPolicy';
 
 /** Messaging service - wraps Tauri commands */
@@ -12,7 +12,7 @@ export const messagingService = {
     replyTo?: string,
   ): Promise<SendMessageResult> {
     publishingPolicy.assertAllowed();
-    return invoke<SendMessageResult>('send_message', {
+    return invokeCommand('send_message', {
       peerId,
       content,
       contentType,
@@ -22,7 +22,7 @@ export const messagingService = {
 
   /** Get messages for a conversation */
   async getMessages(peerId: string, limit?: number, beforeTimestamp?: number): Promise<Message[]> {
-    return invoke<Message[]>('get_messages', {
+    return invokeCommand('get_messages', {
       peerId,
       limit,
       beforeTimestamp,
@@ -31,21 +31,36 @@ export const messagingService = {
 
   /** Get all conversations */
   async getConversations(): Promise<Conversation[]> {
-    return invoke<Conversation[]>('get_conversations');
+    return invokeCommand('get_conversations');
   },
 
   /** Mark a conversation as read */
   async markConversationRead(peerId: string): Promise<number> {
-    return invoke<number>('mark_conversation_read', { peerId });
+    return invokeCommand('mark_conversation_read', { peerId });
   },
 
   /** Get unread count for a conversation */
   async getUnreadCount(peerId: string): Promise<number> {
-    return invoke<number>('get_unread_count', { peerId });
+    return invokeCommand('get_unread_count', { peerId });
   },
 
   /** Get total unread count across all conversations */
   async getTotalUnreadCount(): Promise<number> {
-    return invoke<number>('get_total_unread_count');
+    return invokeCommand('get_total_unread_count');
+  },
+
+  /** Permanently remove all messages in a conversation while keeping its contact. */
+  async clearConversationHistory(peerId: string): Promise<void> {
+    return invokeCommand('clear_conversation_history', { peerId });
+  },
+
+  /** Permanently remove a conversation and its messages. */
+  async deleteConversation(peerId: string): Promise<void> {
+    return invokeCommand('delete_conversation', { peerId });
+  },
+
+  /** Edit a message already sent to a peer. */
+  async editMessage(messageId: string, newContent: string, peerId: string): Promise<void> {
+    return invokeCommand('edit_message', { messageId, newContent, peerId });
   },
 };

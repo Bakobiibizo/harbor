@@ -8,3 +8,6 @@ pub mod types;
 pub use config::NetworkConfig;
 pub use network::{NetworkHandle, NetworkService};
 pub use types::*;
+
+#[cfg(test)]
+mod startup_tests;

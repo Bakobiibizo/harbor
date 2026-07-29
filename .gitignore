@@ -40,6 +40,7 @@ dist-ssr
 
 # Rust / Tauri
 src-tauri/target/
+src-tauri/target-windows/
 src-tauri/WixTools/
 src-tauri/*.pdb
 
@@ -70,3 +71,7 @@ nul
 
 # Claude settings (local)
 .claude/
+
+# Devkit is installed globally; never commit platform binaries.
+.dev/bin/dev
+.dev/bin/dev.exe

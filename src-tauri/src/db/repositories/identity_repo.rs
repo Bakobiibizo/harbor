@@ -83,6 +83,36 @@ impl<'a> IdentityRepository<'a> {
         })
     }
 
+    /// Remove the just-created identity only when it still matches the expected peer.
+    /// This is used to roll back cross-store account registration failures safely.
+    pub fn delete_if_peer_id(&self, peer_id: &str) -> SqliteResult<bool> {
+        self.db.with_connection(|conn| {
+            Ok(conn.execute(
+                "DELETE FROM local_identity WHERE id = 1 AND peer_id = ?1",
+                [peer_id],
+            )? > 0)
+        })
+    }
+
+    /// Atomically replace the encrypted private-key blob only when it has not
+    /// changed since the caller loaded it. A single conditional SQLite update
+    /// gives password rotation compare-and-swap semantics across concurrent work.
+    pub fn replace_encrypted_private_key(
+        &self,
+        expected: &[u8],
+        replacement: &[u8],
+    ) -> SqliteResult<bool> {
+        let now = chrono::Utc::now().timestamp();
+        self.db.with_connection(|conn| {
+            Ok(conn.execute(
+                "UPDATE local_identity
+                 SET private_key_encrypted = ?1, updated_at = ?2
+                 WHERE id = 1 AND private_key_encrypted = ?3",
+                params![replacement, now, expected],
+            )? == 1)
+        })
+    }
+
     /// Update display name
     pub fn update_display_name(&self, display_name: &str) -> SqliteResult<()> {
         let now = chrono::Utc::now().timestamp();
@@ -171,6 +201,39 @@ mod tests {
         let retrieved = repo.get().unwrap().unwrap();
         assert_eq!(retrieved.peer_id, identity.peer_id);
         assert_eq!(retrieved.display_name, identity.display_name);
+    }
+
+    #[test]
+    fn delete_if_peer_id_does_not_remove_another_identity() {
+        let db = Database::in_memory().unwrap();
+        let repo = IdentityRepository::new(&db);
+        let identity = create_test_identity();
+        repo.create(&identity).unwrap();
+
+        assert!(!repo.delete_if_peer_id("different-peer").unwrap());
+        assert!(repo.exists().unwrap());
+        assert!(repo.delete_if_peer_id(&identity.peer_id).unwrap());
+        assert!(!repo.exists().unwrap());
+    }
+
+    #[test]
+    fn encrypted_key_replacement_is_compare_and_swap() {
+        let db = Database::in_memory().unwrap();
+        let repo = IdentityRepository::new(&db);
+        let identity = create_test_identity();
+        let original = identity.private_key_encrypted.clone();
+        repo.create(&identity).unwrap();
+
+        assert!(repo
+            .replace_encrypted_private_key(&original, b"first replacement")
+            .unwrap());
+        assert!(!repo
+            .replace_encrypted_private_key(&original, b"lost update")
+            .unwrap());
+        assert_eq!(
+            repo.get().unwrap().unwrap().private_key_encrypted,
+            b"first replacement"
+        );
     }
 
     #[test]

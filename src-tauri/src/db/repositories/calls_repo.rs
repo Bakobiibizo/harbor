@@ -386,4 +386,44 @@ mod tests {
         assert_eq!(active[0].call_id, "call-1");
         assert_eq!(active[0].state, CallState::Ringing);
     }
+
+    #[test]
+    fn call_history_schema_cannot_persist_signaling_media_or_credentials() {
+        let db = Database::in_memory().unwrap();
+        CallsRepository::insert_session(&db, &outgoing_session("call-safe-history", 10)).unwrap();
+
+        let columns = db
+            .with_connection(|conn| {
+                let mut statement = conn.prepare("PRAGMA table_info(call_history)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<SqliteResult<Vec<_>>>()
+            })
+            .unwrap();
+        for forbidden in [
+            "sdp",
+            "ice",
+            "candidate",
+            "credential",
+            "secret",
+            "media_bytes",
+            "audio",
+            "video",
+        ] {
+            assert!(
+                !columns.iter().any(|column| column == forbidden),
+                "call_history unexpectedly persists {forbidden}"
+            );
+        }
+
+        let history = CallsRepository::get_call_history(&db, 10).unwrap();
+        let durable_debug = format!("{history:?}");
+        for transient_marker in [
+            "v=0\\r\\n",
+            "candidate:private-address",
+            "volatile-turn-secret",
+            "synthetic-media-bytes",
+        ] {
+            assert!(!durable_debug.contains(transient_marker));
+        }
+    }
 }

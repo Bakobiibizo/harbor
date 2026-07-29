@@ -1,6 +1,7 @@
 //! Permissions service for managing capability grants
 
 use ed25519_dalek::VerifyingKey;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -33,7 +34,7 @@ pub struct PermissionRequestMessage {
 }
 
 /// A permission grant message
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionGrantMessage {
     pub grant_id: String,
     pub issuer_peer_id: String,
@@ -48,7 +49,7 @@ pub struct PermissionGrantMessage {
 }
 
 /// A permission revoke message
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRevokeMessage {
     pub grant_id: String,
     pub issuer_peer_id: String,
@@ -72,6 +73,38 @@ impl PermissionsService {
         subject: &str,
         capability: Capability,
     ) -> Result<bool> {
+        let local_peer_id = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?
+            .peer_id;
+        let remote_peer_id = if issuer == local_peer_id {
+            subject
+        } else if subject == local_peer_id {
+            issuer
+        } else {
+            return Ok(false);
+        };
+        let relationship_denied = self
+            .db
+            .with_connection(|connection| {
+                connection.query_row(
+                    "SELECT CASE WHEN
+                       EXISTS(SELECT 1 FROM contact_revocation_tombstones WHERE peer_id = ?1)
+                       OR NOT EXISTS(
+                         SELECT 1 FROM contacts WHERE peer_id = ?1 AND is_blocked = 0
+                       )
+                     THEN 1 ELSE 0 END",
+                    [remote_peer_id],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?
+            != 0;
+        if relationship_denied {
+            return Ok(false);
+        }
+
         let decision = PrivateIntroductionsRepository::new(&self.db)
             .capability_decision(
                 issuer,
@@ -97,6 +130,109 @@ impl PermissionsService {
             db,
             identity_service,
         }
+    }
+
+    /// Build signed grants without mutating durable state. Callers that need a
+    /// multi-table invariant can include these exact envelopes in their own
+    /// transaction instead of exposing one grant at a time.
+    pub fn prepare_permission_grants(
+        &self,
+        subject_peer_id: &str,
+        capabilities: &[Capability],
+    ) -> Result<Vec<PermissionGrantMessage>> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+        let current_clock = self
+            .db
+            .get_lamport_clock(&identity.peer_id)
+            .map_err(|e| AppError::DatabaseString(e.to_string()))?;
+        let issued_at = chrono::Utc::now().timestamp();
+
+        capabilities
+            .iter()
+            .enumerate()
+            .map(|(offset, capability)| {
+                let lamport_clock = current_clock
+                    .checked_add(offset as i64 + 1)
+                    .ok_or_else(|| AppError::Internal("Lamport clock overflow".into()))?
+                    as u64;
+                let grant_id = Uuid::new_v4().to_string();
+                let signable = SignablePermissionGrant {
+                    grant_id: grant_id.clone(),
+                    issuer_peer_id: identity.peer_id.clone(),
+                    subject_peer_id: subject_peer_id.to_string(),
+                    capability: capability.as_str().to_string(),
+                    scope: None,
+                    lamport_clock,
+                    issued_at,
+                    expires_at: None,
+                };
+                let payload_cbor = signable.signable_bytes()?;
+                let signature = self.identity_service.sign(&signable)?;
+                Ok(PermissionGrantMessage {
+                    grant_id,
+                    issuer_peer_id: identity.peer_id.clone(),
+                    subject_peer_id: subject_peer_id.to_string(),
+                    capability: capability.as_str().to_string(),
+                    scope: None,
+                    lamport_clock,
+                    issued_at,
+                    expires_at: None,
+                    signature,
+                    payload_cbor,
+                })
+            })
+            .collect()
+    }
+
+    /// Build signed revocations for every active capability this identity
+    /// issued to a peer. The caller persists these exact envelopes together
+    /// with the relationship teardown in one transaction.
+    pub fn prepare_contact_revocations(
+        &self,
+        subject_peer_id: &str,
+    ) -> Result<Vec<PermissionRevokeMessage>> {
+        let identity = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?;
+        let grants = PermissionsRepository::get_permissions_by_issuer(&self.db, &identity.peer_id)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        let active: Vec<_> = grants
+            .into_iter()
+            .filter(|grant| grant.subject_peer_id == subject_peer_id && grant.revoked_at.is_none())
+            .collect();
+        let current_clock = self
+            .db
+            .get_lamport_clock(&identity.peer_id)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        let revoked_at = chrono::Utc::now().timestamp();
+
+        active
+            .into_iter()
+            .enumerate()
+            .map(|(offset, grant)| {
+                let lamport_clock = current_clock
+                    .checked_add(offset as i64 + 1)
+                    .ok_or_else(|| AppError::Internal("Lamport clock overflow".into()))?
+                    as u64;
+                let signable = SignablePermissionRevoke {
+                    grant_id: grant.grant_id.clone(),
+                    issuer_peer_id: identity.peer_id.clone(),
+                    lamport_clock,
+                    revoked_at,
+                };
+                Ok(PermissionRevokeMessage {
+                    grant_id: grant.grant_id,
+                    issuer_peer_id: identity.peer_id.clone(),
+                    lamport_clock,
+                    revoked_at,
+                    signature: self.identity_service.sign(&signable)?,
+                })
+            })
+            .collect()
     }
 
     // ============================================================
@@ -310,28 +446,7 @@ impl PermissionsService {
         grant: &PermissionGrantMessage,
         issuer_public_key: &[u8],
     ) -> Result<()> {
-        // Verify signature
-        let signable = SignablePermissionGrant {
-            grant_id: grant.grant_id.clone(),
-            issuer_peer_id: grant.issuer_peer_id.clone(),
-            subject_peer_id: grant.subject_peer_id.clone(),
-            capability: grant.capability.clone(),
-            scope: grant.scope.clone(),
-            lamport_clock: grant.lamport_clock,
-            issued_at: grant.issued_at,
-            expires_at: grant.expires_at,
-        };
-
-        let verifying_key = VerifyingKey::from_bytes(
-            issuer_public_key
-                .try_into()
-                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
-        )
-        .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
-
-        if !verify(&verifying_key, &signable, &grant.signature)? {
-            return Err(AppError::Crypto("Invalid grant signature".to_string()));
-        }
+        self.validate_incoming_grant(grant, issuer_public_key)?;
 
         // Check for deduplication
         let event_id = format!("grant:{}", grant.grant_id);
@@ -387,18 +502,23 @@ impl PermissionsService {
         Ok(())
     }
 
-    /// Verify and process a permission revocation from the network
-    pub fn process_incoming_revoke(
+    /// Validate a received grant without writing it. This is used before the
+    /// contact acceptance transaction so malformed input cannot cause a
+    /// partially materialized relationship.
+    pub fn validate_incoming_grant(
         &self,
-        revoke: &PermissionRevokeMessage,
+        grant: &PermissionGrantMessage,
         issuer_public_key: &[u8],
     ) -> Result<()> {
-        // Verify signature
-        let signable = SignablePermissionRevoke {
-            grant_id: revoke.grant_id.clone(),
-            issuer_peer_id: revoke.issuer_peer_id.clone(),
-            lamport_clock: revoke.lamport_clock,
-            revoked_at: revoke.revoked_at,
+        let signable = SignablePermissionGrant {
+            grant_id: grant.grant_id.clone(),
+            issuer_peer_id: grant.issuer_peer_id.clone(),
+            subject_peer_id: grant.subject_peer_id.clone(),
+            capability: grant.capability.clone(),
+            scope: grant.scope.clone(),
+            lamport_clock: grant.lamport_clock,
+            issued_at: grant.issued_at,
+            expires_at: grant.expires_at,
         };
 
         let verifying_key = VerifyingKey::from_bytes(
@@ -408,9 +528,56 @@ impl PermissionsService {
         )
         .map_err(|e| AppError::Crypto(format!("Invalid public key: {}", e)))?;
 
-        if !verify(&verifying_key, &signable, &revoke.signature)? {
-            return Err(AppError::Crypto("Invalid revoke signature".to_string()));
+        let issuer_peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)?;
+        if issuer_peer_id != grant.issuer_peer_id {
+            return Err(AppError::Unauthorized(
+                "Permission grant issuer does not match its signing key".to_string(),
+            ));
         }
+        let local_peer_id = self
+            .identity_service
+            .get_identity()?
+            .ok_or_else(|| AppError::IdentityNotFound("No identity".to_string()))?
+            .peer_id;
+        if grant.subject_peer_id != local_peer_id {
+            return Err(AppError::Unauthorized(
+                "Permission grant is addressed to another peer".to_string(),
+            ));
+        }
+        if Capability::from_str(&grant.capability).is_none() {
+            return Err(AppError::Validation(format!(
+                "Unknown permission capability: {}",
+                grant.capability
+            )));
+        }
+        if grant.payload_cbor != signable.signable_bytes()? {
+            return Err(AppError::Crypto(
+                "Permission grant payload does not match signed fields".to_string(),
+            ));
+        }
+
+        if !verify(&verifying_key, &signable, &grant.signature)? {
+            return Err(AppError::Crypto("Invalid grant signature".to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// Verify and process a permission revocation from the network
+    pub fn process_incoming_revoke(
+        &self,
+        revoke: &PermissionRevokeMessage,
+        issuer_public_key: &[u8],
+    ) -> Result<()> {
+        self.validate_incoming_revoke(revoke, issuer_public_key)?;
+
+        let signable = SignablePermissionRevoke {
+            grant_id: revoke.grant_id.clone(),
+            issuer_peer_id: revoke.issuer_peer_id.clone(),
+            lamport_clock: revoke.lamport_clock,
+            revoked_at: revoke.revoked_at,
+        };
 
         // Check for deduplication
         let event_id = format!("revoke:{}:{}", revoke.grant_id, revoke.lamport_clock);
@@ -457,6 +624,47 @@ impl PermissionsService {
             .map_err(|e| AppError::DatabaseString(e.to_string()))?;
         }
 
+        Ok(())
+    }
+
+    /// Validate a received revocation without writing it so callers can make
+    /// the revocation and relationship teardown atomic.
+    pub fn validate_incoming_revoke(
+        &self,
+        revoke: &PermissionRevokeMessage,
+        issuer_public_key: &[u8],
+    ) -> Result<()> {
+        let verifying_key = VerifyingKey::from_bytes(
+            issuer_public_key
+                .try_into()
+                .map_err(|_| AppError::Crypto("Invalid public key length".to_string()))?,
+        )
+        .map_err(|error| AppError::Crypto(format!("Invalid public key: {error}")))?;
+        let issuer_peer_id =
+            crate::services::CryptoService::derive_peer_id_from_verifying_key(&verifying_key)?;
+        if issuer_peer_id != revoke.issuer_peer_id {
+            return Err(AppError::Unauthorized(
+                "Permission revocation issuer does not match its signing key".to_string(),
+            ));
+        }
+        let signable = SignablePermissionRevoke {
+            grant_id: revoke.grant_id.clone(),
+            issuer_peer_id: revoke.issuer_peer_id.clone(),
+            lamport_clock: revoke.lamport_clock,
+            revoked_at: revoke.revoked_at,
+        };
+        if !verify(&verifying_key, &signable, &revoke.signature)? {
+            return Err(AppError::Crypto("Invalid revoke signature".to_string()));
+        }
+        let grant = PermissionsRepository::get_by_grant_id(&self.db, &revoke.grant_id)
+            .map_err(|error| AppError::DatabaseString(error.to_string()))?;
+        if let Some(grant) = grant {
+            if grant.issuer_peer_id != revoke.issuer_peer_id {
+                return Err(AppError::Unauthorized(
+                    "Permission revocation does not match the grant issuer".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -545,15 +753,32 @@ impl PermissionsService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{ContactData, ContactsRepository};
     use crate::models::{
         domain, CapabilityGrantRecord, CapabilityRevocationRecord, CreateIdentityRequest,
     };
+    use base64::Engine;
 
     fn create_test_service() -> (Arc<Database>, Arc<IdentityService>, PermissionsService) {
         let db = Arc::new(Database::in_memory().unwrap());
         let identity_service = Arc::new(IdentityService::new(db.clone()));
         let permissions_service = PermissionsService::new(db.clone(), identity_service.clone());
         (db, identity_service, permissions_service)
+    }
+
+    fn add_contact(db: &Database, peer_id: &str) {
+        ContactsRepository::add_contact(
+            db,
+            &ContactData {
+                peer_id: peer_id.into(),
+                public_key: vec![1; 32],
+                x25519_public: vec![2; 32],
+                display_name: "Test contact".into(),
+                avatar_hash: None,
+                bio: None,
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -569,6 +794,7 @@ mod tests {
             .unwrap();
         let issuer = identity_service.get_identity().unwrap().unwrap().peer_id;
         let subject = "12D3KooWContact";
+        add_contact(&db, subject);
         service
             .create_permission_grant(subject, Capability::WallRead, None)
             .unwrap();
@@ -647,7 +873,7 @@ mod tests {
 
     #[test]
     fn test_create_grant() {
-        let (_, identity_service, permissions_service) = create_test_service();
+        let (db, identity_service, permissions_service) = create_test_service();
 
         // Create identity first
         identity_service
@@ -659,6 +885,7 @@ mod tests {
             })
             .unwrap();
         identity_service.unlock("password123").unwrap();
+        add_contact(&db, "12D3KooWSubject");
 
         // Create a grant
         let grant = permissions_service
@@ -676,7 +903,7 @@ mod tests {
 
     #[test]
     fn test_revoke_grant() {
-        let (_, identity_service, permissions_service) = create_test_service();
+        let (db, identity_service, permissions_service) = create_test_service();
 
         identity_service
             .create_identity(CreateIdentityRequest {
@@ -687,6 +914,7 @@ mod tests {
             })
             .unwrap();
         identity_service.unlock("password123").unwrap();
+        add_contact(&db, "12D3KooWSubject");
 
         let grant = permissions_service
             .create_permission_grant("12D3KooWSubject", Capability::Chat, None)
@@ -706,5 +934,93 @@ mod tests {
         assert!(!permissions_service
             .peer_has_capability("12D3KooWSubject", Capability::Chat)
             .unwrap());
+    }
+
+    #[test]
+    fn signed_wall_read_grant_survives_recipient_restart() {
+        let (_, issuer_identity, issuer_permissions) = create_test_service();
+        let temp = tempfile::tempdir().unwrap();
+        let recipient_path = temp.path().join("recipient.db");
+
+        issuer_identity
+            .create_identity(CreateIdentityRequest {
+                display_name: "Issuer".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let issuer_info = issuer_identity.get_identity_info().unwrap().unwrap();
+
+        let recipient_peer_id = {
+            let recipient_db = Arc::new(Database::new(recipient_path.clone()).unwrap());
+            let recipient_identity = Arc::new(IdentityService::new(recipient_db.clone()));
+            let recipient_permissions =
+                PermissionsService::new(recipient_db.clone(), recipient_identity.clone());
+            let recipient_info = recipient_identity
+                .create_identity(CreateIdentityRequest {
+                    display_name: "Recipient".into(),
+                    passphrase: "password123".into(),
+                    bio: None,
+                    passphrase_hint: None,
+                })
+                .unwrap();
+            let grant = issuer_permissions
+                .create_permission_grant(&recipient_info.peer_id, Capability::WallRead, None)
+                .unwrap();
+            let issuer_public_key = base64::engine::general_purpose::STANDARD
+                .decode(&issuer_info.public_key)
+                .unwrap();
+            add_contact(&recipient_db, &issuer_info.peer_id);
+            recipient_permissions
+                .process_incoming_grant(&grant, &issuer_public_key)
+                .unwrap();
+            assert!(recipient_permissions
+                .we_have_capability(&issuer_info.peer_id, Capability::WallRead)
+                .unwrap());
+            recipient_info.peer_id
+        };
+
+        let reopened_db = Arc::new(Database::new(recipient_path).unwrap());
+        let reopened_identity = Arc::new(IdentityService::new(reopened_db.clone()));
+        let reopened_permissions = PermissionsService::new(reopened_db, reopened_identity);
+        assert!(reopened_permissions
+            .we_have_capability(&issuer_info.peer_id, Capability::WallRead)
+            .unwrap());
+        assert!(!recipient_peer_id.is_empty());
+    }
+
+    #[test]
+    fn incoming_grant_for_another_recipient_is_rejected() {
+        let (_, issuer_identity, issuer_permissions) = create_test_service();
+        let (_, recipient_identity, recipient_permissions) = create_test_service();
+        issuer_identity
+            .create_identity(CreateIdentityRequest {
+                display_name: "Issuer".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        recipient_identity
+            .create_identity(CreateIdentityRequest {
+                display_name: "Recipient".into(),
+                passphrase: "password123".into(),
+                bio: None,
+                passphrase_hint: None,
+            })
+            .unwrap();
+        let grant = issuer_permissions
+            .create_permission_grant("12D3KooWSomeoneElse", Capability::WallRead, None)
+            .unwrap();
+        let issuer_info = issuer_identity.get_identity_info().unwrap().unwrap();
+        let issuer_public_key = base64::engine::general_purpose::STANDARD
+            .decode(issuer_info.public_key)
+            .unwrap();
+
+        assert!(matches!(
+            recipient_permissions.process_incoming_grant(&grant, &issuer_public_key),
+            Err(AppError::Unauthorized(message)) if message.contains("another peer")
+        ));
     }
 }

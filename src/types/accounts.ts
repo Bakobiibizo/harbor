@@ -4,6 +4,10 @@ export interface AccountInfo {
   id: string;
   /** User's display name */
   displayName: string;
+  /** Relay-qualified name after cryptographic verification. */
+  verifiedQualifiedName?: string | null;
+  /** Expiry of the verified relay claim cached for the locked chooser. */
+  verifiedNameNotAfter?: number | null;
   /** Avatar hash if set */
   avatarHash: string | null;
   /** Short bio */

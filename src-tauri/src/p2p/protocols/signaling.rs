@@ -6,18 +6,30 @@
 //! `/harbor/signaling/1.0.0`.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// A signaling request sent over the `/harbor/signaling/1.0.0` protocol.
 ///
 /// `sender_peer_id` and `recipient_peer_id` are transport routing metadata used
 /// to reject wrong-peer and retargeted envelopes before the frontend sees them.
 /// The nested payload contains the signed call data.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SignalingEnvelope {
     pub sender_peer_id: String,
     pub recipient_peer_id: String,
     pub payload: SignalingPayload,
+}
+
+/// The complete and exclusive set of signaling fields permitted at a logging
+/// boundary. Payload bodies contain SDP, ICE credentials/candidates,
+/// fingerprints, signatures, and group nonces and must never reach a log sink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignalingLogSummary {
+    pub kind: &'static str,
+    pub correlation_id: String,
+    pub direction: &'static str,
+    pub result: &'static str,
 }
 
 impl SignalingEnvelope {
@@ -29,6 +41,32 @@ impl SignalingEnvelope {
     /// Return the Unix timestamp embedded in the signed payload.
     pub fn timestamp(&self) -> i64 {
         self.payload.timestamp()
+    }
+
+    pub fn log_summary(
+        &self,
+        direction: &'static str,
+        result: &'static str,
+    ) -> SignalingLogSummary {
+        SignalingLogSummary {
+            kind: self.payload.kind(),
+            correlation_id: self.call_id().to_string(),
+            direction,
+            result,
+        }
+    }
+}
+
+/// Defensive redaction for any future `Debug` use. Production logs should use
+/// `log_summary` so direction and result remain explicit.
+impl fmt::Debug for SignalingEnvelope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignalingEnvelope")
+            .field("kind", &self.payload.kind())
+            .field("correlation_id", &self.call_id())
+            .field("payload", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -50,6 +88,18 @@ pub enum SignalingPayload {
 }
 
 impl SignalingPayload {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            SignalingPayload::Offer(_) => "offer",
+            SignalingPayload::Answer(_) => "answer",
+            SignalingPayload::Ice(_) => "ice",
+            SignalingPayload::Hangup(_) => "hangup",
+            SignalingPayload::Decline(_) => "decline",
+            SignalingPayload::Busy(_) => "busy",
+            SignalingPayload::GroupMembership(_) => "group_membership",
+        }
+    }
+
     pub fn call_id(&self) -> &str {
         match self {
             SignalingPayload::Offer(payload) => &payload.call_id,
@@ -82,6 +132,8 @@ pub enum GroupMembershipAction {
     Invite,
     Join,
     Leave,
+    Decline,
+    Failed,
     Roster,
     Terminate,
 }
@@ -195,6 +247,133 @@ mod tests {
                 timestamp: 1_700_000_000,
                 signature: vec![7; 64],
             }),
+        }
+    }
+
+    fn privacy_log_envelopes() -> Vec<(&'static str, &'static str, SignalingEnvelope)> {
+        let signature = b"signature-control-token-secret".to_vec();
+        vec![
+            (
+                "offer",
+                "call-offer",
+                SignalingEnvelope {
+                    sender_peer_id: "sender".into(),
+                    recipient_peer_id: "recipient".into(),
+                    payload: SignalingPayload::Offer(SignalingOffer {
+                        call_id: "call-offer".into(),
+                        caller_peer_id: "sender".into(),
+                        callee_peer_id: "recipient".into(),
+                        sdp: "a=ice-pwd:offer-password-secret\r\na=fingerprint:offer-fingerprint-secret".into(),
+                        timestamp: 1,
+                        signature: signature.clone(),
+                    }),
+                },
+            ),
+            (
+                "answer",
+                "call-answer",
+                SignalingEnvelope {
+                    sender_peer_id: "sender".into(),
+                    recipient_peer_id: "recipient".into(),
+                    payload: SignalingPayload::Answer(SignalingAnswer {
+                        call_id: "call-answer".into(),
+                        caller_peer_id: "recipient".into(),
+                        callee_peer_id: "sender".into(),
+                        sdp: "a=ice-ufrag:answer-ufrag-secret\r\na=fingerprint:answer-fingerprint-secret".into(),
+                        timestamp: 1,
+                        signature: signature.clone(),
+                    }),
+                },
+            ),
+            (
+                "ice",
+                "call-ice",
+                SignalingEnvelope {
+                    sender_peer_id: "sender".into(),
+                    recipient_peer_id: "recipient".into(),
+                    payload: SignalingPayload::Ice(SignalingIce {
+                        call_id: "call-ice".into(),
+                        sender_peer_id: "sender".into(),
+                        candidate: "candidate:ice-candidate-secret".into(),
+                        sdp_mid: Some("ice-mid-control-token-secret".into()),
+                        sdp_mline_index: Some(0),
+                        timestamp: 1,
+                        signature: signature.clone(),
+                    }),
+                },
+            ),
+            (
+                "hangup",
+                "call-hangup",
+                SignalingEnvelope {
+                    sender_peer_id: "sender".into(),
+                    recipient_peer_id: "recipient".into(),
+                    payload: SignalingPayload::Hangup(SignalingHangup {
+                        call_id: "call-hangup".into(),
+                        sender_peer_id: "sender".into(),
+                        reason: "normal".into(),
+                        timestamp: 1,
+                        signature: signature.clone(),
+                    }),
+                },
+            ),
+            (
+                "group_membership",
+                "room-group",
+                SignalingEnvelope {
+                    sender_peer_id: "sender".into(),
+                    recipient_peer_id: "recipient".into(),
+                    payload: SignalingPayload::GroupMembership(GroupMembershipSignal {
+                        room_id: "room-group".into(),
+                        creator_peer_id: "sender".into(),
+                        sender_peer_id: "sender".into(),
+                        action: GroupMembershipAction::Invite,
+                        topology: "relay_assisted_mesh_v1".into(),
+                        roster_version: 1,
+                        participants: vec!["recipient".into(), "sender".into()],
+                        media_mode: "video".into(),
+                        nonce: "group-nonce-control-token-secret".into(),
+                        timestamp: 1,
+                        signature,
+                    }),
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn signaling_log_summaries_redact_every_sensitive_payload_variant() {
+        for (kind, correlation_id, envelope) in privacy_log_envelopes() {
+            let summary = envelope.log_summary("inbound", "verified");
+            assert_eq!(summary.kind, kind);
+            assert_eq!(summary.correlation_id, correlation_id);
+            assert_eq!(summary.direction, "inbound");
+            assert_eq!(summary.result, "verified");
+
+            let logged = format!("{summary:?} {envelope:?}");
+            for forbidden in [
+                "ice-pwd",
+                "ice-ufrag",
+                "fingerprint",
+                "candidate:",
+                "nonce",
+                "control-token",
+                "offer-password-secret",
+                "offer-fingerprint-secret",
+                "answer-ufrag-secret",
+                "answer-fingerprint-secret",
+                "candidate:ice-candidate-secret",
+                "ice-mid-control-token-secret",
+                "signature-control-token-secret",
+                "115, 105, 103, 110, 97, 116, 117, 114, 101",
+                "group-nonce-control-token-secret",
+            ] {
+                assert!(!logged.contains(forbidden), "leaked {forbidden}: {logged}");
+            }
+            assert!(logged.contains(kind));
+            assert!(logged.contains(correlation_id));
+            assert!(logged.contains("inbound"));
+            assert!(logged.contains("verified"));
         }
     }
 

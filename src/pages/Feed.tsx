@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FeedIcon, EllipsisIcon } from '../components/icons';
+import { FeedIcon, EllipsisIcon, PlusIcon } from '../components/icons';
 import { PostMedia, type PostMediaItem } from '../components/common/PostMedia';
+import { ModalityFilter } from '../components/common/ModalityFilter';
 import { useFeedStore, useContactsStore, useWallStore, useSettingsStore } from '../stores';
 import { postsService } from '../services/posts';
 import { createLogger } from '../utils/logger';
@@ -10,12 +11,11 @@ import { safePeerLabel } from '../utils/relayName';
 import type { FeedItem } from '../types';
 import type { SharedFrom, Comment } from '../stores';
 import { useIdentityStore } from '../stores';
+import { matchesModalityFilter } from '../utils/postModality';
+import { HARBOR_SHORTCUT_EVENTS } from '../hooks';
 
 const log = createLogger('Feed');
 import { getInitials, getContactColor, formatDate } from '../utils/formatting';
-
-/** Relay sync polling interval in milliseconds (30 seconds) */
-const RELAY_SYNC_INTERVAL_MS = 30_000;
 
 // Dropdown menu component
 function PostMenu({
@@ -186,7 +186,7 @@ function ShareModal({
             className="text-lg font-semibold"
             style={{ color: 'hsl(var(--harbor-text-primary))' }}
           >
-            Share to Wall
+            Repost to profile
           </h3>
           <button
             onClick={onClose}
@@ -284,7 +284,7 @@ function ShareModal({
               boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
             }}
           >
-            {isSharing ? 'Sharing...' : 'Share to Wall'}
+            {isSharing ? 'Reposting...' : 'Repost to profile'}
           </button>
         </div>
       </div>
@@ -373,7 +373,7 @@ function CommentsSection({
                     background: getContactColor(comment.authorPeerId),
                   }}
                 >
-                  {getInitials(comment.authorName)}
+                  {getInitials(safePeerLabel(comment.authorPeerId, undefined, comment.authorName))}
                 </div>
 
                 {/* Comment content */}
@@ -386,7 +386,7 @@ function CommentsSection({
                       className="font-semibold text-xs"
                       style={{ color: 'hsl(var(--harbor-text-primary))' }}
                     >
-                      {comment.authorName}
+                      {safePeerLabel(comment.authorPeerId, undefined, comment.authorName)}
                     </span>
                     <p
                       className="text-sm leading-relaxed whitespace-pre-wrap mt-0.5"
@@ -470,6 +470,7 @@ interface UnifiedPost {
   id: string;
   postId: string; // The actual post ID (used for comments backend)
   content: string;
+  contentType: string;
   timestamp: Date;
   likes: number;
   comments: number;
@@ -484,6 +485,25 @@ interface UnifiedPost {
 }
 
 type FeedTab = 'all' | 'saved';
+
+export function FindContactsButton() {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/network')}
+      className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
+      style={{
+        background:
+          'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
+        color: 'white',
+        boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
+      }}
+    >
+      Find Contacts
+    </button>
+  );
+}
 
 export function FeedPage() {
   const navigate = useNavigate();
@@ -501,7 +521,6 @@ export function FeedPage() {
     toggleComments,
     addComment,
     deleteComment,
-    syncFromRelay,
     isSyncingRelay,
     lastSyncAt,
     syncError,
@@ -530,21 +549,12 @@ export function FeedPage() {
   const [sharingPost, setSharingPost] = useState<UnifiedPost | null>(null);
   const { socialView, setSocialView } = useSettingsStore();
 
-  // Load real feed and contacts on mount, plus trigger relay sync
+  // Relay polling is owned by the app-level contact feed worker so it can be
+  // cancelled on lock/offline transitions and does not depend on this page.
   useEffect(() => {
     loadFeed().catch((err) => log.error('Failed to load feed', err));
     loadContacts().catch((err) => log.error('Failed to load contacts', err));
-    // Best-effort relay sync on mount
-    syncFromRelay().catch((err) => log.warn('Relay sync on mount failed', err));
-  }, [loadFeed, loadContacts, syncFromRelay]);
-
-  // Poll relay for new posts every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      syncFromRelay().catch((err) => log.warn('Periodic relay sync failed', err));
-    }, RELAY_SYNC_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [syncFromRelay]);
+  }, [loadFeed, loadContacts]);
 
   // Track media for feed posts (fetched asynchronously)
   const [postMediaMap, setPostMediaMap] = useState<Record<string, PostMediaItem[]>>({});
@@ -567,6 +577,9 @@ export function FeedPage() {
                     : 'image') as 'image' | 'video' | 'audio',
                 url: m.mediaHash,
                 name: m.fileName,
+                sourcePeerId: item.authorPeerId,
+                mimeType: m.mimeType,
+                totalBytes: m.fileSize,
               }));
             }
           } catch {
@@ -592,13 +605,18 @@ export function FeedPage() {
         id: `real-${item.postId}`,
         postId: item.postId,
         content: item.contentText || '',
+        contentType: item.contentType,
         timestamp: new Date(item.createdAt * 1000),
         likes: item.likes ?? 0,
         comments: commentCounts[item.postId] || 0,
         likedByUser: item.likedByUser ?? false,
         author: {
           peerId: item.authorPeerId,
-          name: safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName),
+          name: safePeerLabel(
+            item.authorPeerId,
+            item.authorVerifiedQualifiedName,
+            item.authorDisplayName,
+          ),
           avatarGradient: getContactColor(item.authorPeerId),
         },
         isReal: true,
@@ -616,13 +634,18 @@ export function FeedPage() {
           id: `real-${item.postId}`,
           postId: item.postId,
           content: item.contentText || '',
+          contentType: item.contentType,
           timestamp: new Date(item.createdAt * 1000),
           likes: item.likes ?? 0,
           comments: commentCounts[item.postId] || 0,
           likedByUser: item.likedByUser ?? false,
           author: {
             peerId: item.authorPeerId,
-            name: safePeerLabel(item.authorPeerId, item.authorVerifiedQualifiedName),
+            name: safePeerLabel(
+              item.authorPeerId,
+              item.authorVerifiedQualifiedName,
+              item.authorDisplayName,
+            ),
             avatarGradient: getContactColor(item.authorPeerId),
           },
           isReal: true,
@@ -641,24 +664,20 @@ export function FeedPage() {
   // Select posts based on active tab
   const selectedPosts: UnifiedPost[] = activeTab === 'saved' ? savedPosts : allPosts;
   const posts = selectedPosts.filter((post) => {
-    if (socialView === 'posts') return true;
-    const mediaType =
-      socialView === 'images' ? 'image' : socialView === 'videos' ? 'video' : 'audio';
-    return post.media?.some((media) => media.type === mediaType);
+    return matchesModalityFilter(socialView, post.contentType, post.media);
   });
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      // Run both P2P sync and relay sync in parallel
-      await Promise.allSettled([refreshFeed(), syncFromRelay()]);
+      await refreshFeed();
       toast.success('Feed refreshed!');
     } catch {
       toast.error('Failed to refresh feed');
     } finally {
       setIsRefreshing(false);
     }
-  }, [refreshFeed, syncFromRelay]);
+  }, [refreshFeed]);
 
   const handleLike = async (post: UnifiedPost) => {
     try {
@@ -733,7 +752,7 @@ export function FeedPage() {
     try {
       await shareToWall(comment, sharedFromData);
       setSharingPost(null);
-      toast.success('Shared to your Wall!');
+      toast.success('Reposted to your profile');
     } catch {
       toast.error('Failed to share post');
     }
@@ -743,11 +762,11 @@ export function FeedPage() {
     <div className="h-full flex flex-col" style={{ background: 'hsl(var(--harbor-bg-primary))' }}>
       {/* Header */}
       <header
-        className="px-6 py-4 border-b flex-shrink-0"
+        className="harbor-page-gutter-x flex-shrink-0 border-b py-4"
         style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
       >
         <div className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1
                 className="text-2xl font-bold"
@@ -791,6 +810,17 @@ export function FeedPage() {
                 </div>
               )}
               <button
+                type="button"
+                onClick={() =>
+                  window.dispatchEvent(new CustomEvent(HARBOR_SHORTCUT_EVENTS.newPost))
+                }
+                className="harbor-interactive flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
+                style={{ background: 'hsl(var(--harbor-primary))' }}
+              >
+                <PlusIcon className="h-4 w-4" />
+                Add post
+              </button>
+              <button
                 onClick={handleRefresh}
                 disabled={isRefreshing || activeTab === 'saved'}
                 className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
@@ -806,29 +836,8 @@ export function FeedPage() {
             </div>
           </div>
 
-          <div
-            className="grid grid-cols-4 border-b mb-3"
-            style={{ borderColor: 'hsl(var(--harbor-border-subtle))' }}
-          >
-            {(['posts', 'images', 'videos', 'audio'] as const).map((view) => (
-              <button
-                key={view}
-                onClick={() => setSocialView(view)}
-                className="px-3 py-3 text-sm font-semibold capitalize"
-                style={{
-                  color:
-                    socialView === view
-                      ? 'hsl(var(--harbor-primary))'
-                      : 'hsl(var(--harbor-text-secondary))',
-                  borderBottom:
-                    socialView === view
-                      ? '3px solid hsl(var(--harbor-primary))'
-                      : '3px solid transparent',
-                }}
-              >
-                {view}
-              </button>
-            ))}
+          <div className="mb-3">
+            <ModalityFilter value={socialView} onChange={setSocialView} label="Filter your feed" />
           </div>
           {/* Saved-state tabs */}
           <div
@@ -932,7 +941,7 @@ export function FeedPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="harbor-page-gutter flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto space-y-8">
           {posts.length === 0 ? (
             <div className="text-center py-16">
@@ -990,17 +999,7 @@ export function FeedPage() {
                   Browse Feed
                 </button>
               ) : (
-                <button
-                  className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-                  style={{
-                    background:
-                      'linear-gradient(135deg, hsl(var(--harbor-primary)), hsl(var(--harbor-accent)))',
-                    color: 'white',
-                    boxShadow: '0 4px 12px hsl(var(--harbor-primary) / 0.3)',
-                  }}
-                >
-                  Find Contacts
-                </button>
+                <FindContactsButton />
               )}
             </div>
           ) : (
@@ -1038,7 +1037,7 @@ export function FeedPage() {
                             }
                             className="font-semibold text-sm text-left hover:underline"
                             style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                            title={`Open ${post.author.name}'s wall`}
+                            title={`Open ${post.author.name}'s profile`}
                           >
                             {post.author.name}
                           </button>

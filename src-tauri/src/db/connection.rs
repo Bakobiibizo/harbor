@@ -23,6 +23,16 @@ const MIGRATION_017: &str = include_str!("migrations/017_private_introductions.s
 const MIGRATION_018: &str = include_str!("migrations/018_private_mentions.sql");
 const MIGRATION_019: &str = include_str!("migrations/019_identity_migration_state.sql");
 const MIGRATION_020: &str = include_str!("migrations/020_relay_key_rotation.sql");
+const MIGRATION_021: &str = include_str!("migrations/021_contact_requests.sql");
+const MIGRATION_022: &str = include_str!("migrations/022_media_transfers.sql");
+const MIGRATION_023: &str = include_str!("migrations/023_media_cache.sql");
+const MIGRATION_024: &str = include_str!("migrations/024_identity_publishing_state.sql");
+const MIGRATION_025: &str = include_str!("migrations/025_message_edit_events.sql");
+const MIGRATION_026: &str = include_str!("migrations/026_direct_message_outbox.sql");
+const MIGRATION_027: &str = include_str!("migrations/027_post_relay_outbox.sql");
+const MIGRATION_028: &str = include_str!("migrations/028_contact_revocations.sql");
+const MIGRATION_029: &str = include_str!("migrations/029_profile_avatars.sql");
+const MIGRATION_030: &str = include_str!("migrations/030_call_signaling_replay.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -370,6 +380,64 @@ impl Database {
             conn.execute_batch(MIGRATION_020)?;
             info!("Migration 020 complete");
         }
+        if version < 21 {
+            conn.execute_batch(MIGRATION_021)?;
+            info!("Migration 021 complete");
+        }
+
+        if version < 22 {
+            info!("Running migration 022...");
+            conn.execute_batch(MIGRATION_022)?;
+            info!("Migration 022 complete");
+        }
+
+        if version < 23 {
+            info!("Running migration 023...");
+            conn.execute_batch(MIGRATION_023)?;
+            info!("Migration 023 complete");
+        }
+
+        if version < 24 {
+            info!("Running migration 024...");
+            conn.execute_batch(MIGRATION_024)?;
+            info!("Migration 024 complete");
+        }
+
+        if version < 25 {
+            info!("Running migration 025...");
+            conn.execute_batch(MIGRATION_025)?;
+            info!("Migration 025 complete");
+        }
+
+        if version < 26 {
+            info!("Running migration 026...");
+            conn.execute_batch(MIGRATION_026)?;
+            info!("Migration 026 complete");
+        }
+
+        if version < 27 {
+            info!("Running migration 027...");
+            conn.execute_batch(MIGRATION_027)?;
+            info!("Migration 027 complete");
+        }
+
+        if version < 28 {
+            info!("Running migration 028...");
+            conn.execute_batch(MIGRATION_028)?;
+            info!("Migration 028 complete");
+        }
+
+        if version < 29 {
+            info!("Running migration 029...");
+            conn.execute_batch(MIGRATION_029)?;
+            info!("Migration 029 complete");
+        }
+
+        if version < 30 {
+            info!("Running migration 030...");
+            conn.execute_batch(MIGRATION_030)?;
+            info!("Migration 030 complete");
+        }
 
         Ok(())
     }
@@ -387,6 +455,17 @@ impl Database {
     pub fn with_connection_mut<F, T>(&self, f: F) -> SqliteResult<T>
     where
         F: FnOnce(&mut Connection) -> SqliteResult<T>,
+    {
+        let mut conn = self.acquire_connection();
+        f(&mut conn)
+    }
+
+    /// Execute a transaction-oriented callback with a domain-specific error.
+    /// Repository invariants should not be flattened into a generic SQLite
+    /// error merely because they are checked while holding the DB mutex.
+    pub fn with_connection_mut_result<F, T, E>(&self, f: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E>,
     {
         let mut conn = self.acquire_connection();
         f(&mut conn)
@@ -472,52 +551,6 @@ impl Database {
 
             tx.commit()?;
             Ok(next)
-        })
-    }
-
-    /// Check if a nonce has been seen and record it if not
-    /// Returns true if the nonce is new (not replayed), false if it's a replay
-    pub fn check_and_record_nonce(
-        &self,
-        conversation_id: &str,
-        sender_peer_id: &str,
-        nonce_counter: u64,
-    ) -> SqliteResult<bool> {
-        self.with_connection_mut(|conn| {
-            let tx = conn.transaction()?;
-
-            // Try to insert the nonce
-            let result = tx.execute(
-                "INSERT INTO received_nonces (conversation_id, sender_peer_id, nonce_counter, received_at)
-                 VALUES (?, ?, ?, ?)",
-                rusqlite::params![
-                    conversation_id,
-                    sender_peer_id,
-                    nonce_counter as i64,
-                    chrono::Utc::now().timestamp()
-                ],
-            );
-
-            match result {
-                Ok(_) => {
-                    // Update highest received counter
-                    tx.execute(
-                        "UPDATE conversation_counters
-                         SET highest_received_counter = MAX(highest_received_counter, ?)
-                         WHERE conversation_id = ?",
-                        rusqlite::params![nonce_counter as i64, conversation_id],
-                    )?;
-                    tx.commit()?;
-                    Ok(true) // New nonce, not a replay
-                }
-                Err(rusqlite::Error::SqliteFailure(err, _))
-                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
-                {
-                    // Unique constraint violated - this nonce was already seen
-                    Ok(false) // Replay detected
-                }
-                Err(e) => Err(e),
-            }
         })
     }
 
@@ -713,27 +746,6 @@ mod tests {
     }
 
     #[test]
-    fn test_nonce_replay_detection() {
-        let db = Database::in_memory().unwrap();
-        let conv_id = "conversation123";
-        let sender = "12D3KooWSender";
-
-        // First time seeing nonce 1 - should be accepted
-        assert!(db.check_and_record_nonce(conv_id, sender, 1).unwrap());
-
-        // Second time seeing nonce 1 - should be rejected (replay)
-        assert!(!db.check_and_record_nonce(conv_id, sender, 1).unwrap());
-
-        // Different nonce - should be accepted
-        assert!(db.check_and_record_nonce(conv_id, sender, 2).unwrap());
-
-        // Same nonce from different sender - should be accepted
-        assert!(db
-            .check_and_record_nonce(conv_id, "12D3KooWOther", 1)
-            .unwrap());
-    }
-
-    #[test]
     fn test_sync_cursor_empty() {
         let db = Database::in_memory().unwrap();
 
@@ -860,7 +872,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 20);
+            assert_eq!(version, 30);
 
             for table in [
                 "relay_trust_keys",
@@ -871,7 +883,17 @@ mod tests {
                 "private_mentions",
                 "private_mention_outbox",
                 "private_mention_blocks",
-                "identity_migration_state",
+                "identity_publishing_state",
+                "contact_requests",
+                "media_transfers",
+                "message_edit_revision_counters",
+                "message_crypto_nonces",
+                "message_edit_events",
+                "message_edit_heads",
+                "direct_message_outbox",
+                "local_profile_state",
+                "contact_profile_state",
+                "pending_contact_profiles",
             ] {
                 let exists: bool = conn.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
@@ -881,12 +903,13 @@ mod tests {
                 assert!(exists, "migration did not create {table}");
             }
 
-            let migration_states: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM identity_migration_state",
+            let publishing_states: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM identity_publishing_state",
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(migration_states, 0, "migration must not invent identity state");
+            assert_eq!(publishing_states, 0, "migration must not invent identity state");
+            assert!(!Database::table_exists(conn, "identity_migration_state")?);
 
             let row: (String, String, Option<String>, Option<String>, String, Option<String>) = conn
                 .query_row(
@@ -914,5 +937,56 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn publishing_state_migration_is_atomic_and_maps_compatibility_to_unverified() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("publishing-state.db");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL);
+                     INSERT INTO schema_version(id, version) VALUES(1, 23);
+                     CREATE TABLE identity_migration_state (
+                       peer_id TEXT PRIMARY KEY,
+                       mode TEXT NOT NULL CHECK(mode IN ('required','compatibility','verified')),
+                       updated_at INTEGER NOT NULL
+                     );
+                     INSERT INTO identity_migration_state VALUES
+                       ('peer-required', 'required', 9),
+                       ('peer-old', 'compatibility', 10),
+                       ('peer-verified', 'verified', 11);",
+                )
+                .unwrap();
+            connection.execute_batch(MIGRATION_024).unwrap();
+        }
+
+        for _ in 0..2 {
+            let connection = Connection::open(&path).unwrap();
+            let version: i64 = connection
+                .query_row("SELECT version FROM schema_version WHERE id=1", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(version, 24);
+            let modes: Vec<(String, String)> = connection
+                .prepare("SELECT peer_id, mode FROM identity_publishing_state ORDER BY peer_id")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(
+                modes,
+                vec![
+                    ("peer-old".into(), "unverified".into()),
+                    ("peer-required".into(), "required".into()),
+                    ("peer-verified".into(), "verified".into()),
+                ]
+            );
+            assert!(!Database::table_exists(&connection, "identity_migration_state").unwrap());
+        }
     }
 }

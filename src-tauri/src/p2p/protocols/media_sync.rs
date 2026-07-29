@@ -12,6 +12,8 @@ pub const MEDIA_SYNC_PROTOCOL: &str = "/harbor/media/1.0.0";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaFetchRequest {
     pub media_hash: String,
+    pub offset: u64,
+    pub max_bytes: u32,
     pub requester_peer_id: String,
     pub timestamp: i64,
     pub signature: Vec<u8>,
@@ -22,10 +24,13 @@ pub struct MediaFetchRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MediaFetchResponse {
     /// Successful response with the media data
-    MediaData {
+    MediaChunk {
         media_hash: String,
         mime_type: String,
+        offset: u64,
+        total_bytes: u64,
         data: Vec<u8>,
+        eof: bool,
     },
     /// Error response
     Error { error: String },

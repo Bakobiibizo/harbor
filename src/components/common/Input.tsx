@@ -28,7 +28,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           }
           aria-invalid={error ? true : undefined}
           className={`
-            w-full px-3 py-2 rounded-lg border transition-colors
+            harbor-field w-full px-3 py-2 rounded-lg border transition-colors
             bg-white dark:bg-gray-800
             text-gray-900 dark:text-gray-100
             placeholder-gray-400 dark:placeholder-gray-500

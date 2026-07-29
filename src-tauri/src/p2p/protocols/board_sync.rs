@@ -54,6 +54,7 @@ pub struct WorkChallenge {
     pub requester: String,
     pub target: String,
     pub action: String,
+    pub audience: String,
     pub expires_at: i64,
     pub difficulty: u8,
     pub key_id: String,

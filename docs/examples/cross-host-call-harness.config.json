@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "roles": {
+    "caller": "wsl-alpha",
+    "callee": "windows-bravo",
+    "groupPeer": "linux-charlie"
+  },
+  "commandTimeoutMs": 40000,
+  "convergenceTimeoutMs": 60000,
+  "callTimeoutConvergenceMs": 65000,
+  "pollIntervalMs": 500,
+  "cleanupTimeoutMs": 15000,
+  "evidenceFile": "artifacts/call-harness/result.json",
+  "endpoints": [
+    {
+      "id": "wsl-alpha",
+      "kind": "local-wsl",
+      "profile": "harness-wsl-alpha",
+      "displayName": "Harness Alpha",
+      "dataDir": "/tmp/harbor-call-harness-wsl-alpha",
+      "controlPort": 24101,
+      "harborPath": "/opt/harbor/Harbor",
+      "harborctlPath": "/opt/harbor/harborctl",
+      "controlToken": { "env": "HARBOR_HARNESS_ALPHA_TOKEN" },
+      "identityPassphrase": { "env": "HARBOR_HARNESS_ALPHA_PASSWORD" },
+      "headlessMedia": true
+    },
+    {
+      "id": "windows-bravo",
+      "kind": "windows-powershell",
+      "profile": "harness-windows-bravo",
+      "displayName": "Harness Bravo",
+      "dataDir": "C:\\Temp\\harbor-call-harness-windows-bravo",
+      "controlPort": 24102,
+      "harborPath": "C:\\Program Files\\Harbor\\Harbor.exe",
+      "harborctlPath": "C:\\Program Files\\Harbor\\harborctl.exe",
+      "controlToken": { "env": "HARBOR_HARNESS_BRAVO_TOKEN" },
+      "identityPassphrase": {
+        "file": "C:\\Temp\\harbor-call-harness-bravo-password.txt",
+        "ownership": "harness-ephemeral"
+      },
+      "powershellPath": "powershell.exe"
+    },
+    {
+      "id": "linux-charlie",
+      "kind": "remote-linux-ssh",
+      "profile": "harness-linux-charlie",
+      "displayName": "Harness Charlie",
+      "dataDir": "/tmp/harbor-call-harness-linux-charlie",
+      "controlPort": 24103,
+      "harborPath": "/opt/harbor/Harbor",
+      "harborctlPath": "/opt/harbor/harborctl",
+      "controlToken": {
+        "file": "/run/user/1000/harbor-call-harness-charlie-token",
+        "ownership": "harness-ephemeral"
+      },
+      "identityPassphrase": {
+        "file": "/run/user/1000/harbor-call-harness-charlie-password",
+        "ownership": "harness-ephemeral"
+      },
+      "sshTarget": "qa-user@linux-host.example",
+      "sshArgs": ["-o", "BatchMode=yes"],
+      "dialAddress": "/dns4/linux-host.example/tcp/{tcpPort}/p2p/{peerId}",
+      "headlessMedia": true,
+      "runtimeEnvironment": {
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "WAYLAND_DISPLAY": "wayland-0",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+        "GDK_BACKEND": "wayland",
+        "LD_LIBRARY_PATH": "/opt/harbor/runtime/lib",
+        "WEBKIT_EXEC_PATH": "/opt/harbor/runtime/libexec/webkit2gtk-4.1",
+        "WEBKIT_INJECTED_BUNDLE_PATH": "/opt/harbor/runtime/lib/webkit2gtk-4.1/injected-bundle"
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+pub mod account_backup_service;
 pub mod accounts_service;
 pub mod board_service;
 pub mod calling_service;
@@ -9,6 +10,7 @@ pub mod identity_publishing_policy;
 pub mod identity_service;
 pub mod media_service;
 pub mod mentions_service;
+pub mod message_crypto;
 pub mod messaging_service;
 pub mod name_claim_service;
 pub mod permissions_service;
@@ -18,12 +20,15 @@ pub mod relay_key_rotation_service;
 pub mod signing;
 pub mod wall_social_service;
 
+pub use account_backup_service::{
+    AccountBackupService, BackupExportResult, BackupRestoreResult, DeleteAccountProfileResult,
+};
 pub use accounts_service::AccountsService;
 pub use board_service::BoardService;
 pub use calling_service::{
     Call, CallState, CallingService, OutgoingAnswer, OutgoingHangup, OutgoingIce, OutgoingOffer,
 };
-pub use contacts_service::ContactsService;
+pub use contacts_service::{ContactRevocationAction, ContactRevocationResult, ContactsService};
 pub use content_sync_service::{
     ContentSyncService, OutgoingManifestRequest, OutgoingManifestResponse,
 };
@@ -31,12 +36,24 @@ pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
 pub use identity_publishing_policy::IdentityPublishingPolicy;
 pub use identity_service::IdentityService;
-pub use media_service::MediaStorageService;
+pub use media_service::{
+    MediaCacheDiagnostics, MediaCacheSettings, MediaStorageService, MediaTransferState,
+    MediaTransferUpdate, StoredMediaInfo,
+};
 pub use mentions_service::{
     MentionReceipt, MentionsService, PublishMentionedPostRequest, PublishMentionedPostResult,
     ResolvedMention,
 };
-pub use messaging_service::{DecryptedMessage, MessagingService, OutgoingMessage};
+pub use message_crypto::{
+    decrypt_message_event, derive_directional_message_key, encrypt_message_event,
+    encrypt_message_event_with_nonce, DirectionalMessageKey, EncryptedMessageEvent,
+    MessageEventContext, MessageEventKind, MessageNonceId, MESSAGE_CRYPTO_VERSION,
+    MESSAGE_NONCE_ID_LEN,
+};
+pub use messaging_service::{
+    DecryptedMessage, IncomingMessageEditParams, MessageContentState, MessagingPrivacyPolicy,
+    MessagingService, OutgoingMessage, OutgoingMessageEdit,
+};
 pub use permissions_service::{
     PermissionGrantMessage, PermissionRequestMessage, PermissionRevokeMessage, PermissionsService,
 };
@@ -56,7 +73,7 @@ pub use signing::{
     SignableContentManifestRequest,
     SignableContentManifestResponse,
     // Direct messages
-    SignableDirectMessage,
+    SignableDirectMessageV2,
     // Wall post relay sync
     SignableGetWallPosts,
     SignableGetWallSocialEvents,
@@ -67,6 +84,7 @@ pub use signing::{
     // Media fetch
     SignableMediaFetchRequest,
     SignableMessageAck,
+    SignableMessageEditV2,
     SignablePeerRegistration,
     SignablePermissionGrant,
     // Permission messages

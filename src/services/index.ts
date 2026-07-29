@@ -1,4 +1,7 @@
 export { accountsService } from './accounts';
+export { accountBackupService } from './accountBackup';
+export { invokeCommand } from './command';
+export type { CommandName, CommandArgs, CommandResult, LinkPreviewData } from './command';
 export { identityService } from './identity';
 export * as networkService from './network';
 export { contactsService } from './contacts';

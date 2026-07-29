@@ -1,325 +1,268 @@
-import { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useEffect, useState } from 'react';
 import { getDomainFromUrl } from '../../utils/urlDetection';
+import { parseProviderEmbed } from '../../utils/providerEmbeds';
+import { ProviderEmbed } from './ProviderEmbed';
+import { fetchLinkPreview, type LinkPreviewData } from '../../services/linkPreview';
 
-/** Matches the Rust LinkPreview struct returned by fetch_link_preview */
-interface LinkPreviewData {
-  url: string;
-  title: string | null;
-  description: string | null;
-  image_url: string | null;
-  site_name: string | null;
+type PreviewState =
+  | { status: 'loading' }
+  | { status: 'ready'; preview: LinkPreviewData }
+  | { status: 'fallback'; preview: LinkPreviewData }
+  | { status: 'error'; message: string };
+
+interface CacheEntry {
+  expiresAt: number;
+  state: Exclude<PreviewState, { status: 'loading' }>;
 }
 
-/** In-memory cache to avoid re-fetching the same URL */
-const previewCache = new Map<string, LinkPreviewData | 'error'>();
+const CACHE_CAPACITY = 64;
+const SUCCESS_TTL_MS = 15 * 60 * 1000;
+const ERROR_TTL_MS = 60 * 1000;
+const previewCache = new Map<string, CacheEntry>();
+const pendingRequests = new Map<string, Promise<Exclude<PreviewState, { status: 'loading' }>>>();
+let cacheGeneration = 0;
+
+function normalizeHttpUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value.trim());
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      return null;
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isSafeBackendPreview(preview: LinkPreviewData): boolean {
+  const canonical = normalizeHttpUrl(preview.url);
+  const imageIsSafe =
+    preview.image_url === null ||
+    /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(preview.image_url);
+  return canonical === preview.url && imageIsSafe;
+}
+
+function readCache(key: string): CacheEntry['state'] | null {
+  const entry = previewCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    previewCache.delete(key);
+    return null;
+  }
+  previewCache.delete(key);
+  previewCache.set(key, entry);
+  return entry.state;
+}
+
+function writeCache(key: string, state: CacheEntry['state']) {
+  previewCache.delete(key);
+  previewCache.set(key, {
+    state,
+    expiresAt: Date.now() + (state.status === 'error' ? ERROR_TTL_MS : SUCCESS_TTL_MS),
+  });
+  while (previewCache.size > CACHE_CAPACITY) {
+    const oldest = previewCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    previewCache.delete(oldest);
+  }
+}
+
+async function loadPreview(key: string): Promise<CacheEntry['state']> {
+  const cached = readCache(key);
+  if (cached) return cached;
+  const pending = pendingRequests.get(key);
+  if (pending) return pending;
+
+  const generation = cacheGeneration;
+  const request = fetchLinkPreview(key)
+    .then((preview): CacheEntry['state'] => {
+      if (!isSafeBackendPreview(preview)) {
+        return { status: 'error', message: 'Harbor rejected unsafe preview metadata.' };
+      }
+      return preview.title || preview.description || preview.image_url
+        ? { status: 'ready', preview }
+        : { status: 'fallback', preview };
+    })
+    .catch((): CacheEntry['state'] => ({
+      status: 'error',
+      message: 'Preview details are unavailable. You can still open this link.',
+    }))
+    .then((state) => {
+      if (generation !== cacheGeneration) {
+        return {
+          status: 'error' as const,
+          message: 'Preview was cleared when the active account changed.',
+        };
+      }
+      writeCache(key, state);
+      return state;
+    })
+    .finally(() => {
+      if (pendingRequests.get(key) === request) pendingRequests.delete(key);
+    });
+  pendingRequests.set(key, request);
+  return request;
+}
+
+export function clearLinkPreviewCache() {
+  cacheGeneration += 1;
+  previewCache.clear();
+  pendingRequests.clear();
+}
+
+export const clearLinkPreviewCacheForTests = clearLinkPreviewCache;
 
 interface LinkPreviewCardProps {
   url: string;
 }
 
-/**
- * LinkPreviewCard renders an Open Graph preview card for a given URL.
- *
- * - Calls the Rust backend `fetch_link_preview` command to fetch OG metadata
- * - Caches results in memory to avoid duplicate network requests
- * - Shows a loading skeleton while fetching
- * - Falls back to a simple domain link card on error
- * - Clicking the card opens the URL in the system browser
- */
 export function LinkPreviewCard({ url }: LinkPreviewCardProps) {
-  const [preview, setPreview] = useState<LinkPreviewData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [imageError, setImageError] = useState(false);
-  const fetchedRef = useRef(false);
+  const normalizedUrl = normalizeHttpUrl(url);
+  const [state, setState] = useState<PreviewState>(
+    normalizedUrl ? { status: 'loading' } : { status: 'error', message: 'This link is invalid.' },
+  );
 
   useEffect(() => {
-    // Prevent double-fetching in React strict mode
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-
-    // Check cache first
-    const cached = previewCache.get(url);
-    if (cached === 'error') {
-      setError(true);
-      setLoading(false);
+    if (!normalizedUrl) {
+      setState({ status: 'error', message: 'This link is invalid.' });
       return;
     }
+    const cached = readCache(normalizedUrl);
     if (cached) {
-      setPreview(cached);
-      setLoading(false);
+      setState(cached);
       return;
     }
-
     let cancelled = false;
-
-    (async () => {
-      try {
-        const data = await invoke<LinkPreviewData>('fetch_link_preview', { url });
-        if (!cancelled) {
-          previewCache.set(url, data);
-          setPreview(data);
-        }
-      } catch {
-        if (!cancelled) {
-          previewCache.set(url, 'error');
-          setError(true);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-
+    setState({ status: 'loading' });
+    loadPreview(normalizedUrl).then((nextState) => {
+      if (!cancelled) setState(nextState);
+    });
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [normalizedUrl]);
 
-  const handleClick = async () => {
+  const targetUrl =
+    state.status === 'ready' || state.status === 'fallback' ? state.preview.url : normalizedUrl;
+  const domain = targetUrl ? getDomainFromUrl(targetUrl) : 'Invalid link';
+
+  const handleOpen = async () => {
+    if (!targetUrl) return;
     try {
-      // Use tauri-plugin-opener to open the URL in the system browser
       const { openUrl } = await import('@tauri-apps/plugin-opener');
-      await openUrl(url);
+      await openUrl(targetUrl);
     } catch {
-      // Fallback: try window.open
-      window.open(url, '_blank', 'noopener,noreferrer');
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
     }
   };
 
-  const domain = getDomainFromUrl(url);
-
-  // Loading skeleton
-  if (loading) {
+  if (state.status === 'loading') {
     return (
       <div
-        className="mt-3 rounded-lg overflow-hidden animate-pulse"
+        className="mt-3 rounded-lg overflow-hidden animate-pulse motion-reduce:animate-none"
         style={{
           border: '1px solid hsl(var(--harbor-border-subtle))',
           background: 'hsl(var(--harbor-surface-1))',
+        }}
+        role="status"
+        aria-label="Loading link preview"
+        data-state="loading"
+      >
+        <div className="p-3 space-y-2">
+          <div className="h-3 w-20 rounded bg-[hsl(var(--harbor-surface-2))]" />
+          <div className="h-4 w-3/4 rounded bg-[hsl(var(--harbor-surface-2))]" />
+          <div className="h-3 w-full rounded bg-[hsl(var(--harbor-surface-2))]" />
+          <span className="sr-only">Loading link preview</span>
+        </div>
+      </div>
+    );
+  }
+
+  const preview = state.status === 'ready' || state.status === 'fallback' ? state.preview : null;
+  const isClickable = targetUrl !== null;
+  const image = preview?.image_url?.startsWith('data:image/') ? preview.image_url : null;
+  const providerEmbed = preview ? parseProviderEmbed(preview.url) : null;
+
+  return (
+    <>
+      <div
+        className={`mt-3 rounded-lg overflow-hidden transition-all duration-200 motion-reduce:transition-none ${
+          isClickable
+            ? 'harbor-interactive card-interactive cursor-pointer hover:brightness-110'
+            : ''
+        }`}
+        style={{
+          border: '1px solid hsl(var(--harbor-border-subtle))',
+          background: 'hsl(var(--harbor-surface-1))',
+        }}
+        onClick={isClickable ? handleOpen : undefined}
+        role={isClickable ? 'link' : 'status'}
+        tabIndex={isClickable ? 0 : undefined}
+        data-state={state.status}
+        onKeyDown={(event) => {
+          if (isClickable && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            handleOpen();
+          }
         }}
       >
         <div className="flex">
-          <div className="flex-1 p-3 space-y-2">
-            <div
-              className="h-3 w-20 rounded"
-              style={{ background: 'hsl(var(--harbor-surface-2))' }}
-            />
-            <div
-              className="h-4 w-3/4 rounded"
-              style={{ background: 'hsl(var(--harbor-surface-2))' }}
-            />
-            <div
-              className="h-3 w-full rounded"
-              style={{ background: 'hsl(var(--harbor-surface-2))' }}
-            />
-            <div
-              className="h-3 w-2/3 rounded"
-              style={{ background: 'hsl(var(--harbor-surface-2))' }}
-            />
+          <div className="flex-1 min-w-0 p-3 flex flex-col justify-center">
+            <p
+              className="text-xs font-medium uppercase tracking-wide mb-1 truncate"
+              style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
+            >
+              {preview?.site_name || domain}
+            </p>
+            {preview?.title && (
+              <p
+                className="text-sm font-semibold leading-snug mb-1 line-clamp-2"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              >
+                {preview.title}
+              </p>
+            )}
+            {preview?.description && (
+              <p
+                className="text-xs leading-relaxed line-clamp-2"
+                style={{ color: 'hsl(var(--harbor-text-secondary))' }}
+              >
+                {preview.description}
+              </p>
+            )}
+            {state.status === 'fallback' && (
+              <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                No preview details were published for this link.
+              </p>
+            )}
+            {state.status === 'error' && (
+              <p className="text-xs" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                {state.message}
+              </p>
+            )}
+            {targetUrl && (
+              <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
+                {targetUrl}
+              </p>
+            )}
           </div>
-          <div
-            className="w-28 flex-shrink-0"
-            style={{ background: 'hsl(var(--harbor-surface-2))' }}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  // Error fallback: simple link card showing domain
-  if (error || !preview) {
-    return (
-      <div
-        className="mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
-        style={{
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-          background: 'hsl(var(--harbor-surface-1))',
-        }}
-        onClick={handleClick}
-        role="link"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') handleClick();
-        }}
-      >
-        <div className="flex items-center gap-3 px-4 py-3">
-          {/* Globe icon */}
-          <svg
-            className="w-5 h-5 flex-shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"
-            />
-          </svg>
-          <div className="min-w-0 flex-1">
-            <p
-              className="text-sm font-medium truncate"
-              style={{ color: 'hsl(var(--harbor-primary))' }}
+          {image && (
+            <div
+              className="w-28 flex-shrink-0 relative"
+              style={{ background: 'hsl(var(--harbor-surface-2))' }}
             >
-              {domain}
-            </p>
-            <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-              {url}
-            </p>
-          </div>
-          {/* External link icon */}
-          <svg
-            className="w-4 h-4 flex-shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-            />
-          </svg>
-        </div>
-      </div>
-    );
-  }
-
-  // Has preview data but no meaningful content -- use the fallback style
-  const hasContent = preview.title || preview.description;
-  if (!hasContent) {
-    return (
-      <div
-        className="mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
-        style={{
-          border: '1px solid hsl(var(--harbor-border-subtle))',
-          background: 'hsl(var(--harbor-surface-1))',
-        }}
-        onClick={handleClick}
-        role="link"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') handleClick();
-        }}
-      >
-        <div className="flex items-center gap-3 px-4 py-3">
-          <svg
-            className="w-5 h-5 flex-shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"
-            />
-          </svg>
-          <div className="min-w-0 flex-1">
-            <p
-              className="text-sm font-medium truncate"
-              style={{ color: 'hsl(var(--harbor-primary))' }}
-            >
-              {preview.site_name || domain}
-            </p>
-            <p className="text-xs truncate" style={{ color: 'hsl(var(--harbor-text-tertiary))' }}>
-              {url}
-            </p>
-          </div>
-          <svg
-            className="w-4 h-4 flex-shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-            />
-          </svg>
-        </div>
-      </div>
-    );
-  }
-
-  // Full preview card with OG data
-  const showImage = preview.image_url && !imageError;
-
-  return (
-    <div
-      className="mt-3 rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:brightness-110"
-      style={{
-        border: '1px solid hsl(var(--harbor-border-subtle))',
-        background: 'hsl(var(--harbor-surface-1))',
-      }}
-      onClick={handleClick}
-      role="link"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') handleClick();
-      }}
-    >
-      <div className="flex">
-        {/* Text content */}
-        <div className="flex-1 min-w-0 p-3 flex flex-col justify-center">
-          {/* Site name */}
-          <p
-            className="text-xs font-medium uppercase tracking-wide mb-1 truncate"
-            style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-          >
-            {preview.site_name || domain}
-          </p>
-
-          {/* Title */}
-          {preview.title && (
-            <p
-              className="text-sm font-semibold leading-snug mb-1 line-clamp-2"
-              style={{ color: 'hsl(var(--harbor-text-primary))' }}
-            >
-              {preview.title}
-            </p>
-          )}
-
-          {/* Description */}
-          {preview.description && (
-            <p
-              className="text-xs leading-relaxed line-clamp-2"
-              style={{ color: 'hsl(var(--harbor-text-secondary))' }}
-            >
-              {preview.description}
-            </p>
+              <img
+                src={image}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover"
+                loading="lazy"
+              />
+            </div>
           )}
         </div>
-
-        {/* Thumbnail image */}
-        {showImage && (
-          <div
-            className="w-28 flex-shrink-0 relative"
-            style={{ background: 'hsl(var(--harbor-surface-2))' }}
-          >
-            <img
-              src={preview.image_url!}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover"
-              onError={() => setImageError(true)}
-              loading="lazy"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-        )}
       </div>
-    </div>
+      {providerEmbed && <ProviderEmbed embed={providerEmbed} />}
+    </>
   );
 }

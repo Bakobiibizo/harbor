@@ -64,10 +64,8 @@ impl FeedService {
         // Also include all active contacts so their public posts can appear in
         // the feed. Contacts-only posts are filtered below unless the author
         // has granted us wall_read.
-        if let Ok(contacts) = self.contacts_service.get_active_contacts() {
-            for contact in contacts {
-                allowed_authors.push(contact.peer_id);
-            }
+        for contact in self.contacts_service.get_active_contacts()? {
+            allowed_authors.push(contact.peer_id);
         }
 
         // Include our own peer_id so our posts appear in the feed too
@@ -102,36 +100,32 @@ impl FeedService {
                 }
                 false
             })
-            .map(|post| {
+            .map(|post| -> Result<FeedItem> {
                 // Look up display name from cache or contacts
-                let author_display_name = display_name_cache
-                    .entry(post.author_peer_id.clone())
-                    .or_insert_with(|| {
-                        // Check if it's our own post
-                        if post.author_peer_id == identity.peer_id {
+                let author_display_name =
+                    if let Some(cached) = display_name_cache.get(&post.author_peer_id) {
+                        cached.clone()
+                    } else {
+                        let label = if post.author_peer_id == identity.peer_id {
                             Some(identity.display_name.clone())
                         } else {
-                            // Look up from contacts
                             self.contacts_service
-                                .get_contact(&post.author_peer_id)
-                                .ok()
-                                .flatten()
-                                .map(|c| c.display_name)
-                        }
-                    })
-                    .clone();
+                                .get_contact(&post.author_peer_id)?
+                                .map(|contact| contact.display_name)
+                        };
+                        display_name_cache.insert(post.author_peer_id.clone(), label.clone());
+                        label
+                    };
 
-                FeedItem {
+                Ok(FeedItem {
                     author_verified_qualified_name: self
                         .contacts_service
-                        .verified_qualified_name(&post.author_peer_id)
-                        .ok()
-                        .flatten(),
+                        .verified_qualified_name(&post.author_peer_id)?,
                     post,
                     author_display_name,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(feed_items)
     }
@@ -173,20 +167,18 @@ impl FeedService {
             Some(identity.display_name.clone())
         } else {
             self.contacts_service
-                .get_contact(author_peer_id)
-                .ok()
-                .flatten()
+                .get_contact(author_peer_id)?
                 .map(|c| c.display_name)
         };
+
+        let author_verified_qualified_name = self
+            .contacts_service
+            .verified_qualified_name(author_peer_id)?;
 
         let feed_items: Vec<FeedItem> = posts
             .into_iter()
             .map(|post| FeedItem {
-                author_verified_qualified_name: self
-                    .contacts_service
-                    .verified_qualified_name(author_peer_id)
-                    .ok()
-                    .flatten(),
+                author_verified_qualified_name: author_verified_qualified_name.clone(),
                 post,
                 author_display_name: author_display_name.clone(),
             })

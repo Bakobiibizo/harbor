@@ -60,19 +60,6 @@ impl CryptoService {
         Ok(peer_id.to_string())
     }
 
-    /// Derive a peer ID from an Ed25519 public key (DEPRECATED - use derive_peer_id_from_signing_key)
-    /// This uses a simplified hash-based approach that is NOT compatible with libp2p
-    #[deprecated(note = "Use derive_peer_id_from_signing_key instead for libp2p compatibility")]
-    pub fn derive_peer_id(public_key: &VerifyingKey) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(public_key.as_bytes());
-        let hash = hasher.finalize();
-
-        // Format as base58-like string with "12D3KooW" prefix (simplified)
-        // WARNING: This is NOT the same as libp2p's PeerId format!
-        format!("12D3KooW{}", hex::encode(&hash[..16]))
-    }
-
     /// Encrypt private keys using a passphrase
     pub fn encrypt_keys(
         ed25519_private: &[u8],
@@ -85,7 +72,7 @@ impl CryptoService {
 
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
-            .map_err(|e| AppError::Crypto(format!("Failed to hash passphrase: {}", e)))?;
+            .map_err(|e| AppError::Crypto(format!("Failed to hash password: {}", e)))?;
 
         let hash_bytes = password_hash
             .hash
@@ -128,6 +115,39 @@ impl CryptoService {
         Ok(result)
     }
 
+    /// Validate the password-independent structure of an encrypted key blob.
+    /// This lets startup distinguish a locked identity from a key envelope that
+    /// cannot possibly be decrypted, without attempting or weakening password
+    /// verification.
+    pub fn validate_encrypted_key_envelope(encrypted: &[u8]) -> Result<()> {
+        if encrypted.is_empty() {
+            return Err(AppError::CryptoDecryption(
+                "Empty encrypted key data".to_string(),
+            ));
+        }
+
+        let salt_len = encrypted[0] as usize;
+        let nonce_start = 1usize.checked_add(salt_len).ok_or_else(|| {
+            AppError::CryptoDecryption("Invalid encrypted key salt length".to_string())
+        })?;
+        let ciphertext_start = nonce_start.checked_add(12).ok_or_else(|| {
+            AppError::CryptoDecryption("Invalid encrypted key nonce length".to_string())
+        })?;
+        // AES-GCM always appends a 16-byte authentication tag. Anything shorter
+        // is structurally corrupt regardless of the password supplied later.
+        if encrypted.len() < ciphertext_start + 16 {
+            return Err(AppError::CryptoDecryption(
+                "Invalid encrypted key data format".to_string(),
+            ));
+        }
+
+        let salt_str = std::str::from_utf8(&encrypted[1..nonce_start])
+            .map_err(|e| AppError::CryptoDecryption(format!("Invalid key salt: {e}")))?;
+        SaltString::from_b64(salt_str)
+            .map_err(|e| AppError::CryptoDecryption(format!("Invalid key salt format: {e}")))?;
+        Ok(())
+    }
+
     /// Decrypt private keys using a passphrase
     pub fn decrypt_keys(encrypted: &[u8], passphrase: &str) -> Result<EncryptedKeys> {
         if encrypted.is_empty() {
@@ -161,7 +181,7 @@ impl CryptoService {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
-            .map_err(|e| AppError::CryptoDecryption(format!("Failed to hash passphrase: {}", e)))?;
+            .map_err(|e| AppError::CryptoDecryption(format!("Failed to hash password: {}", e)))?;
 
         let hash_bytes = password_hash
             .hash
@@ -178,9 +198,7 @@ impl CryptoService {
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            AppError::IdentityInvalidPassphrase(
-                "Decryption failed - invalid passphrase".to_string(),
-            )
+            AppError::IdentityInvalidPassphrase("Decryption failed - invalid password".to_string())
         })?;
 
         let keys: EncryptedKeys = serde_json::from_slice(&plaintext)
@@ -204,51 +222,40 @@ impl CryptoService {
         our_secret.diffie_hellman(their_public).to_bytes()
     }
 
-    /// Derive a symmetric key from shared secret using HKDF
+    /// Derive a versioned key for an ephemeral, domain-specific envelope.
     ///
-    /// DEPRECATED: Use `derive_conversation_key` instead for conversation encryption.
-    /// This function is kept for backwards compatibility only.
-    pub fn derive_symmetric_key(shared_secret: &[u8], context: &[u8]) -> [u8; 32] {
-        use hkdf::Hkdf;
-
-        let hk = Hkdf::<Sha256>::new(Some(context), shared_secret);
-        let mut key = [0u8; 32];
-        hk.expand(b"harbor-v1", &mut key)
-            .expect("HKDF expand failed");
-        key
-    }
-
-    /// Derive a conversation encryption key from X25519 shared secret
-    ///
-    /// The salt includes:
-    /// - Protocol version prefix for domain separation
-    /// - Conversation ID (deterministic from peer IDs)
-    /// - Both peer IDs in sorted order (for consistency regardless of who initiates)
-    ///
-    /// This hardening prevents accidental cross-context key reuse.
-    pub fn derive_conversation_key(
+    /// This is intentionally separate from direct-message traffic keys. Callers must provide the
+    /// exact application protocol domain and version so a shared X25519 secret cannot silently be
+    /// reused across incompatible envelope types.
+    pub fn derive_ephemeral_envelope_key(
         shared_secret: &[u8; 32],
-        conversation_id: &str,
-        peer_a: &str,
-        peer_b: &str,
-    ) -> [u8; 32] {
+        protocol_domain: &str,
+        protocol_version: u16,
+    ) -> Result<[u8; 32]> {
         use hkdf::Hkdf;
 
-        // Sort peer IDs for consistent salt regardless of direction
-        let (first, second) = if peer_a < peer_b {
-            (peer_a, peer_b)
-        } else {
-            (peer_b, peer_a)
-        };
+        if shared_secret.iter().all(|byte| *byte == 0) {
+            return Err(AppError::Crypto(
+                "Rejected an invalid all-zero X25519 shared secret".to_string(),
+            ));
+        }
+        if protocol_domain.is_empty() {
+            return Err(AppError::Validation(
+                "Ephemeral envelope protocol domain must not be empty".to_string(),
+            ));
+        }
 
-        // Build salt with full context
-        let salt = format!("harbor:v1:conv:{}:{}:{}", conversation_id, first, second);
-
-        let hk = Hkdf::<Sha256>::new(Some(salt.as_bytes()), shared_secret);
+        let mut salt_hasher = Sha256::new();
+        salt_hasher.update(b"harbor/ephemeral-envelope/kdf-salt");
+        salt_hasher.update(protocol_version.to_be_bytes());
+        salt_hasher.update((protocol_domain.len() as u64).to_be_bytes());
+        salt_hasher.update(protocol_domain.as_bytes());
+        let salt = salt_hasher.finalize();
+        let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret);
         let mut key = [0u8; 32];
-        hk.expand(b"conversation-key", &mut key)
-            .expect("HKDF expand failed");
-        key
+        hk.expand(b"harbor/ephemeral-envelope/key", &mut key)
+            .map_err(|_| AppError::Crypto("Failed to derive ephemeral envelope key".to_string()))?;
+        Ok(key)
     }
 
     /// Encrypt a message using AES-256-GCM
@@ -299,72 +306,6 @@ impl CryptoService {
         hasher.update(data);
         hasher.finalize().into()
     }
-
-    // ============================================================
-    // Counter-based Nonce Functions (for conversation encryption)
-    // ============================================================
-
-    /// Generate a deterministic nonce from a send counter
-    ///
-    /// The nonce is 12 bytes (96 bits) for AES-GCM:
-    /// - First 4 bytes: 0x00 (reserved for future use/direction flag)
-    /// - Next 8 bytes: counter as big-endian u64
-    ///
-    /// This ensures unique nonces as long as:
-    /// 1. Counter is never reused for the same conversation
-    /// 2. Counter increases monotonically
-    pub fn nonce_from_counter(counter: u64) -> [u8; 12] {
-        let mut nonce = [0u8; 12];
-        // First 4 bytes are zero (can use for direction flag later)
-        // Last 8 bytes are the counter
-        nonce[4..12].copy_from_slice(&counter.to_be_bytes());
-        nonce
-    }
-
-    /// Encrypt a message using AES-256-GCM with a counter-based nonce
-    ///
-    /// IMPORTANT: The counter MUST be unique for each message in a conversation.
-    /// Use `Database::next_send_counter()` to get the next counter value.
-    pub fn encrypt_message_with_counter(
-        key: &[u8; 32],
-        plaintext: &[u8],
-        counter: u64,
-    ) -> Result<Vec<u8>> {
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| AppError::CryptoEncryption(format!("Failed to create cipher: {}", e)))?;
-
-        let nonce_bytes = Self::nonce_from_counter(counter);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let ciphertext = cipher
-            .encrypt(nonce, plaintext)
-            .map_err(|e| AppError::CryptoEncryption(format!("Encryption failed: {}", e)))?;
-
-        // Return only ciphertext - counter is sent separately in message header
-        Ok(ciphertext)
-    }
-
-    /// Decrypt a message using AES-256-GCM with a counter-based nonce
-    ///
-    /// IMPORTANT: Before calling this, verify the counter hasn't been used before
-    /// using `Database::check_and_record_nonce()`.
-    pub fn decrypt_message_with_counter(
-        key: &[u8; 32],
-        ciphertext: &[u8],
-        counter: u64,
-    ) -> Result<Vec<u8>> {
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| AppError::CryptoDecryption(format!("Failed to create cipher: {}", e)))?;
-
-        let nonce_bytes = Self::nonce_from_counter(counter);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| AppError::CryptoDecryption("Decryption failed".to_string()))?;
-
-        Ok(plaintext)
-    }
 }
 
 #[cfg(test)]
@@ -397,6 +338,29 @@ mod tests {
         let bob_shared = CryptoService::x25519_dh(&bob_secret, &alice_public);
 
         assert_eq!(alice_shared, bob_shared);
+    }
+
+    #[test]
+    fn ephemeral_envelope_keys_are_versioned_and_domain_separated() {
+        let shared = [0x42; 32];
+        let mention_v2 =
+            CryptoService::derive_ephemeral_envelope_key(&shared, "harbor/mention", 2).unwrap();
+        assert_eq!(
+            mention_v2,
+            CryptoService::derive_ephemeral_envelope_key(&shared, "harbor/mention", 2).unwrap()
+        );
+        assert_ne!(
+            mention_v2,
+            CryptoService::derive_ephemeral_envelope_key(&shared, "harbor/mention", 3).unwrap()
+        );
+        assert_ne!(
+            mention_v2,
+            CryptoService::derive_ephemeral_envelope_key(&shared, "harbor/other", 2).unwrap()
+        );
+        assert!(
+            CryptoService::derive_ephemeral_envelope_key(&[0; 32], "harbor/mention", 2).is_err()
+        );
+        assert!(CryptoService::derive_ephemeral_envelope_key(&shared, "", 2).is_err());
     }
 
     #[test]
@@ -500,159 +464,6 @@ mod tests {
             from_verifying.len() >= 50,
             "Peer ID should be a full libp2p PeerId: {}",
             from_verifying
-        );
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_peer_id_derivation_legacy() {
-        let (_, verifying_key) = CryptoService::generate_ed25519_keypair();
-        let peer_id = CryptoService::derive_peer_id(&verifying_key);
-
-        assert!(peer_id.starts_with("12D3KooW"));
-        assert_eq!(peer_id.len(), 8 + 32); // prefix + hex
-    }
-
-    #[test]
-    fn test_nonce_from_counter() {
-        let nonce1 = CryptoService::nonce_from_counter(1);
-        let nonce2 = CryptoService::nonce_from_counter(2);
-        let nonce_max = CryptoService::nonce_from_counter(u64::MAX);
-
-        // Nonces should be different
-        assert_ne!(nonce1, nonce2);
-
-        // First 4 bytes should be zero
-        assert_eq!(&nonce1[0..4], &[0, 0, 0, 0]);
-        assert_eq!(&nonce_max[0..4], &[0, 0, 0, 0]);
-
-        // Counter should be in last 8 bytes as big-endian
-        assert_eq!(&nonce1[4..12], &1u64.to_be_bytes());
-        assert_eq!(&nonce2[4..12], &2u64.to_be_bytes());
-    }
-
-    #[test]
-    fn test_counter_based_encryption() {
-        let key = [42u8; 32];
-        let message = b"Secret message with counter";
-
-        // Encrypt with counter 1
-        let ciphertext = CryptoService::encrypt_message_with_counter(&key, message, 1).unwrap();
-
-        // Decrypt with same counter
-        let decrypted = CryptoService::decrypt_message_with_counter(&key, &ciphertext, 1).unwrap();
-        assert_eq!(decrypted, message);
-
-        // Decrypt with wrong counter should fail
-        let result = CryptoService::decrypt_message_with_counter(&key, &ciphertext, 2);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_same_message_different_counters() {
-        let key = [42u8; 32];
-        let message = b"Same message";
-
-        let ciphertext1 = CryptoService::encrypt_message_with_counter(&key, message, 1).unwrap();
-        let ciphertext2 = CryptoService::encrypt_message_with_counter(&key, message, 2).unwrap();
-
-        // Same plaintext with different counters produces different ciphertext
-        assert_ne!(ciphertext1, ciphertext2);
-
-        // Both decrypt correctly with their respective counters
-        let decrypted1 =
-            CryptoService::decrypt_message_with_counter(&key, &ciphertext1, 1).unwrap();
-        let decrypted2 =
-            CryptoService::decrypt_message_with_counter(&key, &ciphertext2, 2).unwrap();
-        assert_eq!(decrypted1, message);
-        assert_eq!(decrypted2, message);
-    }
-
-    #[test]
-    fn test_derive_conversation_key_deterministic() {
-        let shared_secret = [0x42u8; 32];
-        let conv_id = "conv-123";
-        let peer_a = "12D3KooWAlice";
-        let peer_b = "12D3KooWBob";
-
-        let key1 = CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_a, peer_b);
-        let key2 = CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_a, peer_b);
-
-        assert_eq!(key1, key2, "Same inputs should produce same key");
-    }
-
-    #[test]
-    fn test_derive_conversation_key_order_independent() {
-        let shared_secret = [0x42u8; 32];
-        let conv_id = "conv-123";
-        let peer_a = "12D3KooWAlice";
-        let peer_b = "12D3KooWBob";
-
-        // Order of peer IDs shouldn't matter
-        let key_ab =
-            CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_a, peer_b);
-        let key_ba =
-            CryptoService::derive_conversation_key(&shared_secret, conv_id, peer_b, peer_a);
-
-        assert_eq!(
-            key_ab, key_ba,
-            "Peer order should not affect key derivation"
-        );
-    }
-
-    #[test]
-    fn test_derive_conversation_key_different_conversations() {
-        let shared_secret = [0x42u8; 32];
-        let peer_a = "12D3KooWAlice";
-        let peer_b = "12D3KooWBob";
-
-        let key1 = CryptoService::derive_conversation_key(&shared_secret, "conv-1", peer_a, peer_b);
-        let key2 = CryptoService::derive_conversation_key(&shared_secret, "conv-2", peer_a, peer_b);
-
-        assert_ne!(
-            key1, key2,
-            "Different conversations should have different keys"
-        );
-    }
-
-    #[test]
-    fn test_derive_conversation_key_different_peers() {
-        let shared_secret = [0x42u8; 32];
-        let conv_id = "conv-123";
-
-        let key1 = CryptoService::derive_conversation_key(
-            &shared_secret,
-            conv_id,
-            "12D3KooWAlice",
-            "12D3KooWBob",
-        );
-        let key2 = CryptoService::derive_conversation_key(
-            &shared_secret,
-            conv_id,
-            "12D3KooWAlice",
-            "12D3KooWCharlie",
-        );
-
-        assert_ne!(
-            key1, key2,
-            "Different peer combinations should have different keys"
-        );
-    }
-
-    #[test]
-    fn test_derive_conversation_key_different_secrets() {
-        let secret1 = [0x42u8; 32];
-        let secret2 = [0x43u8; 32];
-        let conv_id = "conv-123";
-        let peer_a = "12D3KooWAlice";
-        let peer_b = "12D3KooWBob";
-
-        let key1 = CryptoService::derive_conversation_key(&secret1, conv_id, peer_a, peer_b);
-        let key2 = CryptoService::derive_conversation_key(&secret2, conv_id, peer_a, peer_b);
-
-        assert_ne!(
-            key1, key2,
-            "Different shared secrets should produce different keys"
         );
     }
 }

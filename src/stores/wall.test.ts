@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useWallStore } from './wall';
+import { applyPostRelayStatusEvent, useWallStore } from './wall';
 import { useSettingsStore } from './settings';
 import { postsService } from '../services/posts';
 import { mediaService } from '../services/media';
@@ -20,7 +20,6 @@ vi.mock('../services/posts', () => ({
 
 vi.mock('../services/media', () => ({
   mediaService: {
-    storeMediaBytes: vi.fn(),
     getMediaUrl: vi.fn(),
   },
 }));
@@ -61,6 +60,7 @@ const mockBackendPost = {
   updatedAt: 1700000000,
   deletedAt: null,
   isLocal: true,
+  relayStatus: 'relay_acknowledged' as const,
 };
 
 describe('useWallStore', () => {
@@ -128,7 +128,7 @@ describe('useWallStore', () => {
       expect(state.error).toContain('Network error');
     });
 
-    it('should render image and video media after reload or sync', async () => {
+    it('should preserve image and video metadata after reload even before bytes arrive', async () => {
       vi.mocked(postsService.getMyPosts).mockResolvedValue([mockBackendPost]);
       vi.mocked(postsService.getPostMedia).mockResolvedValue([
         {
@@ -160,16 +160,27 @@ describe('useWallStore', () => {
           signature: [4, 5, 6],
         },
       ]);
-      vi.mocked(mediaService.getMediaUrl)
-        .mockResolvedValueOnce('data:image/png;base64,image')
-        .mockResolvedValueOnce('data:video/mp4;base64,video');
-
       await useWallStore.getState().loadPosts();
 
       expect(useWallStore.getState().posts[0].media).toEqual([
-        { type: 'image', url: 'data:image/png;base64,image', name: 'photo.png' },
-        { type: 'video', url: 'data:video/mp4;base64,video', name: 'clip.mp4' },
+        {
+          type: 'image',
+          url: 'a'.repeat(64),
+          name: 'photo.png',
+          sourcePeerId: 'peer-abc',
+          mimeType: 'image/png',
+          totalBytes: 100,
+        },
+        {
+          type: 'video',
+          url: 'b'.repeat(64),
+          name: 'clip.mp4',
+          sourcePeerId: 'peer-abc',
+          mimeType: 'video/mp4',
+          totalBytes: 200,
+        },
       ]);
+      expect(mediaService.getMediaUrl).not.toHaveBeenCalled();
     });
 
     it('should handle media fetch errors gracefully per post', async () => {
@@ -211,6 +222,7 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'new-post-1',
         createdAt: 1700000100,
+        relayStatus: 'local_pending',
       });
 
       await useWallStore.getState().createPost('New post content');
@@ -221,6 +233,7 @@ describe('useWallStore', () => {
       expect(state.posts[0].content).toBe('New post content');
       expect(state.posts[0].contentType).toBe('post');
       expect(state.posts[0].visibility).toBe('contacts');
+      expect(state.posts[0].relayStatus).toBe('local_pending');
       expect(postsService.createPost).toHaveBeenCalledWith(
         'text',
         'New post content',
@@ -234,6 +247,7 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'public-post',
         createdAt: 1700000100,
+        relayStatus: 'local_pending',
       });
 
       await useWallStore.getState().createPost('Public by default');
@@ -252,6 +266,7 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'contacts-post',
         createdAt: 1700000100,
+        relayStatus: 'local_pending',
       });
 
       await useWallStore.getState().createPost('Contacts override', 'post', undefined, 'contacts');
@@ -287,6 +302,7 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'new-post',
         createdAt: 1700000100,
+        relayStatus: 'local_pending',
       });
 
       await useWallStore.getState().createPost('New post');
@@ -307,17 +323,20 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'media-post',
         createdAt: 1700000100,
+        relayStatus: 'local_pending',
       });
-      vi.mocked(mediaService.storeMediaBytes).mockResolvedValue('a'.repeat(64));
-
-      const file = {
-        type: 'image/png',
-        arrayBuffer: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
-      } as unknown as File;
-      const media = [{ type: 'image' as const, url: 'blob:test', name: 'photo.png', file }];
+      const media = [
+        {
+          type: 'image' as const,
+          url: 'asset://localhost/photo.png',
+          name: 'photo.png',
+          mediaHash: 'a'.repeat(64),
+          mimeType: 'image/png',
+          fileSize: 3,
+        },
+      ];
       await useWallStore.getState().createPost('Post with image', 'post', media);
 
-      expect(mediaService.storeMediaBytes).toHaveBeenCalledTimes(1);
       expect(postsService.createPost).toHaveBeenCalledWith('text', 'Post with image', 'contacts', [
         {
           mediaHash: 'a'.repeat(64),
@@ -339,18 +358,18 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'video-post',
         createdAt: 1700000100,
+        relayStatus: 'local_pending',
       });
-      vi.mocked(mediaService.storeMediaBytes).mockResolvedValue('b'.repeat(64));
-
-      const file = {
-        type: 'video/mp4',
-        arrayBuffer: vi.fn(async () => new Uint8Array([4, 5, 6, 7]).buffer),
-      } as unknown as File;
-      await useWallStore
-        .getState()
-        .createPost('Post with video', 'video', [
-          { type: 'video', url: 'blob:video', name: 'clip.mp4', file },
-        ]);
+      await useWallStore.getState().createPost('Post with video', 'video', [
+        {
+          type: 'video',
+          url: 'asset://localhost/clip.mp4',
+          name: 'clip.mp4',
+          mediaHash: 'b'.repeat(64),
+          mimeType: 'video/mp4',
+          fileSize: 4,
+        },
+      ]);
 
       expect(postsService.createPost).toHaveBeenCalledWith('video', 'Post with video', 'contacts', [
         {
@@ -384,12 +403,16 @@ describe('useWallStore', () => {
         ],
       });
 
-      vi.mocked(postsService.updatePost).mockResolvedValue(undefined);
+      vi.mocked(postsService.updatePost).mockResolvedValue({
+        postId: 'post-1',
+        relayStatus: 'local_pending',
+      });
 
       await useWallStore.getState().updatePost('post-1', 'Updated content');
 
       const state = useWallStore.getState();
       expect(state.posts[0].content).toBe('Updated content');
+      expect(state.posts[0].relayStatus).toBe('local_pending');
       expect(state.editingPostId).toBeNull();
     });
 
@@ -420,7 +443,7 @@ describe('useWallStore', () => {
   });
 
   describe('deletePost', () => {
-    it('should remove post from local state', async () => {
+    it('keeps a local-pending delete visible until the relay acknowledges it', async () => {
       useWallStore.setState({
         posts: [
           {
@@ -434,6 +457,7 @@ describe('useWallStore', () => {
             authorPeerId: 'peer-abc',
             visibility: 'contacts',
             lamportClock: 0,
+            relayStatus: 'relay_acknowledged',
           },
           {
             postId: 'post-2',
@@ -446,17 +470,96 @@ describe('useWallStore', () => {
             authorPeerId: 'peer-abc',
             visibility: 'contacts',
             lamportClock: 0,
+            relayStatus: 'relay_acknowledged',
           },
         ],
       });
 
-      vi.mocked(postsService.deletePost).mockResolvedValue(undefined);
+      vi.mocked(postsService.deletePost).mockResolvedValue({
+        postId: 'post-1',
+        relayStatus: 'local_pending',
+      });
 
       await useWallStore.getState().deletePost('post-1');
 
       const posts = useWallStore.getState().posts;
-      expect(posts).toHaveLength(1);
-      expect(posts[0].postId).toBe('post-2');
+      expect(posts).toHaveLength(2);
+      expect(posts[0]).toMatchObject({
+        postId: 'post-1',
+        relayStatus: 'local_pending',
+        deletionPending: true,
+      });
+
+      applyPostRelayStatusEvent({
+        post_id: 'post-1',
+        event_id: 'deleted:post-1:2',
+        status: 'relay_acknowledged',
+      });
+      expect(useWallStore.getState().posts.map((post) => post.postId)).toEqual(['post-2']);
+    });
+
+    it.each(['conflict', 'failed'] as const)(
+      'retains a deletion tombstone and displays the %s terminal state',
+      (status) => {
+        useWallStore.setState({
+          posts: [
+            {
+              postId: 'post-1',
+              content: 'To delete',
+              contentType: 'post',
+              timestamp: new Date(),
+              likes: 0,
+              comments: 0,
+              liked: false,
+              authorPeerId: 'peer-abc',
+              visibility: 'contacts',
+              lamportClock: 2,
+              relayStatus: 'local_pending',
+              deletionPending: true,
+            },
+          ],
+        });
+
+        applyPostRelayStatusEvent({
+          post_id: 'post-1',
+          event_id: 'deleted:post-1:2',
+          status,
+        });
+
+        expect(useWallStore.getState().posts[0]).toMatchObject({
+          relayStatus: status,
+          deletionPending: true,
+        });
+      },
+    );
+
+    it('ignores a stale relay event after a profile reset', () => {
+      useWallStore.setState({
+        posts: [
+          {
+            postId: 'post-1',
+            content: 'Old profile',
+            contentType: 'post',
+            timestamp: new Date(),
+            likes: 0,
+            comments: 0,
+            liked: false,
+            authorPeerId: 'old-peer',
+            visibility: 'contacts',
+            lamportClock: 1,
+            relayStatus: 'local_pending',
+          },
+        ],
+      });
+      useWallStore.getState().reset();
+
+      applyPostRelayStatusEvent({
+        post_id: 'post-1',
+        event_id: 'deleted:post-1:1',
+        status: 'failed',
+      });
+
+      expect(useWallStore.getState().posts).toEqual([]);
     });
   });
 
@@ -627,6 +730,7 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'shared-post-1',
         createdAt: 1700000200,
+        relayStatus: 'local_pending',
       });
 
       const sharedFrom = {
@@ -656,6 +760,7 @@ describe('useWallStore', () => {
       vi.mocked(postsService.createPost).mockResolvedValue({
         postId: 'shared-post-2',
         createdAt: 1700000200,
+        relayStatus: 'local_pending',
       });
 
       const sharedFrom = {

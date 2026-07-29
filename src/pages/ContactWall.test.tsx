@@ -3,7 +3,7 @@ import { publicOnlyText } from './ContactWall';
 
 describe('contact wall capability status', () => {
   it('states active private-wall access precisely', () => {
-    expect(publicOnlyText(true)).toContain('WallRead grant active');
+    expect(publicOnlyText(true)).toContain('Contact access is active');
   });
 
   it('explains expired or revoked access without claiming cached data was erased', () => {
@@ -14,6 +14,6 @@ describe('contact wall capability status', () => {
   });
 
   it('uses a non-authoritative state while the current grant is still loading', () => {
-    expect(publicOnlyText(null)).toContain('while Harbor verifies the current grant');
+    expect(publicOnlyText(null)).toContain('while Harbor verifies permission');
   });
 });

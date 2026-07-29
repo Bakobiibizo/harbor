@@ -1,44 +1,34 @@
 use serde::{Deserialize, Serialize};
 
-/// A direct message between two peers
+use crate::services::{MESSAGE_CRYPTO_VERSION, MESSAGE_NONCE_ID_LEN};
+
+/// A version-2 direct-message create event.
 ///
-/// # Nonce Counter & Replay Protection
-///
-/// The `nonce_counter` field is critical for AES-256-GCM encryption security.
-/// It must be:
-/// - Unique per message within a conversation
-/// - Monotonically increasing for the sender
-///
-/// ## Sender Rules:
-/// 1. Get next counter via `Database::next_send_counter(conversation_id)`
-/// 2. Use counter for AES-GCM nonce generation
-/// 3. Include counter in this message (signed)
-///
-/// ## Receiver Rules:
-/// 1. BEFORE decrypting, call `Database::check_and_record_nonce()`
-/// 2. If returns `false` (replay detected), reject the entire message
-/// 3. If returns `true`, proceed with decryption
-/// 4. The nonce is permanently recorded to prevent future replay
-///
-/// This prevents attackers from re-sending captured messages.
+/// `nonce_counter` remains signed replay/order metadata. Cryptographic nonce
+/// uniqueness comes from the direction-specific traffic key plus the fresh
+/// `nonce_id`, event identity, and immutable create context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirectMessage {
+pub struct DirectMessageV2 {
+    pub protocol_version: u16,
     /// Unique message ID (UUID v4)
     pub message_id: String,
+    /// Create events use the message ID as their immutable event ID.
+    pub event_id: String,
     /// Conversation ID (derived from sorted peer IDs)
     pub conversation_id: String,
     /// Sender's peer ID
     pub sender_peer_id: String,
     /// Recipient's peer ID
     pub recipient_peer_id: String,
-    /// Encrypted message content (AES-256-GCM with counter-based nonce)
+    /// Fresh 128-bit public nonce identifier used by the v2 event KDF.
+    pub nonce_id: [u8; MESSAGE_NONCE_ID_LEN],
+    /// Authenticated encrypted message content.
     pub content_encrypted: Vec<u8>,
     /// Content type (text, image, etc.)
     pub content_type: String,
     /// ID of message being replied to (optional)
     pub reply_to: Option<String>,
-    /// Counter used for AES-GCM nonce generation (for replay protection)
-    /// Must be unique per sender per conversation
+    /// Monotonic sender-local replay/order counter. It is not an AEAD nonce.
     pub nonce_counter: u64,
     /// Lamport timestamp for ordering
     pub lamport_clock: u64,
@@ -46,6 +36,68 @@ pub struct DirectMessage {
     pub timestamp: i64,
     /// Signature over all fields above (excluding signature itself)
     pub signature: Vec<u8>,
+}
+
+impl DirectMessageV2 {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        if self.protocol_version != MESSAGE_CRYPTO_VERSION {
+            return Err("unsupported direct-message protocol version");
+        }
+        if self.message_id.is_empty()
+            || self.event_id != self.message_id
+            || self.conversation_id.is_empty()
+            || self.sender_peer_id.is_empty()
+            || self.recipient_peer_id.is_empty()
+            || self.sender_peer_id == self.recipient_peer_id
+            || self.content_encrypted.is_empty()
+            || self.nonce_counter == 0
+            || self.signature.is_empty()
+        {
+            return Err("invalid direct-message v2 envelope");
+        }
+        Ok(())
+    }
+}
+
+/// A signed, encrypted, immutable edit event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageEditV2 {
+    pub protocol_version: u16,
+    pub event_id: String,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub author_peer_id: String,
+    pub recipient_peer_id: String,
+    pub revision: u64,
+    pub nonce_id: [u8; MESSAGE_NONCE_ID_LEN],
+    pub content_encrypted: Vec<u8>,
+    pub nonce_counter: u64,
+    pub lamport_clock: u64,
+    pub authored_at: i64,
+    pub signature: Vec<u8>,
+}
+
+impl MessageEditV2 {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        if self.protocol_version != MESSAGE_CRYPTO_VERSION {
+            return Err("unsupported message-edit protocol version");
+        }
+        if self.event_id.is_empty()
+            || self.event_id == self.message_id
+            || self.message_id.is_empty()
+            || self.conversation_id.is_empty()
+            || self.author_peer_id.is_empty()
+            || self.recipient_peer_id.is_empty()
+            || self.author_peer_id == self.recipient_peer_id
+            || self.revision == 0
+            || self.content_encrypted.is_empty()
+            || self.nonce_counter == 0
+            || self.signature.is_empty()
+        {
+            return Err("invalid message-edit v2 envelope");
+        }
+        Ok(())
+    }
 }
 
 /// Acknowledgment of message delivery/read
@@ -77,19 +129,12 @@ pub enum AckStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagingMessage {
-    /// A direct message
-    Message(DirectMessage),
+    /// A version-2 direct-message create event.
+    MessageV2(DirectMessageV2),
     /// An acknowledgment
     Ack(MessageAck),
-    /// An edit to a previously sent message
-    EditMessage {
-        /// The ID of the message being edited
-        message_id: String,
-        /// The new plaintext content (will be encrypted by the receiver's local store)
-        new_content: String,
-        /// Timestamp of the edit
-        edited_at: i64,
-    },
+    /// A version-2 encrypted immutable edit event.
+    EditV2(MessageEditV2),
 }
 
 /// Codec for messaging protocol
@@ -136,11 +181,14 @@ mod tests {
 
     #[test]
     fn test_direct_message_roundtrip() {
-        let msg = DirectMessage {
+        let msg = DirectMessageV2 {
+            protocol_version: MESSAGE_CRYPTO_VERSION,
             message_id: "msg-123".to_string(),
+            event_id: "msg-123".to_string(),
             conversation_id: "conv-456".to_string(),
             sender_peer_id: "peer-a".to_string(),
             recipient_peer_id: "peer-b".to_string(),
+            nonce_id: [9; MESSAGE_NONCE_ID_LEN],
             content_encrypted: vec![1, 2, 3, 4],
             content_type: "text".to_string(),
             reply_to: None,
@@ -150,16 +198,73 @@ mod tests {
             signature: vec![5, 6, 7, 8],
         };
 
-        let wrapped = MessagingMessage::Message(msg.clone());
+        let wrapped = MessagingMessage::MessageV2(msg.clone());
         let encoded = MessagingCodec::encode(&wrapped).unwrap();
         let decoded = MessagingCodec::decode(&encoded).unwrap();
 
-        if let MessagingMessage::Message(decoded_msg) = decoded {
+        if let MessagingMessage::MessageV2(decoded_msg) = decoded {
             assert_eq!(decoded_msg.message_id, msg.message_id);
             assert_eq!(decoded_msg.content_encrypted, msg.content_encrypted);
         } else {
             panic!("Expected Message variant");
         }
+    }
+
+    #[test]
+    fn encrypted_edit_roundtrip_contains_no_plaintext_field() {
+        let edit = MessageEditV2 {
+            protocol_version: MESSAGE_CRYPTO_VERSION,
+            event_id: "edit-2".to_string(),
+            message_id: "msg-123".to_string(),
+            conversation_id: "conv-456".to_string(),
+            author_peer_id: "peer-a".to_string(),
+            recipient_peer_id: "peer-b".to_string(),
+            revision: 2,
+            nonce_id: [7; MESSAGE_NONCE_ID_LEN],
+            content_encrypted: vec![0xde, 0xad, 0xbe, 0xef],
+            nonce_counter: 8,
+            lamport_clock: 11,
+            authored_at: 1_234_567_890,
+            signature: vec![5, 6, 7, 8],
+        };
+
+        let encoded = MessagingCodec::encode(&MessagingMessage::EditV2(edit.clone())).unwrap();
+        assert!(!String::from_utf8_lossy(&encoded).contains("new_content"));
+        let decoded = MessagingCodec::decode(&encoded).unwrap();
+        match decoded {
+            MessagingMessage::EditV2(decoded) => {
+                assert_eq!(decoded.event_id, edit.event_id);
+                assert_eq!(decoded.content_encrypted, edit.content_encrypted);
+                assert!(decoded.validate_shape().is_ok());
+            }
+            _ => panic!("Expected EditV2 variant"),
+        }
+    }
+
+    #[test]
+    fn legacy_plaintext_edit_wire_format_is_rejected() {
+        #[derive(Serialize)]
+        struct LegacyPlaintextEdit<'a> {
+            #[serde(rename = "type")]
+            message_type: &'a str,
+            message_id: &'a str,
+            new_content: &'a str,
+            edited_at: i64,
+        }
+
+        let mut encoded = Vec::new();
+        ciborium::into_writer(
+            &LegacyPlaintextEdit {
+                message_type: "edit_message",
+                message_id: "msg-123",
+                new_content: "this must never cross the wire",
+                edited_at: 1_234_567_890,
+            },
+            &mut encoded,
+        )
+        .unwrap();
+
+        assert!(MessagingCodec::decode(&encoded).is_err());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { SearchIcon, XIcon } from '../icons';
+import { migrateLegacyProfileValue, profileStorageKey } from '../../services/profileStorage';
 
 // ============================================
 // Emoji Data
@@ -792,13 +793,23 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
 // ============================================
 
 const RECENT_EMOJIS_KEY = 'harbor-recent-emojis';
+const EMOJI_RECENTS_NAMESPACE = 'emoji-recents';
+const EMOJI_SKIN_TONE_NAMESPACE = 'emoji-skin-tone';
+const EMOJI_PROFILE_VERSION = 1;
 const MAX_RECENT = 32;
 
 function getRecentEmojis(): string[] {
+  const stored = migrateLegacyProfileValue(
+    RECENT_EMOJIS_KEY,
+    EMOJI_RECENTS_NAMESPACE,
+    EMOJI_PROFILE_VERSION,
+  );
   try {
-    const stored = localStorage.getItem(RECENT_EMOJIS_KEY);
     if (stored) {
-      return JSON.parse(stored);
+      const parsed = JSON.parse(stored) as unknown;
+      return Array.isArray(parsed)
+        ? parsed.filter((value): value is string => typeof value === 'string').slice(0, MAX_RECENT)
+        : [];
     }
   } catch {
     // ignore parse errors
@@ -810,11 +821,10 @@ function addRecentEmoji(emoji: string): string[] {
   const recent = getRecentEmojis().filter((e) => e !== emoji);
   recent.unshift(emoji);
   const trimmed = recent.slice(0, MAX_RECENT);
-  try {
-    localStorage.setItem(RECENT_EMOJIS_KEY, JSON.stringify(trimmed));
-  } catch {
-    // ignore storage errors
-  }
+  localStorage.setItem(
+    profileStorageKey(EMOJI_RECENTS_NAMESPACE, EMOJI_PROFILE_VERSION),
+    JSON.stringify(trimmed),
+  );
   return trimmed;
 }
 
@@ -825,8 +835,12 @@ function addRecentEmoji(emoji: string): string[] {
 const SKIN_TONE_KEY = 'harbor-emoji-skin-tone';
 
 function getStoredSkinTone(): number {
+  const stored = migrateLegacyProfileValue(
+    SKIN_TONE_KEY,
+    EMOJI_SKIN_TONE_NAMESPACE,
+    EMOJI_PROFILE_VERSION,
+  );
   try {
-    const stored = localStorage.getItem(SKIN_TONE_KEY);
     if (stored !== null) {
       const val = parseInt(stored, 10);
       if (val >= 0 && val < SKIN_TONES.length) return val;
@@ -838,11 +852,10 @@ function getStoredSkinTone(): number {
 }
 
 function storeSkinTone(index: number) {
-  try {
-    localStorage.setItem(SKIN_TONE_KEY, String(index));
-  } catch {
-    // ignore
-  }
+  localStorage.setItem(
+    profileStorageKey(EMOJI_SKIN_TONE_NAMESPACE, EMOJI_PROFILE_VERSION),
+    String(index),
+  );
 }
 
 // ============================================

@@ -47,6 +47,7 @@ function groupSnapshot(
         localVideoStream: null,
         remoteVideoStream: null,
         remoteVideoAvailable: false,
+        remoteAudioBlocked: false,
         activeSpeaker: true,
         error: null,
         terminalReason: null,
@@ -62,6 +63,7 @@ function groupSnapshot(
         localVideoStream: null,
         remoteVideoStream: null,
         remoteVideoAvailable: false,
+        remoteAudioBlocked: false,
         activeSpeaker: false,
         error: 'ICE failed',
         terminalReason: 'ice_failed',
@@ -93,7 +95,8 @@ describe('CallOverlay group call UI', () => {
     expect(screen.getByText('Group video call')).toBeInTheDocument();
     expect(screen.getByText('3/4 participants · degraded')).toBeInTheDocument();
     expect(screen.getByText('@alice@relay.test')).toBeInTheDocument();
-    expect(screen.getByText('Peer peer-b… (unverified)')).toBeInTheDocument();
+    expect(screen.getByText('Bob@unverified')).toBeInTheDocument();
+    expect(screen.queryByText(/peer-b/)).not.toBeInTheDocument();
     expect(screen.queryByText('Alice')).not.toBeInTheDocument();
     expect(screen.queryByText('Bob')).not.toBeInTheDocument();
     expect(
@@ -122,5 +125,60 @@ describe('CallOverlay group call UI', () => {
 
     expect(setGroupMuted).toHaveBeenCalledWith(false);
     expect(setGroupCameraEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('offers an explicit retry for a terminal participant without leaving the group', () => {
+    const retryGroupParticipant = vi.fn(async () => undefined);
+    useCallingStore.setState({
+      groupRuntimeSnapshot: groupSnapshot(),
+      retryGroupParticipant,
+    });
+
+    render(<CallOverlay />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Bob@unverified' }));
+
+    expect(retryGroupParticipant).toHaveBeenCalledWith('peer-b');
+  });
+
+  it('offers a user-gesture audio retry when a group participant is autoplay-blocked', () => {
+    const enableCallAudio = vi.fn(async () => undefined);
+    const blocked = groupSnapshot();
+    blocked.participants[0] = { ...blocked.participants[0], remoteAudioBlocked: true };
+    useCallingStore.setState({ groupRuntimeSnapshot: blocked, enableCallAudio });
+
+    render(<CallOverlay />);
+    fireEvent.click(screen.getByRole('button', { name: 'Enable call audio' }));
+
+    expect(enableCallAudio).toHaveBeenCalledOnce();
+  });
+
+  it('offers the same accessible audio retry for a direct call', () => {
+    const enableCallAudio = vi.fn(async () => undefined);
+    useCallingStore.setState({
+      runtimeSnapshot: {
+        state: 'connected',
+        callId: 'call-direct',
+        peerId: 'peer-a',
+        localPeerId: 'peer-local',
+        direction: 'outgoing',
+        terminalReason: null,
+        error: null,
+        ice: null,
+        mediaMode: 'audio',
+        videoRequested: false,
+        localVideoEnabled: false,
+        localVideoStream: null,
+        remoteVideoStream: null,
+        remoteVideoAvailable: false,
+        remoteAudioBlocked: true,
+        cameraError: null,
+      },
+      enableCallAudio,
+    });
+
+    render(<CallOverlay />);
+    fireEvent.click(screen.getByRole('button', { name: 'Enable call audio' }));
+
+    expect(enableCallAudio).toHaveBeenCalledOnce();
   });
 });

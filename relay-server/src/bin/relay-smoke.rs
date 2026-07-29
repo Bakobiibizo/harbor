@@ -1,14 +1,12 @@
 use clap::Parser;
 use futures::StreamExt;
+use harbor_relay_server::identity_key::load_or_generate_identity;
 use libp2p::{
-    identify,
-    identity::Keypair,
-    noise, ping, relay,
+    identify, noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, SwarmBuilder,
 };
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -47,25 +45,6 @@ fn default_identity_path() -> String {
         .to_string()
 }
 
-fn load_or_generate_identity(path: &str) -> Result<Keypair, Box<dyn std::error::Error>> {
-    let path = PathBuf::from(path);
-
-    if path.exists() {
-        let bytes = fs::read(&path)?;
-        let key = Keypair::from_protobuf_encoding(&bytes)?;
-        return Ok(key);
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let key = Keypair::generate_ed25519();
-    let encoded = key.to_protobuf_encoding()?;
-    fs::write(&path, encoded)?;
-    Ok(key)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -75,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
-    let keypair = load_or_generate_identity(&args.identity_key_path)?;
+    let keypair = load_or_generate_identity(Path::new(&args.identity_key_path))?;
 
     info!("Using identity key at {}", args.identity_key_path);
 

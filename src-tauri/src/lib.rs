@@ -9,13 +9,17 @@ pub mod profile_root;
 pub mod services;
 
 use commands::NetworkState;
+use commands::{
+    startup_initialization_failure, IdentityInitializationFailureSource, StartupInitializationState,
+};
 use db::Database;
+use error::AppError;
 use logging::LogConfig;
 use profile_root::ProfileRoot;
 use services::{
-    AccountsService, BoardService, CallingService, ContactsService, ContentSyncService,
-    FeedService, IdentityService, MediaStorageService, MentionsService, MessagingService,
-    PermissionsService, PostsService, WallSocialService,
+    AccountBackupService, AccountsService, BoardService, CallingService, ContactsService,
+    ContentSyncService, FeedService, IdentityService, MediaStorageService, MentionsService,
+    MessagingService, PermissionsService, PostsService, WallSocialService,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -29,6 +33,125 @@ pub struct LogDirectory(pub PathBuf);
 /// Multiple links can arrive before the user unlocks (e.g. clicking two share links
 /// in quick succession). All are queued here and drained after a successful unlock.
 pub struct PendingDeepLink(pub Mutex<Vec<String>>);
+
+/// Owns the disposable directory used only to render a startup recovery state.
+/// No account data is opened or mutated when startup validation has failed.
+pub struct RecoveryDirectory(pub PathBuf);
+
+impl Drop for RecoveryDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Every profile-scoped backend dependency is opened from one selected root.
+/// Keeping construction here prevents a database from one account being paired
+/// with media or services from another account during startup or future restarts.
+pub struct ProfileServices {
+    pub db: Arc<Database>,
+    pub identity: Arc<IdentityService>,
+    pub contacts: Arc<ContactsService>,
+    pub permissions: Arc<PermissionsService>,
+    pub messaging: Arc<MessagingService>,
+    pub posts: Arc<PostsService>,
+    pub feed: Arc<FeedService>,
+    pub mentions: Arc<MentionsService>,
+    pub calling: Arc<CallingService>,
+    pub content_sync: Arc<ContentSyncService>,
+    pub wall_social: Arc<WallSocialService>,
+    pub boards: Arc<BoardService>,
+    pub media: Arc<MediaStorageService>,
+}
+
+impl ProfileServices {
+    pub fn open(profile_root: &ProfileRoot) -> Result<Self, AppError> {
+        let db = Arc::new(Database::new(profile_root.database())?);
+        Self::from_database(profile_root.path(), db, true)
+    }
+
+    fn open_recovery(profile_root: &ProfileRoot) -> Result<Self, AppError> {
+        let db = Arc::new(Database::in_memory()?);
+        Self::from_database(profile_root.path(), db, false)
+    }
+
+    fn from_database(
+        data_dir: &std::path::Path,
+        db: Arc<Database>,
+        reconcile_media: bool,
+    ) -> Result<Self, AppError> {
+        let identity = Arc::new(IdentityService::new(db.clone()));
+        let contacts = Arc::new(ContactsService::new(db.clone(), identity.clone()));
+        let permissions = Arc::new(PermissionsService::new(db.clone(), identity.clone()));
+        let messaging = Arc::new(MessagingService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            permissions.clone(),
+        ));
+        let posts = Arc::new(PostsService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            permissions.clone(),
+        ));
+        let feed = Arc::new(FeedService::new(
+            db.clone(),
+            identity.clone(),
+            permissions.clone(),
+            contacts.clone(),
+        ));
+        let mentions = Arc::new(MentionsService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            posts.clone(),
+        ));
+        let calling = Arc::new(CallingService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            permissions.clone(),
+        ));
+        let content_sync = Arc::new(ContentSyncService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            permissions.clone(),
+        ));
+        let wall_social = Arc::new(WallSocialService::new(
+            db.clone(),
+            identity.clone(),
+            contacts.clone(),
+            permissions.clone(),
+        ));
+        let boards = Arc::new(BoardService::new(db.clone(), identity.clone()));
+        let media = Arc::new(MediaStorageService::new(data_dir, db.clone())?);
+        if reconcile_media {
+            if let Err(error) = media.reconstruct_transfers() {
+                tracing::warn!("Failed to reconstruct media transfer state: {error}");
+            }
+            if let Err(error) = media.enforce_cache_policy() {
+                tracing::warn!("Failed to reconcile the media cache: {error}");
+            }
+        }
+
+        Ok(Self {
+            db,
+            identity,
+            contacts,
+            permissions,
+            messaging,
+            posts,
+            feed,
+            mentions,
+            calling,
+            content_sync,
+            wall_social,
+            boards,
+            media,
+        })
+    }
+}
 
 /// Get the profile name from environment variable (for multi-instance support)
 fn get_profile_name() -> Option<String> {
@@ -52,46 +175,76 @@ fn headless_media_capture_validation_enabled() -> bool {
     )
 }
 
+const HEADLESS_MEDIA_CAPTURE_SCRIPT: &str = r#"
+(() => {
+  globalThis.__HARBOR_HEADLESS_MEDIA_CAPTURE__ = true;
+})();
+"#;
+
+fn configure_headless_media_capture(
+    window: &tauri::WebviewWindow,
+    enabled: bool,
+) -> tauri::Result<()> {
+    if enabled {
+        window.eval(HEADLESS_MEDIA_CAPTURE_SCRIPT)?;
+        info!("Headless media-capture validation marker enabled");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
-fn allow_headless_webkit_media_capture(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+fn configure_linux_webkit_call_media(
+    window: &tauri::WebviewWindow,
+    allow_headless_permissions: bool,
+) -> tauri::Result<()> {
     use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
 
-    window.with_webview(|webview| {
+    window.with_webview(move |webview| {
         let webview = webview.inner();
 
         if let Some(settings) = webview.settings() {
             settings.set_enable_webrtc(true);
             settings.set_enable_media_stream(true);
-            settings.set_enable_write_console_messages_to_stdout(true);
+            if allow_headless_permissions {
+                settings.set_enable_write_console_messages_to_stdout(true);
+            }
             info!(
                 enable_webrtc = settings.enables_webrtc(),
                 enable_media_stream = settings.enables_media_stream(),
-                "Enabled WebKit WebRTC/media-stream settings for headless validation"
+                enable_mock_capture_devices = settings.enables_mock_capture_devices(),
+                "Configured Linux WebKit call media runtime"
             );
         } else {
-            info!("WebKit settings unavailable while enabling headless media-capture validation");
+            info!("WebKit settings unavailable while configuring call media runtime");
         }
 
-        webview.connect_permission_request(|_, request| {
-            info!("Allowing WebKit permission request for headless media-capture validation");
-            request.allow();
-            true
-        });
+        if allow_headless_permissions {
+            webview.connect_permission_request(|_, request| {
+                info!("Allowing WebKit permission request for headless media-capture validation");
+                request.allow();
+                true
+            });
+        }
     })
 }
 
 #[cfg(not(target_os = "linux"))]
-fn allow_headless_webkit_media_capture(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+fn configure_linux_webkit_call_media(
+    _window: &tauri::WebviewWindow,
+    _allow_headless_permissions: bool,
+) -> tauri::Result<()> {
     Ok(())
 }
 
 /// Normalize, validate, and route a harbor:// URL to the frontend.
 /// Called from both the deep-link on_open_url handler and the single-instance callback.
 fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
-    let contact_string = if let Some(rest) = url.strip_prefix("harbor://add-friend/") {
-        format!("harbor://{}", rest)
-    } else {
-        url.to_string()
+    let contact_string = match commands::network::normalize_contact_invite(url) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, "Ignoring invalid or unsupported Harbor deep link");
+            return;
+        }
     };
     let identity_service = app.state::<Arc<IdentityService>>();
     if identity_service.is_unlocked() {
@@ -107,13 +260,11 @@ pub fn run() {
     let uses_isolated_profile = profile.is_some() || get_custom_data_dir().is_some();
     let mut context = tauri::generate_context!();
 
-    // Isolated profiles need their own WebKit/WebView2 cookies, local storage, and cache as well
-    // as their own Harbor database. Delay automatic window creation so setup can provide the
-    // absolute profile-rooted webview directory once Tauri has resolved the platform data path.
-    if uses_isolated_profile {
-        for window in &mut context.config_mut().app.windows {
-            window.create = false;
-        }
+    // The selected account is not known until setup reads and validates the
+    // installation registry. Always delay window construction so its WebView
+    // storage can be isolated under exactly the same selected profile root.
+    for window in &mut context.config_mut().app.windows {
+        window.create = false;
     }
 
     let mut builder = tauri::Builder::default();
@@ -140,6 +291,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
             // Get app data directory first so we can set up logging properly
@@ -147,22 +299,104 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data directory");
-            let profile_root =
+            let installation_root =
                 ProfileRoot::resolve(&app_data_dir, get_custom_data_dir(), profile.as_deref());
-            std::fs::create_dir_all(profile_root.path()).expect("Failed to create profile root");
 
-            if uses_isolated_profile {
-                let window_config = app
-                    .config()
-                    .app
-                    .windows
-                    .iter()
-                    .find(|window| window.label == "main")
-                    .ok_or_else(|| tauri::Error::AssetNotFound("main window config".into()))?;
+            // The registry belongs to the installation boundary. Resolve and
+            // verify its active account before any profile database, service, or
+            // WebView storage is opened.
+            let accounts_registry = AccountsService::new(installation_root.path().to_path_buf());
+            let startup = (|| {
+                std::fs::create_dir_all(installation_root.path()).map_err(|error| {
+                    (
+                        IdentityInitializationFailureSource::AccountRegistry,
+                        AppError::Io(error),
+                    )
+                })?;
+                AccountBackupService::reconcile_pending_deletions(&accounts_registry).map_err(
+                    |error| (IdentityInitializationFailureSource::AccountRegistry, error),
+                )?;
+                if let Some(account) = accounts_registry
+                    .migrate_legacy_account(&installation_root.database())
+                    .map_err(|error| {
+                        (IdentityInitializationFailureSource::AccountRegistry, error)
+                    })?
+                {
+                    info!("Migrated legacy account: {}", account.display_name);
+                }
+                let profile_root =
+                    ProfileRoot::from_path(accounts_registry.resolve_active_data_dir().map_err(
+                        |error| (IdentityInitializationFailureSource::AccountRegistry, error),
+                    )?);
+                std::fs::create_dir_all(profile_root.path()).map_err(|error| {
+                    (
+                        IdentityInitializationFailureSource::IdentityDatabase,
+                        AppError::Io(error),
+                    )
+                })?;
+                let accounts_service = accounts_registry
+                    .clone()
+                    .with_runtime_data_dir(profile_root.path())
+                    .map_err(|error| {
+                        (IdentityInitializationFailureSource::AccountRegistry, error)
+                    })?;
+                let services = ProfileServices::open(&profile_root).map_err(|error| {
+                    (IdentityInitializationFailureSource::IdentityDatabase, error)
+                })?;
+                Ok::<_, (IdentityInitializationFailureSource, AppError)>((
+                    profile_root,
+                    accounts_service,
+                    services,
+                ))
+            })();
+
+            let (profile_root, accounts_service, services, startup_failure, recovery_dir) =
+                match startup {
+                    Ok((profile_root, accounts_service, services)) => (
+                        profile_root,
+                        Arc::new(accounts_service),
+                        services,
+                        None,
+                        None,
+                    ),
+                    Err((source, error)) => {
+                        tracing::error!(%error, "Profile startup validation failed");
+                        let failure = startup_initialization_failure(source, error);
+                        let recovery_path = std::env::temp_dir()
+                            .join(format!("harbor-recovery-{}", std::process::id()));
+                        let _ = std::fs::remove_dir_all(&recovery_path);
+                        std::fs::create_dir_all(&recovery_path)?;
+                        let profile_root = ProfileRoot::from_path(recovery_path.clone());
+                        let services = ProfileServices::open_recovery(&profile_root)?;
+                        (
+                            profile_root,
+                            Arc::new(accounts_registry),
+                            services,
+                            Some(failure),
+                            Some(RecoveryDirectory(recovery_path)),
+                        )
+                    }
+                };
+
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or_else(|| tauri::Error::AssetNotFound("main window config".into()))?;
+            let allow_headless_permissions = headless_media_capture_validation_enabled();
+            let mut window_builder =
                 tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
-                    .data_directory(profile_root.webview())
-                    .build()?;
+                    .data_directory(profile_root.webview());
+            if allow_headless_permissions {
+                // Run before every document loads. A post-build eval can race the
+                // initial navigation on slower ARM64 WebKit processes and leave
+                // the real device API in place during unattended validation.
+                window_builder =
+                    window_builder.initialization_script(HEADLESS_MEDIA_CAPTURE_SCRIPT);
             }
+            window_builder.build()?;
             if let Some(window) = app.get_webview_window("main") {
                 let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
                 window.set_icon(icon)?;
@@ -200,113 +434,46 @@ pub fn run() {
                 }
             }
 
-            if headless_media_capture_validation_enabled() {
-                if let Some(window) = app.get_webview_window("main") {
-                    allow_headless_webkit_media_capture(&window)?;
-                    info!("Headless WebKit media-capture validation permission override enabled");
+            if let Some(window) = app.get_webview_window("main") {
+                configure_linux_webkit_call_media(&window, allow_headless_permissions)?;
+                configure_headless_media_capture(&window, allow_headless_permissions)?;
+                if allow_headless_permissions {
+                    info!("Headless media-capture validation override enabled");
                 }
             }
 
             app.manage(LogDirectory(log_dir));
-
-            // Initialize accounts service (manages multi-account registry)
-            let accounts_service =
-                Arc::new(AccountsService::new(profile_root.path().to_path_buf()));
-
-            // Initialize database
-            let db_path = profile_root.database();
-            info!("Database path: {:?}", db_path);
-
-            // Migrate legacy single-account setup if needed
-            if let Ok(Some(account)) = accounts_service.migrate_legacy_account(&db_path) {
-                info!("Migrated legacy account: {}", account.display_name);
+            if let Some(recovery_dir) = recovery_dir {
+                app.manage(recovery_dir);
             }
 
-            // Save the data directory (parent of db file) before db_path is moved
-            let data_dir = db_path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| profile_root.path().to_path_buf());
-
-            let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
-
-            // Initialize services
-            let identity_service = Arc::new(IdentityService::new(db.clone()));
-            let contacts_service =
-                Arc::new(ContactsService::new(db.clone(), identity_service.clone()));
-            let permissions_service = Arc::new(PermissionsService::new(
-                db.clone(),
-                identity_service.clone(),
-            ));
-            let messaging_service = Arc::new(MessagingService::new(
-                db.clone(),
-                identity_service.clone(),
-                contacts_service.clone(),
-                permissions_service.clone(),
-            ));
-            let posts_service = Arc::new(PostsService::new(
-                db.clone(),
-                identity_service.clone(),
-                contacts_service.clone(),
-                permissions_service.clone(),
-            ));
-            let feed_service = Arc::new(FeedService::new(
-                db.clone(),
-                identity_service.clone(),
-                permissions_service.clone(),
-                contacts_service.clone(),
-            ));
-            let mentions_service = Arc::new(MentionsService::new(
-                db.clone(),
-                identity_service.clone(),
-                contacts_service.clone(),
-                posts_service.clone(),
-            ));
-            let calling_service = Arc::new(CallingService::new(
-                db.clone(),
-                identity_service.clone(),
-                contacts_service.clone(),
-                permissions_service.clone(),
-            ));
-            let content_sync_service = Arc::new(ContentSyncService::new(
-                db.clone(),
-                identity_service.clone(),
-                contacts_service.clone(),
-                permissions_service.clone(),
-            ));
-            let wall_social_service = Arc::new(WallSocialService::new(
-                db.clone(),
-                identity_service.clone(),
-                contacts_service.clone(),
-                permissions_service.clone(),
-            ));
-            let board_service = Arc::new(BoardService::new(db.clone(), identity_service.clone()));
-
-            // Initialize media storage service (content-addressed file storage)
-            let media_service = Arc::new(
-                MediaStorageService::new(&data_dir, db.clone())
-                    .expect("Failed to initialize media storage"),
-            );
+            info!("Database path: {:?}", profile_root.database());
 
             // Initialize network state (will be populated when identity is unlocked)
             let network_state = NetworkState::new();
 
             // Register state
-            app.manage(db);
+            let account_backup_service = Arc::new(AccountBackupService::new(
+                accounts_service.clone(),
+                services.identity.clone(),
+            ));
+            app.manage(services.db);
             app.manage(accounts_service);
-            app.manage(identity_service);
-            app.manage(contacts_service);
-            app.manage(permissions_service);
-            app.manage(messaging_service);
-            app.manage(posts_service);
-            app.manage(mentions_service);
-            app.manage(content_sync_service);
-            app.manage(feed_service);
-            app.manage(wall_social_service);
-            app.manage(calling_service);
-            app.manage(board_service);
-            app.manage(media_service);
+            app.manage(account_backup_service);
+            app.manage(services.identity);
+            app.manage(services.contacts);
+            app.manage(services.permissions);
+            app.manage(services.messaging);
+            app.manage(services.posts);
+            app.manage(services.mentions);
+            app.manage(services.content_sync);
+            app.manage(services.feed);
+            app.manage(services.wall_social);
+            app.manage(services.calling);
+            app.manage(services.boards);
+            app.manage(services.media);
             app.manage(network_state);
+            app.manage(StartupInitializationState(startup_failure));
             app.manage(PendingDeepLink(Mutex::new(Vec::new())));
 
             control::spawn_if_configured(app.handle().clone());
@@ -338,20 +505,27 @@ pub fn run() {
             commands::has_accounts,
             commands::set_active_account,
             commands::remove_account,
+            commands::export_identity_backup,
+            commands::restore_identity_backup,
+            commands::delete_account_profile,
             commands::update_account_metadata,
             // Identity commands
             commands::has_identity,
             commands::is_identity_unlocked,
             commands::get_identity_info,
+            commands::get_identity_initialization_state,
             commands::create_identity,
             commands::unlock_identity,
+            commands::change_identity_password,
             commands::lock_identity,
             commands::update_display_name,
             commands::update_bio,
+            commands::update_profile_avatar,
             commands::update_passphrase_hint,
             commands::get_peer_id,
-            commands::get_identity_migration_state,
-            commands::set_identity_migration_mode,
+            commands::get_identity_entry_state,
+            commands::get_identity_publishing_state,
+            commands::set_identity_publishing_mode,
             commands::register_relay_name,
             commands::get_local_name_claim,
             commands::verify_name_claim,
@@ -391,6 +565,9 @@ pub fn run() {
             commands::is_contact,
             commands::is_contact_blocked,
             commands::request_peer_identity,
+            commands::get_contact_requests,
+            commands::respond_contact_request,
+            commands::retry_contact_request,
             // Permission commands
             commands::grant_permission,
             commands::revoke_permission,
@@ -405,6 +582,8 @@ pub fn run() {
             commands::get_messages,
             commands::get_conversations,
             commands::mark_conversation_read,
+            commands::get_messaging_privacy_policy,
+            commands::set_read_receipts_enabled,
             commands::get_unread_count,
             commands::get_total_unread_count,
             commands::clear_conversation_history,
@@ -480,10 +659,14 @@ pub fn run() {
             commands::sync_board,
             // Media commands (content-addressed storage)
             commands::store_media,
-            commands::store_media_bytes,
-            commands::get_media_url,
+            commands::get_media_asset,
             commands::has_media,
+            commands::ensure_media_transfer,
+            commands::get_media_transfer,
+            commands::retry_media_transfer,
             commands::preload_missing_media,
+            commands::get_media_cache_diagnostics,
+            commands::update_media_cache_settings,
             // Wall sync commands (relay-based wall post sync)
             commands::sync_wall_to_relay,
             commands::fetch_contact_wall_from_relay,

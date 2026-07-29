@@ -23,4 +23,4 @@ RSS is generated locally. Harbor does **not** currently host RSS over HTTP, so t
 - **Copy public feed URI** calls `get_rss_feed_url` and copies the Harbor app URI for the public wall/feed identity. This URI is not an HTTP-hosted RSS URL.
 - **Copy contact invite** calls `get_shareable_contact_string` and copies a contact bundle containing reachable addresses and public identity keys only.
 
-Share/export actions must not include private key material, passphrases, or encrypted backup payloads.
+Share/export actions must not include private key material, passwords, or encrypted backup payloads.

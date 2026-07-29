@@ -45,7 +45,7 @@ impl ErrorCode {
             ErrorCode::IdentityError => "An identity error occurred",
             ErrorCode::IdentityNotFound => "No identity found. Please create one first",
             ErrorCode::IdentityLocked => "Identity is locked. Please unlock it first",
-            ErrorCode::IdentityInvalidPassphrase => "Invalid passphrase",
+            ErrorCode::IdentityInvalidPassphrase => "Invalid password",
             ErrorCode::SerializationError => "Failed to process data",
             ErrorCode::IoError => "A file operation failed",
             ErrorCode::InvalidData => "The data provided is invalid",
@@ -68,7 +68,7 @@ impl ErrorCode {
         match self {
             ErrorCode::DatabaseConnection => Some("Try restarting the application"),
             ErrorCode::IdentityLocked => Some("Go to Settings and unlock your identity"),
-            ErrorCode::IdentityInvalidPassphrase => Some("Check your passphrase and try again"),
+            ErrorCode::IdentityInvalidPassphrase => Some("Check your password and try again"),
             ErrorCode::NetworkConnectionFailed => {
                 Some("Check your internet connection and try again")
             }

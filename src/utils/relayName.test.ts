@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { presentRelayName, safePeerLabel } from './relayName';
+import type { IdentityInfo } from '../types';
+import {
+  presentRelayName,
+  safeIdentityLabel,
+  safePeerLabel,
+  UNVERIFIED_HARBOR_USER,
+} from './relayName';
 
 const claim = {
   request: {
@@ -25,7 +31,7 @@ const claim = {
 describe('relay name presentation', () => {
   it('never presents a legacy label as verified', () =>
     expect(presentRelayName(null, 'Alice', true, 100)).toEqual({
-      label: 'Alice',
+      label: 'Alice@unverified',
       qualifiedName: null,
       trust: 'unverified',
     }));
@@ -40,8 +46,25 @@ describe('relay name presentation', () => {
 describe('verified peer labels', () => {
   it('uses a verified qualified claim when present', () =>
     expect(safePeerLabel('12D3peer', '@alice@relay.test')).toBe('@alice@relay.test'));
-  it('rejects malformed labels and falls back to an explicit unverified peer', () => {
-    expect(safePeerLabel('12D3peer', 'Alice')).toContain('(unverified)');
-    expect(safePeerLabel('12D3peer')).toContain('(unverified)');
+  it('rejects malformed labels without exposing the peer key or accepting an alias', () => {
+    expect(safePeerLabel('12D3peer-secret', 'Alice')).toBe(UNVERIFIED_HARBOR_USER);
+    expect(safePeerLabel('12D3peer-secret', undefined, 'Alice')).toBe('Alice@unverified');
+    expect(safePeerLabel('12D3peer-secret', undefined, '@alice@relay.test')).toBe(
+      '@alice@relay.test@unverified',
+    );
+    expect(safePeerLabel('12D3peer-secret')).toBe(UNVERIFIED_HARBOR_USER);
+    expect(safePeerLabel('12D3peer-secret')).not.toContain('12D3');
+  });
+
+  it('does not present an expired local claim as a verified identity', () => {
+    const identity = {
+      peerId: '12D3peer-secret',
+      displayName: 'Saved alias',
+      relayNameClaim: claim,
+      relayNameVerified: true,
+    } as IdentityInfo;
+
+    expect(safeIdentityLabel(identity)).toBe('Saved alias@unverified');
+    expect(safeIdentityLabel(identity)).not.toContain('12D3');
   });
 });

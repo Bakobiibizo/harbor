@@ -47,3 +47,11 @@ An operator who cannot provide an independently verifiable notice must deploy un
 - Rotation records contain public keys and signatures only.
 - Never paste session tokens, private identity files, decrypted introductions, or contact lists into tickets or release evidence.
 - Keep the previous public key and signed rotation record for audit; securely destroy retired private material after the rollback window closes.
+
+## Deployment-log exposure response
+
+Older AWS templates enabled shell tracing while restoring and persisting the relay identity. A relay booted with one of those templates must be treated as potentially exposed until an authorized operator reviews the instance's cloud-init output, EC2 console output, `/var/log/user-data.log`, and relevant journal retention in place. Do not download, paste, or attach those logs to a ticket because the review itself may disclose the key.
+
+If private key bytes or their base64 representation appear in any retained output, perform the planned rotation above before returning the relay to service. Preserve continuity with a successor record signed by the currently pinned key, apply that record to clients, replace the key with an owner-only file, update the peer ID and relay multiaddress, and verify the cutover. If the old key cannot be trusted to sign continuity, follow emergency recovery instead.
+
+Repository tests only prove that current templates do not echo sentinel material and that key files fail closed when ownership or mode is unsafe. They cannot inspect production log retention, decide whether a deployed key was exposed, or rotate a live namespace. Log inspection, rotation, SSM cleanup, and cutover evidence are explicit operator-owned release steps.

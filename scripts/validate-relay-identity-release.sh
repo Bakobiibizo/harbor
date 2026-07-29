@@ -40,6 +40,8 @@ run cargo fmt --manifest-path relay-server/Cargo.toml -- --check
 run cargo check --manifest-path relay-server/Cargo.toml
 run cargo clippy --manifest-path relay-server/Cargo.toml --all-targets -- -D warnings
 run cargo test --manifest-path relay-server/Cargo.toml
+run ./infrastructure/tests/relay-key-hardening.sh
+run ./infrastructure/tests/relay-resource-limit-parity.py
 
 run_cargo_filter src-tauri/Cargo.toml relay_name
 run_cargo_filter src-tauri/Cargo.toml name_claim_service
@@ -63,6 +65,9 @@ run_cargo_filter relay-server/Cargo.toml response_jitter_is_deterministic_and_bo
 run_cargo_filter relay-server/Cargo.toml delivery_key_is_real_for_a_claim_and_stable_decoy_otherwise
 run_cargo_filter relay-server/Cargo.toml unauthorized_wall_response_excludes_private_posts_media_and_social_events
 run_cargo_filter relay-server/Cargo.toml two_relays_three_identities_collision_restart_and_cross_namespace_intro
+run_cargo_filter relay-server/Cargo.toml identity_key
+run_cargo_filter relay-server/Cargo.toml resource_limits
+run_cargo_filter relay-server/Cargo.toml storage_budget
 
 printf '\nAutomated relay identity adversarial checks passed.\n'
 printf 'Complete docs/relay-identity-release-validation.md before declaring the release gate passed.\n'

@@ -39,6 +39,37 @@ pub struct VerifiedNameClaim {
     pub not_after: i64,
 }
 
+/// Load and cryptographically verify the active relay name for a peer.
+///
+/// `Ok(None)` means that no active claim exists. Repository, decoding, trust,
+/// signature, and peer-binding failures remain errors so presentation callers
+/// cannot silently turn a broken trust lookup into an ordinary unverified name.
+pub fn verified_name_claim(
+    repo: &RelayNamesRepository<'_>,
+    peer_id: &str,
+    now: i64,
+) -> Result<Option<(NameClaim, VerifiedNameClaim)>, ClaimVerificationError> {
+    let Some(encoded) = repo
+        .active_for_peer(peer_id, now)
+        .map_err(|_| ClaimVerificationError::Database)?
+    else {
+        return Ok(None);
+    };
+    let claim: NameClaim = ciborium::de::from_reader(encoded.as_slice())
+        .map_err(|_| ClaimVerificationError::InvalidEncoding)?;
+    let verified = verify_and_cache(repo, &claim, now)?;
+    Ok(Some((claim, verified)))
+}
+
+pub fn verified_qualified_name(
+    repo: &RelayNamesRepository<'_>,
+    peer_id: &str,
+    now: i64,
+) -> Result<Option<String>, ClaimVerificationError> {
+    Ok(verified_name_claim(repo, peer_id, now)?
+        .map(|(_, verified)| verified.qualified_name.to_string()))
+}
+
 pub fn user_signing_bytes(claim: &NameClaim) -> Result<Vec<u8>, ClaimVerificationError> {
     canonical_cbor(&claim.request).map_err(|_| ClaimVerificationError::InvalidEncoding)
 }
@@ -249,5 +280,66 @@ mod adversarial_tests {
                 .unwrap();
             assert_eq!(count, 0);
         }
+    }
+
+    #[test]
+    fn verified_name_lookup_distinguishes_absence_from_repository_failure() {
+        let db = Database::in_memory().unwrap();
+        let repo = RelayNamesRepository::new(&db);
+
+        assert_eq!(
+            verified_qualified_name(&repo, "missing-peer", 200),
+            Ok(None)
+        );
+
+        db.with_connection(|connection| {
+            connection.execute("DROP TABLE relay_name_claims", [])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            verified_qualified_name(&repo, "missing-peer", 200),
+            Err(ClaimVerificationError::Database)
+        );
+    }
+
+    #[test]
+    fn verified_name_lookup_rejects_a_tampered_cached_claim() {
+        let user = SigningKey::from_bytes(&[3; 32]);
+        let relay = SigningKey::from_bytes(&[4; 32]);
+        let original = claim(&user, &relay);
+        let db = Database::in_memory().unwrap();
+        let repo = RelayNamesRepository::new(&db);
+        repo.pin_key(
+            "relay.test",
+            "k1",
+            &relay.verifying_key().to_bytes(),
+            0,
+            Some(400),
+        )
+        .unwrap();
+        verify_and_cache(&repo, &original, 200).unwrap();
+        assert_eq!(
+            verified_qualified_name(&repo, &original.request.peer_id, 200).unwrap(),
+            Some("@alice@relay.test".into())
+        );
+
+        let mut tampered = original.clone();
+        tampered.request.local_name = "mallory".into();
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(&tampered, &mut encoded).unwrap();
+        db.with_connection(|connection| {
+            connection.execute(
+                "UPDATE relay_name_claims SET claim_cbor=? WHERE peer_id=?",
+                rusqlite::params![encoded, original.request.peer_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            verified_qualified_name(&repo, &original.request.peer_id, 200),
+            Err(ClaimVerificationError::InvalidUserSignature)
+        );
     }
 }

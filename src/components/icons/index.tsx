@@ -240,6 +240,14 @@ export function EllipsisIcon({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function MenuIcon({ size = 20, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...defaultProps} {...props}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6.75h16M4 12h16M4 17.25h16" />
+    </svg>
+  );
+}
+
 export function HarborLogoIcon({ size = 24, ...props }: IconProps) {
   return <HarborIcon size={size} className={props.className} />;
 }

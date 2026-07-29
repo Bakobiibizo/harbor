@@ -7,6 +7,17 @@ describe('identityService', () => {
     vi.clearAllMocks();
   });
 
+  describe('getInitializationState', () => {
+    it('requests the authoritative typed initialization state', async () => {
+      const state = { status: 'absent' } as const;
+      vi.mocked(invoke).mockResolvedValue(state);
+
+      await expect(identityService.getInitializationState()).resolves.toEqual(state);
+
+      expect(invoke).toHaveBeenCalledWith('get_identity_initialization_state');
+    });
+  });
+
   describe('hasIdentity', () => {
     it('should invoke has_identity', async () => {
       vi.mocked(invoke).mockResolvedValue(true);
@@ -82,6 +93,30 @@ describe('identityService', () => {
     });
   });
 
+  describe('updateProfileAvatar', () => {
+    it('sends only the selected native path and returns authoritative identity metadata', async () => {
+      const updated = {
+        peerId: 'peer-avatar',
+        publicKey: 'key',
+        x25519Public: 'x25519',
+        displayName: 'Avatar User',
+        avatarHash: 'a'.repeat(64),
+        bio: null,
+        passphraseHint: null,
+        createdAt: 1,
+        updatedAt: 2,
+      };
+      vi.mocked(invoke).mockResolvedValue(updated);
+
+      await expect(identityService.updateProfileAvatar('/native/avatar.png')).resolves.toEqual(
+        updated,
+      );
+      expect(invoke).toHaveBeenCalledWith('update_profile_avatar', {
+        filePath: '/native/avatar.png',
+      });
+    });
+  });
+
   describe('unlock', () => {
     it('should invoke unlock_identity with passphrase', async () => {
       vi.mocked(invoke).mockResolvedValue({});
@@ -90,6 +125,19 @@ describe('identityService', () => {
 
       expect(invoke).toHaveBeenCalledWith('unlock_identity', {
         passphrase: 'test-passphrase-not-real',
+      });
+    });
+  });
+
+  describe('changePassword', () => {
+    it('should invoke change_identity_password with both passwords', async () => {
+      vi.mocked(invoke).mockResolvedValue(undefined);
+
+      await identityService.changePassword('current-password', 'new-password');
+
+      expect(invoke).toHaveBeenCalledWith('change_identity_password', {
+        currentPassword: 'current-password',
+        newPassword: 'new-password',
       });
     });
   });
@@ -150,6 +198,17 @@ describe('identityService', () => {
 
       expect(invoke).toHaveBeenCalledWith('get_peer_id');
       expect(result).toBe('12D3KooWTest');
+    });
+  });
+
+  describe('getIdentityEntryState', () => {
+    it('requests the atomic backend-verified returning identity state', async () => {
+      const entry = { mode: 'verified', claim: null } as const;
+      vi.mocked(invoke).mockResolvedValue(entry);
+
+      await expect(identityService.getIdentityEntryState()).resolves.toEqual(entry);
+
+      expect(invoke).toHaveBeenCalledWith('get_identity_entry_state');
     });
   });
 });

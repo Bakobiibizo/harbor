@@ -1,12 +1,34 @@
 //! Tauri commands for media storage (content-addressed by SHA256)
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::NetworkState;
 use crate::db::Database;
-use crate::services::{IdentityService, MediaStorageService};
+use crate::services::{
+    ContactsService, IdentityService, MediaCacheDiagnostics, MediaCacheSettings,
+    MediaStorageService, MediaTransferState, MediaTransferUpdate, StoredMediaInfo,
+};
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaAssetInfo {
+    pub file_path: String,
+    pub mime_type: String,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureMediaTransferInput {
+    pub media_hash: String,
+    pub source_peer_id: Option<String>,
+    pub media_type: String,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+    pub total_bytes: Option<u64>,
+}
 
 /// Store a media file from a filesystem path, returning its SHA256 hash.
 ///
@@ -16,63 +38,78 @@ use crate::services::{IdentityService, MediaStorageService};
 #[tauri::command]
 pub async fn store_media(
     file_path: String,
-    mime_type: String,
+    mime_type: Option<String>,
     media_service: State<'_, Arc<MediaStorageService>>,
-) -> Result<String, String> {
-    let data = std::fs::read(&file_path)
-        .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
-
-    let hash = media_service
-        .store_media(&data, &mime_type)
-        .map_err(|e| format!("Failed to store media: {}", e))?;
-
-    Ok(hash)
+) -> Result<StoredMediaInfo, String> {
+    let path = std::path::PathBuf::from(file_path);
+    let mime_type = mime_type.unwrap_or_else(|| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(extension_to_mime)
+            .unwrap_or("application/octet-stream")
+            .to_string()
+    });
+    let service = media_service.inner().clone();
+    tokio::task::spawn_blocking(move || service.store_media_path(&path, &mime_type))
+        .await
+        .map_err(|error| format!("Media import worker failed: {error}"))?
+        .map_err(|error| format!("Failed to store media: {error}"))
 }
 
-/// Store media from raw bytes (base64-encoded from the frontend).
+/// Resolve a stored attachment to packaged asset-protocol metadata.
 ///
-/// This is useful when the frontend already has the file data in memory
-/// (e.g., from a drag-and-drop or paste event) rather than a file path.
+/// The frontend receives the file path and converts it to an asset URL, so
+/// attachment bytes never need to be copied through the IPC serializer.
 #[tauri::command]
-pub async fn store_media_bytes(
-    data: Vec<u8>,
-    mime_type: String,
-    media_service: State<'_, Arc<MediaStorageService>>,
-) -> Result<String, String> {
-    let hash = media_service
-        .store_media(&data, &mime_type)
-        .map_err(|e| format!("Failed to store media: {}", e))?;
-
-    Ok(hash)
-}
-
-/// Get a URL that the frontend can use in `<img>` or `<video>` tags to
-/// display a stored media file.
-///
-/// Returns a `data:` URL with the file contents base64-encoded. This avoids
-/// needing the Tauri asset protocol (which requires additional configuration)
-/// and works reliably on all platforms.
-#[tauri::command]
-pub async fn get_media_url(
+pub async fn get_media_asset(
     hash: String,
     media_service: State<'_, Arc<MediaStorageService>>,
-) -> Result<String, String> {
+) -> Result<MediaAssetInfo, String> {
     let path = media_service
         .get_media_path(&hash)
         .map_err(|e| format!("Media not found: {}", e))?;
+    let total_bytes = std::fs::metadata(&path)
+        .map_err(|error| format!("Failed to inspect media file: {error}"))?
+        .len();
+    let _ = media_service.touch_cache_entry(&hash);
+    Ok(MediaAssetInfo {
+        mime_type: path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(extension_to_mime)
+            .unwrap_or("application/octet-stream")
+            .to_string(),
+        file_path: path.to_string_lossy().into_owned(),
+        total_bytes,
+    })
+}
 
-    let data = std::fs::read(&path).map_err(|e| format!("Failed to read media file: {}", e))?;
+#[tauri::command]
+pub async fn get_media_cache_diagnostics(
+    media_service: State<'_, Arc<MediaStorageService>>,
+) -> Result<MediaCacheDiagnostics, String> {
+    let evicted = media_service
+        .enforce_cache_policy()
+        .map_err(|error| error.to_string())?;
+    media_service
+        .cache_diagnostics(evicted)
+        .map_err(|error| error.to_string())
+}
 
-    // Determine MIME type from file extension
-    let mime = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(extension_to_mime)
-        .unwrap_or("application/octet-stream");
-
-    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-
-    Ok(format!("data:{};base64,{}", mime, encoded))
+#[tauri::command]
+pub async fn update_media_cache_settings(
+    settings: MediaCacheSettings,
+    media_service: State<'_, Arc<MediaStorageService>>,
+) -> Result<MediaCacheDiagnostics, String> {
+    media_service
+        .update_cache_settings(settings)
+        .map_err(|error| error.to_string())?;
+    let evicted = media_service
+        .enforce_cache_policy()
+        .map_err(|error| error.to_string())?;
+    media_service
+        .cache_diagnostics(evicted)
+        .map_err(|error| error.to_string())
 }
 
 /// Map a file extension back to a MIME type for data URLs.
@@ -107,6 +144,115 @@ pub async fn has_media(
     Ok(media_service.has_media(&hash))
 }
 
+#[tauri::command]
+pub async fn ensure_media_transfer(
+    input: EnsureMediaTransferInput,
+    media_service: State<'_, Arc<MediaStorageService>>,
+) -> Result<MediaTransferState, String> {
+    media_service
+        .ensure_transfer(
+            &input.media_hash,
+            input.source_peer_id.as_deref(),
+            &input.media_type,
+            input.mime_type.as_deref(),
+            input.file_name.as_deref(),
+            input.total_bytes,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_media_transfer(
+    media_hash: String,
+    media_service: State<'_, Arc<MediaStorageService>>,
+) -> Result<Option<MediaTransferState>, String> {
+    media_service
+        .get_transfer(&media_hash)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn retry_media_transfer(
+    media_hash: String,
+    media_service: State<'_, Arc<MediaStorageService>>,
+    contacts_service: State<'_, Arc<ContactsService>>,
+    network_state: State<'_, NetworkState>,
+) -> Result<MediaTransferState, String> {
+    let existing = media_service
+        .get_transfer(&media_hash)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "This attachment is not registered on this device".to_string())?;
+    if existing.status == "ready" {
+        return Ok(existing);
+    }
+    let source = existing
+        .source_peer_id
+        .as_deref()
+        .ok_or_else(|| "The attachment source is not currently known".to_string())?;
+    let authorized = contacts_service
+        .get_contact(source)
+        .map_err(|error| error.to_string())?
+        .is_some_and(|contact| !contact.is_blocked);
+    if !authorized {
+        return Err("The attachment source is no longer an active contact".to_string());
+    }
+    let peer_id = source
+        .parse::<libp2p::PeerId>()
+        .map_err(|_| "The attachment source is invalid".to_string())?;
+    let _retrying = media_service
+        .update_transfer(
+            &media_hash,
+            MediaTransferUpdate {
+                status: "retrying",
+                bytes_received: Some(0),
+                total_bytes: existing.total_bytes,
+                error_code: None,
+                error_message: None,
+                increment_attempt: true,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let handle = match network_state.get_handle().await {
+        Ok(handle) => handle,
+        Err(_) => {
+            let _ = media_service.update_transfer(
+                &media_hash,
+                MediaTransferUpdate {
+                    status: "unavailable",
+                    bytes_received: Some(0),
+                    total_bytes: existing.total_bytes,
+                    error_code: Some("offline"),
+                    error_message: Some("Harbor is offline. Reconnect before retrying."),
+                    increment_attempt: false,
+                },
+            );
+            return Err("Harbor is offline; reconnect before retrying".to_string());
+        }
+    };
+    if handle
+        .fetch_media(peer_id, media_hash.clone())
+        .await
+        .is_err()
+    {
+        let _ = media_service.update_transfer(
+            &media_hash,
+            MediaTransferUpdate {
+                status: "failed",
+                bytes_received: Some(0),
+                total_bytes: existing.total_bytes,
+                error_code: Some("start_failed"),
+                error_message: Some("The attachment retry could not be started."),
+                increment_attempt: false,
+            },
+        );
+        return Err("The attachment retry could not be started".to_string());
+    }
+    media_service
+        .get_transfer(&media_hash)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Attachment lifecycle disappeared during retry".to_string())
+}
+
 /// Preload missing media from connected peers.
 ///
 /// Scans post_media for supported media entries where the file is missing locally,
@@ -121,8 +267,36 @@ pub async fn preload_missing_media(
     db: State<'_, Arc<Database>>,
     media_service: State<'_, Arc<MediaStorageService>>,
     identity_service: State<'_, Arc<IdentityService>>,
+    contacts_service: State<'_, Arc<ContactsService>>,
     network_state: State<'_, NetworkState>,
 ) -> Result<u32, String> {
+    // A locked profile cannot authorize or sign transfer requests. Avoid
+    // leaking prior UI/network activity across the lock boundary.
+    if !identity_service.is_unlocked() {
+        return Ok(0);
+    }
+    let settings = media_service
+        .cache_settings()
+        .map_err(|error| error.to_string())?;
+    let active_contacts: HashSet<String> = contacts_service
+        .get_active_contacts()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|contact| contact.peer_id)
+        .collect();
+    let pending_profile_avatars = contacts_service
+        .pending_profile_avatars()
+        .map_err(|error| error.to_string())?;
+    media_service
+        .prune_unauthorized_cache_sources()
+        .map_err(|error| error.to_string())?;
+    media_service
+        .enforce_cache_policy()
+        .map_err(|error| error.to_string())?;
+    if active_contacts.is_empty() || (!settings.enabled && pending_profile_avatars.is_empty()) {
+        return Ok(0);
+    }
+
     // Get local peer ID to exclude own posts (our media is already local)
     let local_peer_id = identity_service
         .get_identity()
@@ -131,44 +305,138 @@ pub async fn preload_missing_media(
         .map(|id| id.peer_id);
 
     // Query all supported media entries with their author (excluding own posts)
-    let all_media = db
-        .with_connection(|conn| {
+    let all_media = if settings.enabled {
+        db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT pm.media_hash, pm.media_type, p.author_peer_id
+                "SELECT pm.media_hash, pm.media_type, p.author_peer_id,
+                        pm.mime_type, pm.file_name, pm.file_size, MAX(p.created_at)
                  FROM post_media pm
                  JOIN posts p ON pm.post_id = p.post_id
-                 WHERE pm.media_type IN ('image', 'video', 'audio')",
+                 JOIN contacts c ON c.peer_id = p.author_peer_id AND c.is_blocked = 0
+                 WHERE pm.media_type IN ('image', 'video', 'audio')
+                   AND p.created_at >= ?
+                 GROUP BY pm.media_hash, pm.media_type, p.author_peer_id,
+                          pm.mime_type, pm.file_name, pm.file_size
+                 ORDER BY MAX(p.created_at) DESC, pm.media_hash ASC
+                 LIMIT 512",
             )?;
 
             let mut results = Vec::new();
-            let mut rows = stmt.query([])?;
+            let cutoff = chrono::Utc::now()
+                .timestamp()
+                .saturating_sub(settings.retention_seconds as i64);
+            let mut rows = stmt.query([cutoff])?;
             while let Some(row) = rows.next()? {
                 let media_hash: String = row.get(0)?;
-                let _media_type: String = row.get(1)?;
+                let media_type: String = row.get(1)?;
                 let author_peer_id: String = row.get(2)?;
-                results.push((media_hash, author_peer_id));
+                let mime_type: String = row.get(3)?;
+                let file_name: String = row.get(4)?;
+                let file_size: i64 = row.get(5)?;
+                let observed_at: i64 = row.get(6)?;
+                results.push((
+                    media_hash,
+                    author_peer_id,
+                    media_type,
+                    mime_type,
+                    file_name,
+                    file_size,
+                    observed_at,
+                ));
             }
             Ok(results)
         })
-        .map_err(|e| format!("Failed to query post_media: {}", e))?;
-
-    // Filter out own posts — our media files should already exist locally
-    let all_media: Vec<(String, String)> = if let Some(ref local_id) = local_peer_id {
-        all_media
-            .into_iter()
-            .filter(|(_, author)| author != local_id)
-            .collect()
+        .map_err(|e| format!("Failed to query post_media: {}", e))?
     } else {
-        all_media
+        Vec::new()
     };
 
-    // Filter to missing media only
-    let missing: Vec<(String, String)> = all_media
-        .into_iter()
-        .filter(|(hash, _)| !media_service.has_media(hash))
-        .collect();
+    // Only verified metadata from accepted contacts enters the bounded cache.
+    // Keep every authorized source for a shared hash so a blocked/offline peer
+    // cannot invalidate media still available from another contact.
+    let mut candidate_sources = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut reserved_bytes = media_service
+        .cache_reserved_bytes()
+        .map_err(|error| error.to_string())?;
+    for (hash, author, media_type, mime_type, file_name, file_size, observed_at) in all_media {
+        if local_peer_id.as_deref() == Some(author.as_str()) || !active_contacts.contains(&author) {
+            continue;
+        }
+        let Ok(size) = u64::try_from(file_size) else {
+            continue;
+        };
+        let is_new_hash = !candidate_sources.contains_key(&hash);
+        let already_tracked = media_service
+            .is_cache_tracked(&hash)
+            .map_err(|error| error.to_string())?;
+        if size > crate::services::posts_service::MAX_POST_MEDIA_BYTES as u64
+            || (is_new_hash
+                && !already_tracked
+                && reserved_bytes.saturating_add(size) > settings.max_bytes)
+        {
+            continue;
+        }
+        let Ok(state) = media_service.ensure_transfer(
+            &hash,
+            Some(&author),
+            &media_type,
+            Some(&mime_type),
+            Some(&file_name),
+            Some(size),
+        ) else {
+            continue;
+        };
+        if !media_service
+            .register_cache_candidate(&hash, &author, observed_at, Some(size))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if !media_service.has_media(&hash)
+            && matches!(state.status.as_str(), "queued" | "unavailable" | "failed")
+            && candidate_sources.entry(hash).or_default().insert(author)
+            && is_new_hash
+            && !already_tracked
+        {
+            reserved_bytes = reserved_bytes.saturating_add(size);
+        }
+    }
 
-    if missing.is_empty() {
+    // Signed profile revisions are staged until their avatar bytes verify.
+    // Requeue them here so restart/offline delivery follows the same bounded,
+    // authorized transfer path as post attachments.
+    for pending in pending_profile_avatars {
+        if media_service.has_media(&pending.avatar_hash) {
+            let old = contacts_service
+                .get_contact(&pending.peer_id)
+                .ok()
+                .flatten()
+                .and_then(|contact| contact.avatar_hash);
+            if contacts_service
+                .promote_verified_profile_avatar(&pending.peer_id, &pending.avatar_hash)
+                .unwrap_or(false)
+            {
+                if let Some(old) = old.filter(|old| old != &pending.avatar_hash) {
+                    let _ = media_service.delete_media_if_orphaned(&old);
+                }
+            }
+            continue;
+        }
+        let _ = media_service.ensure_transfer(
+            &pending.avatar_hash,
+            Some(&pending.peer_id),
+            "image",
+            pending.avatar_mime_type.as_deref(),
+            Some("profile-avatar"),
+            None,
+        );
+        candidate_sources
+            .entry(pending.avatar_hash)
+            .or_default()
+            .insert(pending.peer_id);
+    }
+
+    if candidate_sources.is_empty() {
         return Ok(0);
     }
 
@@ -182,7 +450,7 @@ pub async fn preload_missing_media(
     let connected_peers = handle.get_connected_peers().await.unwrap_or_default();
     let stats = handle.get_stats().await.ok();
 
-    let connected_peer_ids: std::collections::HashSet<String> = connected_peers
+    let connected_peer_ids: HashSet<String> = connected_peers
         .iter()
         .filter(|p| p.is_connected)
         .map(|p| p.peer_id.clone())
@@ -206,19 +474,45 @@ pub async fn preload_missing_media(
         })
         .unwrap_or_default();
 
-    // Group missing hashes by author
-    let mut missing_by_author: HashMap<String, Vec<String>> = HashMap::new();
-    for (hash, author) in &missing {
+    // Prefer a connected authorized source, using the peer ID as a stable
+    // tie-breaker. Record that selected source in the canonical lifecycle so
+    // an explicit retry uses the same valid peer.
+    let missing_count = candidate_sources.len();
+    let mut missing_by_author = BTreeMap::<String, Vec<String>>::new();
+    for (hash, sources) in candidate_sources {
+        let source = sources
+            .iter()
+            .find(|source| connected_peer_ids.contains(*source))
+            .or_else(|| sources.iter().next());
+        let Some(source) = source else { continue };
+        if let Ok(Some(state)) = media_service.get_transfer(&hash) {
+            let _ = media_service.ensure_transfer(
+                &hash,
+                Some(source),
+                &state.media_type,
+                state.mime_type.as_deref(),
+                state.file_name.as_deref(),
+                state.total_bytes,
+            );
+        }
         missing_by_author
-            .entry(author.clone())
+            .entry(source.clone())
             .or_default()
-            .push(hash.clone());
+            .push(hash);
     }
 
     let mut requests_sent = 0u32;
     let mut dials_initiated = 0u32;
 
     for (author_peer_id, hashes) in &missing_by_author {
+        if !identity_service.is_unlocked()
+            || contacts_service
+                .get_contact(author_peer_id)
+                .map_err(|error| error.to_string())?
+                .is_none_or(|contact| contact.is_blocked)
+        {
+            continue;
+        }
         let peer_id = match author_peer_id.parse::<libp2p::PeerId>() {
             Ok(id) => id,
             Err(_) => continue,
@@ -242,6 +536,19 @@ pub async fn preload_missing_media(
                 }
             }
         } else if !relay_base_addrs.is_empty() {
+            for hash in hashes {
+                let _ = media_service.update_transfer(
+                    hash,
+                    MediaTransferUpdate {
+                        status: "discovering",
+                        bytes_received: Some(0),
+                        total_bytes: None,
+                        error_code: None,
+                        error_message: None,
+                        increment_attempt: false,
+                    },
+                );
+            }
             // Author is NOT connected — dial them through the relay circuit.
             // On the next preloader invocation (triggered by peer_connected or
             // wall_posts_received), they'll be connected and we can fetch.
@@ -269,6 +576,21 @@ pub async fn preload_missing_media(
                 }
             }
         } else {
+            for hash in hashes {
+                let _ = media_service.update_transfer(
+                    hash,
+                    MediaTransferUpdate {
+                        status: "unavailable",
+                        bytes_received: None,
+                        total_bytes: None,
+                        error_code: Some("source_offline"),
+                        error_message: Some(
+                            "The attachment source is offline. You can retry when they reconnect.",
+                        ),
+                        increment_attempt: false,
+                    },
+                );
+            }
             tracing::debug!(
                 "Cannot fetch media from {}: not connected and no relay available",
                 author_peer_id
@@ -278,7 +600,7 @@ pub async fn preload_missing_media(
 
     tracing::info!(
         "Media preloader: {} missing from {} authors, {} peers connected, {} fetch requests sent, {} relay dials initiated",
-        missing.len(),
+        missing_count,
         missing_by_author.len(),
         connected_peer_ids.len(),
         requests_sent,

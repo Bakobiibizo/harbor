@@ -1,6 +1,6 @@
 [package]
 name = "harbor"
-version = "1.4.1-beta.6"
+version = "1.4.1-beta.7"
 description = "A decentralized P2P chat application with local-first data and permission-based sharing"
 authors = ["Harbor Contributors"]
 license = "MIT"
@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri
-tauri = { version = "~2.11", features = ["image-png"] }
+tauri = { version = "~2.11", features = ["image-png", "protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "~2.10"
 tauri-plugin-dialog = "2"
@@ -83,6 +83,7 @@ libp2p = { version = "0.56", features = [
 ] }
 multiaddr = "0.18"
 void = "1"
+tauri-plugin-notification = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Directly used to grant WebKitGTK user-media permission in opt-in headless validation runs.

@@ -49,6 +49,8 @@ pub enum RegistrationError {
     Replay,
     #[error("database error")]
     Database,
+    #[error("integer out of range")]
+    IntegerRange,
 }
 
 fn cbor<T: Serialize>(v: &T) -> Result<Vec<u8>, RegistrationError> {
@@ -96,10 +98,14 @@ pub fn register(
         || !valid_relay(&r.relay)
         || r.sequence == 0
         || r.nonce.len() < 16
-        || (r.issued_at - now).abs() > MAX_SKEW
+        || r.issued_at.abs_diff(now) > MAX_SKEW as u64
     {
         return Err(RegistrationError::Invalid);
     }
+    let sequence = i64::try_from(r.sequence).map_err(|_| RegistrationError::IntegerRange)?;
+    let not_after = now
+        .checked_add(CLAIM_LIFETIME)
+        .ok_or(RegistrationError::IntegerRange)?;
     let x_raw: [u8; 32] = r
         .x25519_public_key
         .as_slice()
@@ -141,12 +147,45 @@ pub fn register(
     {
         return Err(RegistrationError::Replay);
     }
-    let existing:Option<(String,i64,String)>=tx.query_row("SELECT peer_id,sequence,status FROM relay_name_claims WHERE relay=? AND local_name=? ORDER BY sequence DESC LIMIT 1",params![relay,r.local_name],|x|Ok((x.get(0)?,x.get(1)?,x.get(2)?))).optional().map_err(|_|RegistrationError::Database)?;
-    if let Some((peer, seq, status)) = existing {
+    let existing: Option<(String, i64, String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT peer_id,sequence,status,claim_cbor
+             FROM relay_name_claims
+             WHERE relay=? AND local_name=?
+             ORDER BY sequence DESC LIMIT 1",
+            params![relay, r.local_name],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|_| RegistrationError::Database)?;
+    if let Some((peer, seq, status, encoded)) = existing {
+        let stored_sequence = u64::try_from(seq).map_err(|_| RegistrationError::IntegerRange)?;
         if status == "retired" || peer != r.peer_id {
             return Err(RegistrationError::Unavailable);
         }
-        if r.sequence as i64 <= seq {
+        if r.sequence == stored_sequence {
+            let claim: NameClaim = ciborium::de::from_reader(encoded.as_slice())
+                .map_err(|_| RegistrationError::Database)?;
+            if claim.status != "active"
+                || claim.not_after < now
+                || claim.relay_key_id != key_id
+                || claim.request.local_name != r.local_name
+                || claim.request.relay != r.relay
+                || claim.request.peer_id != r.peer_id
+                || claim.request.ed25519_public_key != r.ed25519_public_key
+                || claim.request.x25519_public_key != r.x25519_public_key
+            {
+                return Err(RegistrationError::Replay);
+            }
+            tx.execute(
+                "INSERT INTO relay_name_nonces VALUES(?,?,?)",
+                params![r.peer_id, r.nonce, now],
+            )
+            .map_err(|_| RegistrationError::Replay)?;
+            tx.commit().map_err(|_| RegistrationError::Database)?;
+            return Ok(claim);
+        }
+        if r.sequence < stored_sequence {
             return Err(RegistrationError::Replay);
         }
     }
@@ -155,7 +194,7 @@ pub fn register(
         user_signature: signed.user_signature,
         status: "active".into(),
         not_before: now,
-        not_after: now + CLAIM_LIFETIME,
+        not_after,
         relay_key_id: key_id.into(),
         relay_signature: vec![],
     };
@@ -185,7 +224,7 @@ pub fn register(
             r.local_name,
             relay,
             r.peer_id,
-            r.sequence as i64,
+            sequence,
             encoded,
             claim.not_before,
             claim.not_after,
@@ -217,6 +256,16 @@ mod acceptance_tests {
     use std::sync::{Arc, Barrier};
 
     fn signed(key: &SigningKey, name: &str, nonce: u8) -> SignedNameClaimRequest {
+        signed_with(key, name, nonce, 1, 100)
+    }
+
+    fn signed_with(
+        key: &SigningKey,
+        name: &str,
+        nonce: u8,
+        sequence: u64,
+        issued_at: i64,
+    ) -> SignedNameClaimRequest {
         let lp =
             identity::ed25519::PublicKey::try_from_bytes(&key.verifying_key().to_bytes()).unwrap();
         let request = NameClaimRequest {
@@ -229,8 +278,8 @@ mod acceptance_tests {
             x25519_public_key: X25519Public::from(&StaticSecret::from([nonce.max(1); 32]))
                 .to_bytes()
                 .to_vec(),
-            sequence: 1,
-            issued_at: 100,
+            sequence,
+            issued_at,
             nonce: vec![nonce; 32],
         };
         let user_signature = key.sign(&cbor(&request).unwrap()).to_bytes().to_vec();
@@ -298,5 +347,125 @@ mod acceptance_tests {
         assert_eq!(peer, expected);
         drop(conn);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn same_owner_can_recover_a_persisted_claim_after_losing_the_response() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let relay = SigningKey::from_bytes(&[9; 32]);
+        let user = SigningKey::from_bytes(&[4; 32]);
+
+        database.with_connection(|connection| {
+            let first_request = signed(&user, "alice", 1);
+            let mut retry_request = first_request.clone();
+            retry_request.request.nonce = vec![2; 32];
+            retry_request.user_signature = user
+                .sign(&cbor(&retry_request.request).unwrap())
+                .to_bytes()
+                .to_vec();
+            let original =
+                register(connection, "relay.test", "k1", &relay, first_request, 100).unwrap();
+
+            // A fresh, signed retry represents a client that never received or
+            // cached the first successful response. The relay must return the
+            // persisted claim to its owner instead of stranding the identity.
+            let recovered =
+                register(connection, "relay.test", "k1", &relay, retry_request, 100).unwrap();
+
+            assert_eq!(cbor(&recovered).unwrap(), cbor(&original).unwrap());
+            let rows: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM relay_name_claims
+                     WHERE relay='relay.test' AND local_name='alice'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows, 1);
+        });
+    }
+
+    #[test]
+    fn sequence_and_expiry_integer_boundaries_are_typed() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let relay = SigningKey::from_bytes(&[9; 32]);
+        let user = SigningKey::from_bytes(&[4; 32]);
+
+        database.with_connection(|connection| {
+            assert!(matches!(
+                register(
+                    connection,
+                    "relay.test",
+                    "k1",
+                    &relay,
+                    signed_with(&user, "zero", 1, 0, 100),
+                    100,
+                ),
+                Err(RegistrationError::Invalid)
+            ));
+            assert!(register(
+                connection,
+                "relay.test",
+                "k1",
+                &relay,
+                signed_with(&user, "max", 2, i64::MAX as u64, 100),
+                100,
+            )
+            .is_ok());
+            assert!(matches!(
+                register(
+                    connection,
+                    "relay.test",
+                    "k1",
+                    &relay,
+                    signed_with(&user, "over", 3, i64::MAX as u64 + 1, 100),
+                    100,
+                ),
+                Err(RegistrationError::IntegerRange)
+            ));
+            assert!(matches!(
+                register(
+                    connection,
+                    "relay.test",
+                    "k1",
+                    &relay,
+                    signed_with(&user, "u64max", 4, u64::MAX, 100),
+                    100,
+                ),
+                Err(RegistrationError::IntegerRange)
+            ));
+            assert!(matches!(
+                register(
+                    connection,
+                    "relay.test",
+                    "k1",
+                    &relay,
+                    signed_with(&user, "expiry", 5, 1, i64::MAX),
+                    i64::MAX,
+                ),
+                Err(RegistrationError::IntegerRange)
+            ));
+        });
+    }
+
+    #[test]
+    fn negative_stored_sequence_is_rejected_instead_of_wrapping() {
+        let database = RelayDatabase::open(":memory:").unwrap();
+        let relay = SigningKey::from_bytes(&[9; 32]);
+        let user = SigningKey::from_bytes(&[4; 32]);
+        let request = signed_with(&user, "negative", 8, 1, 100);
+        database.with_connection(|connection| {
+            connection.execute_batch("PRAGMA ignore_check_constraints = ON").unwrap();
+            connection
+                .execute(
+                    "INSERT INTO relay_name_claims(local_name,relay,peer_id,sequence,claim_cbor,not_before,not_after,relay_key_id,status,created_at) VALUES(?,?,?,?,X'01',100,200,'k1','active',100)",
+                    params!["negative", "relay.test", request.request.peer_id, -1i64],
+                )
+                .unwrap();
+            assert!(matches!(
+                register(connection, "relay.test", "k1", &relay, request, 100),
+                Err(RegistrationError::IntegerRange)
+            ));
+        });
     }
 }

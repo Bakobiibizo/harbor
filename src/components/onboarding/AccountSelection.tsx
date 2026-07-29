@@ -1,34 +1,71 @@
 import { useState } from 'react';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { Button } from '../common';
 import { useAccountsStore } from '../../stores';
 import { HarborIcon, UserPlusIcon, TrashIcon, LockIcon } from '../icons';
 import type { AccountInfo } from '../../types';
 import toast from 'react-hot-toast';
+import { isVerifiedQualifiedName, unverifiedIdentityLabel } from '../../utils/relayName';
+import { accountBackupService } from '../../services';
+import { suspendProfile } from '../../services/profileSession';
+import { getErrorMessage } from '../../utils/errors';
+import { AvatarMedia } from '../common/AvatarMedia';
 
 interface AccountSelectionProps {
-  onSelectAccount: (account: AccountInfo) => void;
   onCreateAccount: () => void;
 }
 
-export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSelectionProps) {
-  const { accounts, removeAccount } = useAccountsStore();
+export function AccountSelection({ onCreateAccount }: AccountSelectionProps) {
+  const { accounts, loadAccounts, setActiveAccount } = useAccountsStore();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [switchingAccountId, setSwitchingAccountId] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
-  const [deleteData, setDeleteData] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const handleLogin = (account: AccountInfo) => {
-    onSelectAccount(account);
+  const handleLogin = async (account: AccountInfo) => {
+    if (switchingAccountId) return;
+
+    setSwitchingAccountId(account.id);
+    try {
+      await setActiveAccount(account.id);
+      suspendProfile();
+      await relaunch();
+    } catch (error) {
+      toast.error(`Failed to switch account: ${getErrorMessage(error)}`);
+      setSwitchingAccountId(null);
+    }
   };
 
   const handleDelete = async (accountId: string) => {
-    try {
-      await removeAccount(accountId, deleteData);
-      toast.success('Account removed');
-      setShowDeleteConfirm(null);
-      setDeleteData(false);
-    } catch (error) {
-      toast.error(`Failed to remove account: ${error}`);
+    if (!deletePassword) {
+      setDeleteError('Password is required');
+      return;
     }
+
+    setDeleteError('');
+    setIsDeleting(true);
+    try {
+      const result = await accountBackupService.deleteAccountProfile(accountId, deletePassword);
+      toast.success('Account data was deleted from this device.');
+      setShowDeleteConfirm(null);
+      setDeletePassword('');
+      suspendProfile();
+      if (result.restartRequired) await relaunch();
+      else await loadAccounts();
+    } catch (error) {
+      setDeleteError(getErrorMessage(error));
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const closeDeleteConfirm = () => {
+    if (isDeleting) return;
+    setShowDeleteConfirm(null);
+    setDeletePassword('');
+    setDeleteError('');
   };
 
   const getInitials = (name: string) => {
@@ -50,8 +87,16 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
     });
   };
 
-  const localAccountLabel = (account: AccountInfo) =>
-    account.displayName.trim() || `Local profile ${account.peerId.slice(0, 8)}…`;
+  const localAccountLabel = (account: AccountInfo) => {
+    const verifiedNameIsActive =
+      isVerifiedQualifiedName(account.verifiedQualifiedName) &&
+      typeof account.verifiedNameNotAfter === 'number' &&
+      account.verifiedNameNotAfter >= Math.floor(Date.now() / 1000);
+    if (verifiedNameIsActive && account.verifiedQualifiedName) {
+      return account.verifiedQualifiedName;
+    }
+    return unverifiedIdentityLabel(account.displayName || 'Local Harbor account');
+  };
 
   return (
     <div
@@ -162,9 +207,8 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                       }}
                     >
                       {account.avatarHash ? (
-                        <img
-                          src={`/media/${account.avatarHash}`}
-                          alt=""
+                        <AvatarMedia
+                          hash={account.avatarHash}
                           className="w-full h-full rounded-full object-cover"
                         />
                       ) : (
@@ -189,12 +233,10 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         </p>
                       )}
                       <p
-                        className="text-xs truncate font-mono"
+                        className="text-xs truncate"
                         style={{ color: 'hsl(var(--harbor-text-tertiary))' }}
-                        title={account.peerId}
                       >
-                        {account.peerId.slice(0, 12)}…{account.peerId.slice(-6)} · saved on this
-                        device
+                        Saved on this device
                       </p>
                       {account.lastAccessedAt && (
                         <p
@@ -212,13 +254,14 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                         <>
                           <Button
                             size="sm"
+                            disabled={switchingAccountId !== null}
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleLogin(account);
+                              void handleLogin(account);
                             }}
                           >
                             <LockIcon className="w-4 h-4 mr-1" />
-                            Login
+                            {switchingAccountId === account.id ? 'Switching...' : 'Login'}
                           </Button>
                           <button
                             className="p-2 rounded-lg transition-colors duration-200 hover:bg-red-500/10"
@@ -226,6 +269,8 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
                             onClick={(e) => {
                               e.stopPropagation();
                               setShowDeleteConfirm(account.id);
+                              setDeletePassword('');
+                              setDeleteError('');
                             }}
                             title="Delete account"
                           >
@@ -253,7 +298,7 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
         <div
           className="fixed inset-0 flex items-center justify-center z-50 p-4"
           style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
-          onClick={() => setShowDeleteConfirm(null)}
+          onClick={closeDeleteConfirm}
         >
           <div
             className="rounded-2xl p-6 w-full max-w-sm"
@@ -270,47 +315,58 @@ export function AccountSelection({ onSelectAccount, onCreateAccount }: AccountSe
               Delete Account?
             </h3>
             <p className="text-sm mb-4" style={{ color: 'hsl(var(--harbor-text-secondary))' }}>
-              This will remove the account from the list. You can optionally delete all account data
-              permanently.
+              This deletes this account's local keys and data from this device. Copies of content
+              you already shared may remain with contacts or relays.
             </p>
 
-            <label
-              className="flex items-center gap-3 mb-4 p-3 rounded-lg cursor-pointer"
-              style={{ background: 'hsl(var(--harbor-surface-1))' }}
-            >
+            <label className="block mb-4">
+              <span
+                className="block text-sm font-medium mb-2"
+                style={{ color: 'hsl(var(--harbor-text-primary))' }}
+              >
+                Account password
+              </span>
               <input
-                type="checkbox"
-                checked={deleteData}
-                onChange={(e) => setDeleteData(e.target.checked)}
-                className="w-4 h-4 rounded"
+                type="password"
+                value={deletePassword}
+                onChange={(event) => setDeletePassword(event.target.value)}
+                autoComplete="current-password"
+                disabled={isDeleting}
+                className="w-full px-4 py-3 rounded-lg text-sm disabled:opacity-60"
+                style={{
+                  background: 'hsl(var(--harbor-surface-1))',
+                  border: '1px solid hsl(var(--harbor-border-subtle))',
+                  color: 'hsl(var(--harbor-text-primary))',
+                }}
               />
-              <div>
-                <p
-                  className="text-sm font-medium"
-                  style={{ color: 'hsl(var(--harbor-text-primary))' }}
-                >
-                  Delete all account data
-                </p>
-                <p className="text-xs" style={{ color: 'hsl(var(--harbor-error))' }}>
-                  This cannot be undone
-                </p>
-              </div>
             </label>
+
+            {deleteError && (
+              <p
+                role="alert"
+                className="text-sm mb-4"
+                style={{ color: 'hsl(var(--harbor-error))' }}
+              >
+                {deleteError}
+              </p>
+            )}
 
             <div className="flex gap-3">
               <Button
                 variant="secondary"
                 className="flex-1"
-                onClick={() => setShowDeleteConfirm(null)}
+                onClick={closeDeleteConfirm}
+                disabled={isDeleting}
               >
                 Cancel
               </Button>
               <Button
                 variant="danger"
                 className="flex-1"
-                onClick={() => handleDelete(showDeleteConfirm)}
+                onClick={() => void handleDelete(showDeleteConfirm)}
+                disabled={isDeleting}
               >
-                Delete
+                {isDeleting ? 'Deleting...' : 'Delete'}
               </Button>
             </div>
           </div>

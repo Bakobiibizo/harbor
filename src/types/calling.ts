@@ -2,7 +2,7 @@
 export type CallState = 'ringing' | 'incoming' | 'connected' | 'ended';
 
 /** Hangup reason */
-export type HangupReason = 'normal' | 'busy' | 'declined' | 'error';
+export type HangupReason = 'normal' | 'busy' | 'declined' | 'error' | 'timeout';
 
 /** Call direction relative to the local account */
 export type CallDirection = 'outgoing' | 'incoming';
@@ -50,8 +50,7 @@ export interface IceServerInput {
 }
 
 export type IceServerValidationResult =
-  | { ok: true; server: IceServerConfig }
-  | { ok: false; error: string };
+  { ok: true; server: IceServerConfig } | { ok: false; error: string };
 
 /** Redacted ICE server entry safe for display/logging */
 export interface RedactedIceServerConfig {
@@ -126,7 +125,8 @@ export interface HangupResult {
   signature: number[];
 }
 
-export type GroupMembershipAction = 'invite' | 'join' | 'leave' | 'roster' | 'terminate';
+export type GroupMembershipAction =
+  'invite' | 'join' | 'leave' | 'decline' | 'failed' | 'roster' | 'terminate';
 
 export interface GroupMembershipSignal {
   roomId: string;

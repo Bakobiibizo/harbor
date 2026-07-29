@@ -1,8 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSettingsStore } from './settings';
+import { grantProviderSessionConsent, hasProviderSessionConsent } from '../utils/providerEmbeds';
+import { activateProfile, suspendProfile } from '../services/profileSession';
+import { getMessagingPrivacyPolicy, setReadReceiptsEnabled } from '../services/messagingPrivacy';
+
+vi.mock('../services/messagingPrivacy', () => ({
+  getMessagingPrivacyPolicy: vi.fn(),
+  setReadReceiptsEnabled: vi.fn(),
+}));
+
+const PROFILE_SETTINGS_KEY = 'harbor:profile:test-profile:settings:v3';
 
 describe('useSettingsStore', () => {
   beforeEach(() => {
+    vi.mocked(getMessagingPrivacyPolicy).mockResolvedValue({ readReceiptsEnabled: false });
+    vi.mocked(setReadReceiptsEnabled).mockImplementation(async (enabled) => ({
+      readReceiptsEnabled: enabled,
+    }));
+    suspendProfile();
+    activateProfile('test-profile');
     localStorage.clear();
     // Reset to defaults
     useSettingsStore.setState({
@@ -11,10 +27,13 @@ describe('useSettingsStore', () => {
       localDiscovery: true,
       bootstrapNodes: [],
       iceServers: [],
-      showReadReceipts: true,
-      showOnlineStatus: true,
+      showReadReceipts: false,
+      readReceiptsStatus: 'ready',
+      readReceiptsError: null,
       defaultVisibility: 'contacts',
-      avatarUrl: null,
+      socialView: 'all',
+      communityView: 'all',
+      providerEmbedConsent: 'per-use',
       theme: 'system',
       accentColor: 'harbor',
       fontSize: 'medium',
@@ -119,7 +138,7 @@ describe('useSettingsStore', () => {
         credentialPersistence: 'device',
       });
 
-      const stored = JSON.parse(localStorage.getItem('harbor-settings') ?? '{}');
+      const stored = JSON.parse(localStorage.getItem(PROFILE_SETTINGS_KEY) ?? '{}');
 
       expect(stored.state.iceServers[0]).not.toHaveProperty('credential');
       expect(stored.state.iceServers[1].credential).toBe('device-secret');
@@ -128,14 +147,62 @@ describe('useSettingsStore', () => {
   });
 
   describe('privacy settings', () => {
-    it('should toggle showReadReceipts', () => {
-      useSettingsStore.getState().setShowReadReceipts(false);
-      expect(useSettingsStore.getState().showReadReceipts).toBe(false);
+    it('links the feed and personal wall filter while keeping communities independent', () => {
+      useSettingsStore.getState().setSocialView('videos');
+      expect(useSettingsStore.getState().socialView).toBe('videos');
+      expect(useSettingsStore.getState().communityView).toBe('all');
+
+      useSettingsStore.getState().setCommunityView('audio');
+      expect(useSettingsStore.getState().socialView).toBe('videos');
+      expect(useSettingsStore.getState().communityView).toBe('audio');
     });
 
-    it('should toggle showOnlineStatus', () => {
-      useSettingsStore.getState().setShowOnlineStatus(false);
-      expect(useSettingsStore.getState().showOnlineStatus).toBe(false);
+    it('reflects the authoritative read receipt policy only after persistence succeeds', async () => {
+      let release!: (value: { readReceiptsEnabled: boolean }) => void;
+      vi.mocked(setReadReceiptsEnabled).mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+
+      const update = useSettingsStore.getState().setShowReadReceipts(true);
+      expect(useSettingsStore.getState()).toMatchObject({
+        showReadReceipts: false,
+        readReceiptsStatus: 'loading',
+      });
+
+      release({ readReceiptsEnabled: true });
+      await update;
+      expect(useSettingsStore.getState()).toMatchObject({
+        showReadReceipts: true,
+        readReceiptsStatus: 'ready',
+      });
+    });
+
+    it('keeps the previous policy and rejects when backend persistence fails', async () => {
+      vi.mocked(setReadReceiptsEnabled).mockRejectedValueOnce({
+        code: 'DATABASE_ERROR',
+        message: 'Policy storage failed',
+      });
+
+      await expect(useSettingsStore.getState().setShowReadReceipts(true)).rejects.toMatchObject({
+        code: 'DATABASE_ERROR',
+      });
+      expect(useSettingsStore.getState()).toMatchObject({
+        showReadReceipts: false,
+        readReceiptsStatus: 'error',
+        readReceiptsError: 'Policy storage failed',
+      });
+    });
+
+    it('never treats browser storage as the read-receipt authority', async () => {
+      await useSettingsStore.getState().setShowReadReceipts(true);
+      useSettingsStore.getState().setDefaultVisibility('public');
+
+      const stored = JSON.parse(localStorage.getItem(PROFILE_SETTINGS_KEY) ?? '{}');
+      expect(stored.state).not.toHaveProperty('showReadReceipts');
+      expect(stored.state).not.toHaveProperty('showOnlineStatus');
+      expect(setReadReceiptsEnabled).toHaveBeenCalledWith(true);
     });
 
     it('should set defaultVisibility', () => {
@@ -145,18 +212,25 @@ describe('useSettingsStore', () => {
       useSettingsStore.getState().setDefaultVisibility('contacts');
       expect(useSettingsStore.getState().defaultVisibility).toBe('contacts');
     });
-  });
 
-  describe('profile settings', () => {
-    it('should set avatar URL', () => {
-      useSettingsStore.getState().setAvatarUrl('blob:http://localhost/abc123');
-      expect(useSettingsStore.getState().avatarUrl).toBe('blob:http://localhost/abc123');
+    it('requires per-use provider consent by default and accepts an explicit session setting', () => {
+      expect(useSettingsStore.getState().providerEmbedConsent).toBe('per-use');
+      useSettingsStore.getState().setProviderEmbedConsent('session');
+      grantProviderSessionConsent('youtube');
+      expect(hasProviderSessionConsent('youtube')).toBe(true);
+      expect(useSettingsStore.getState().providerEmbedConsent).toBe('session');
+      useSettingsStore.getState().setProviderEmbedConsent('per-use');
+      expect(useSettingsStore.getState().providerEmbedConsent).toBe('per-use');
+      expect(hasProviderSessionConsent('youtube')).toBe(false);
     });
 
-    it('should clear avatar URL', () => {
-      useSettingsStore.getState().setAvatarUrl('blob:http://localhost/abc123');
-      useSettingsStore.getState().setAvatarUrl(null);
-      expect(useSettingsStore.getState().avatarUrl).toBeNull();
+    it('persists the consent policy but never persists session provider grants', () => {
+      useSettingsStore.getState().setProviderEmbedConsent('session');
+      grantProviderSessionConsent('spotify');
+
+      const stored = JSON.parse(localStorage.getItem(PROFILE_SETTINGS_KEY) ?? '{}');
+      expect(stored.state.providerEmbedConsent).toBe('session');
+      expect(JSON.stringify(stored)).not.toContain('spotify');
     });
   });
 
@@ -205,10 +279,12 @@ describe('useSettingsStore', () => {
       expect(state.localDiscovery).toBe(true);
       expect(state.bootstrapNodes).toEqual([]);
       expect(state.iceServers).toEqual([]);
-      expect(state.showReadReceipts).toBe(true);
-      expect(state.showOnlineStatus).toBe(true);
+      expect(state.showReadReceipts).toBe(false);
+      expect(state.readReceiptsStatus).toBe('ready');
       expect(state.defaultVisibility).toBe('contacts');
-      expect(state.avatarUrl).toBeNull();
+      expect(state.socialView).toBe('all');
+      expect(state.communityView).toBe('all');
+      expect(state.providerEmbedConsent).toBe('per-use');
       expect(state.theme).toBe('system');
       expect(state.accentColor).toBe('harbor');
       expect(state.fontSize).toBe('medium');

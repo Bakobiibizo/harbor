@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import type {
   OfferResult,
   AnswerResult,
@@ -10,21 +9,22 @@ import type {
   GroupMembershipSignal,
   GroupCallRoom,
 } from '../types';
+import { invokeCommand } from './command';
 
 /** Calling service - wraps Tauri commands for voice calling */
 export const callingService = {
   /** Get active calls persisted by the backend */
   async getActiveCalls(): Promise<CallSession[]> {
-    return invoke<CallSession[]>('get_active_calls');
+    return invokeCommand('get_active_calls');
   },
 
   /** Get call history persisted by the backend */
   async getCallHistory(limit = 100): Promise<CallSession[]> {
-    return invoke<CallSession[]>('get_call_history', { limit });
+    return invokeCommand('get_call_history', { limit });
   },
 
   async getActiveGroupCalls(): Promise<GroupCallRoom[]> {
-    return invoke<GroupCallRoom[]>('get_active_group_calls');
+    return invokeCommand('get_active_group_calls');
   },
 
   async sendGroupMembership(input: {
@@ -35,17 +35,17 @@ export const callingService = {
     participants: string[];
     mediaMode: 'audio' | 'video';
   }): Promise<GroupMembershipSignal> {
-    return invoke<GroupMembershipSignal>('send_group_membership', { input });
+    return invokeCommand('send_group_membership', { input });
   },
 
   /** Start a call (create an offer) */
   async startCall(calleePeerId: string, sdp: string): Promise<OfferResult> {
-    return invoke<OfferResult>('start_call', { calleePeerId, sdp });
+    return invokeCommand('start_call', { calleePeerId, sdp });
   },
 
   /** Answer a call */
   async answerCall(callId: string, callerPeerId: string, sdp: string): Promise<AnswerResult> {
-    return invoke<AnswerResult>('answer_call', { callId, callerPeerId, sdp });
+    return invokeCommand('answer_call', { callId, callerPeerId, sdp });
   },
 
   /** Send an ICE candidate */
@@ -56,7 +56,7 @@ export const callingService = {
     sdpMid?: string,
     sdpMlineIndex?: number,
   ): Promise<IceResult> {
-    return invoke<IceResult>('send_ice_candidate', {
+    return invokeCommand('send_ice_candidate', {
       callId,
       targetPeerId,
       candidate,
@@ -71,17 +71,17 @@ export const callingService = {
     targetPeerId: string,
     reason?: HangupReason,
   ): Promise<HangupResult> {
-    return invoke<HangupResult>('hangup_call', { callId, targetPeerId, reason });
+    return invokeCommand('hangup_call', { callId, targetPeerId, reason });
   },
 
   /** Decline an incoming call */
   async declineCall(callId: string, callerPeerId: string): Promise<HangupResult> {
-    return invoke<HangupResult>('decline_call', { callId, callerPeerId });
+    return invokeCommand('decline_call', { callId, callerPeerId });
   },
 
   /** Send a busy response for an incoming call */
   async busyCall(callId: string, callerPeerId: string): Promise<HangupResult> {
-    return invoke<HangupResult>('busy_call', { callId, callerPeerId });
+    return invokeCommand('busy_call', { callId, callerPeerId });
   },
 
   /** Process an incoming offer (validate it) */
@@ -93,7 +93,7 @@ export const callingService = {
     timestamp: number,
     signature: number[],
   ): Promise<void> {
-    return invoke<void>('process_offer', {
+    return invokeCommand('process_offer', {
       callId,
       callerPeerId,
       calleePeerId,
@@ -112,7 +112,7 @@ export const callingService = {
     timestamp: number,
     signature: number[],
   ): Promise<void> {
-    return invoke<void>('process_answer', {
+    return invokeCommand('process_answer', {
       callId,
       callerPeerId,
       calleePeerId,
@@ -132,7 +132,7 @@ export const callingService = {
     timestamp: number,
     signature: number[],
   ): Promise<void> {
-    return invoke<void>('process_ice_candidate', {
+    return invokeCommand('process_ice_candidate', {
       callId,
       senderPeerId,
       candidate,
@@ -151,7 +151,7 @@ export const callingService = {
     timestamp: number,
     signature: number[],
   ): Promise<void> {
-    return invoke<void>('process_hangup', {
+    return invokeCommand('process_hangup', {
       callId,
       senderPeerId,
       reason,

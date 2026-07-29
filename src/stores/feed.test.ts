@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useFeedStore } from './feed';
+import { resetFeedProfileMemory, useFeedStore } from './feed';
 import { feedService } from '../services/feed';
 import { commentsService } from '../services/comments';
 import { likesService } from '../services/likes';
 import * as networkService from '../services/network';
+import { activateProfile, suspendProfile } from '../services/profileSession';
 
 vi.mock('../services/feed', () => ({
   feedService: {
@@ -63,6 +64,8 @@ const mockFeedItems = [
 
 describe('useFeedStore', () => {
   beforeEach(() => {
+    suspendProfile();
+    activateProfile('test-profile');
     useFeedStore.setState({
       rawFeedItems: [],
       feedItems: [],
@@ -88,6 +91,22 @@ describe('useFeedStore', () => {
   });
 
   describe('loadFeed', () => {
+    it('does not apply a delayed result after profile teardown', async () => {
+      let resolve!: (value: typeof mockFeedItems) => void;
+      vi.mocked(feedService.getFeed).mockImplementationOnce(
+        () => new Promise((resolvePromise) => (resolve = resolvePromise)),
+      );
+
+      const loading = useFeedStore.getState().loadFeed();
+      resetFeedProfileMemory();
+      resolve(mockFeedItems);
+      await loading;
+
+      expect(useFeedStore.getState().rawFeedItems).toEqual([]);
+      expect(useFeedStore.getState().feedItems).toEqual([]);
+      expect(useFeedStore.getState().isLoading).toBe(false);
+    });
+
     it('should load feed items', async () => {
       vi.mocked(feedService.getFeed).mockResolvedValue(mockFeedItems);
       vi.mocked(commentsService.getCommentCounts).mockResolvedValue([]);
@@ -335,7 +354,10 @@ describe('useFeedStore', () => {
         hiddenPostIds: [],
         snoozedAuthors: [{ peerId: 'peer-alice', snoozedUntil: 1 }],
       };
-      localStorage.setItem('harbor-feed-local-preferences-v1', JSON.stringify(expiredPrefs));
+      localStorage.setItem(
+        'harbor:profile:test-profile:feed-preferences:v1',
+        JSON.stringify(expiredPrefs),
+      );
       useFeedStore.getState().hydratePreferences();
 
       expect(useFeedStore.getState().snoozedAuthors).toEqual([]);

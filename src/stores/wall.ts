@@ -1,17 +1,31 @@
 import { create } from 'zustand';
 import { postsService } from '../services/posts';
-import { mediaService } from '../services/media';
 import { feedService } from '../services/feed';
 import { commentsService, type Comment } from '../services/comments';
 import { likesService } from '../services/likes';
 import { createLogger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 import { useSettingsStore } from './settings';
-import type { CreatePostMediaInput, Post, PostMedia, PostVisibility } from '../types';
+import type {
+  CreatePostMediaInput,
+  Post,
+  PostMedia,
+  PostRelayStatus,
+  PostVisibility,
+} from '../types';
 
 const log = createLogger('WallStore');
 
 /** Content types for wall posts */
 export type WallContentType = 'post' | 'thought' | 'image' | 'video' | 'audio';
+type DraftMedia = {
+  type: 'image' | 'video' | 'audio';
+  url: string;
+  name?: string;
+  mediaHash?: string;
+  mimeType?: string;
+  fileSize?: number;
+};
 
 /** Repost attribution data */
 export interface SharedFrom {
@@ -31,13 +45,22 @@ export interface WallPost {
   likes: number;
   comments: number;
   liked: boolean;
-  media?: { type: 'image' | 'video' | 'audio'; url: string; name?: string }[];
+  media?: {
+    type: 'image' | 'video' | 'audio';
+    url: string;
+    name?: string;
+    sourcePeerId?: string;
+    mimeType?: string;
+    totalBytes?: number;
+  }[];
   // Repost data
   sharedFrom?: SharedFrom;
   // Backend data
   authorPeerId: string;
   visibility: PostVisibility;
   lamportClock: number;
+  relayStatus: PostRelayStatus;
+  deletionPending?: boolean;
 }
 
 interface WallState {
@@ -58,7 +81,7 @@ interface WallState {
   createPost: (
     content: string,
     contentType?: WallContentType,
-    media?: { type: 'image' | 'video' | 'audio'; url: string; file?: File; name?: string }[],
+    media?: DraftMedia[],
     visibility?: PostVisibility,
   ) => Promise<void>;
   shareToWall: (comment: string, sharedFrom: SharedFrom) => Promise<void>;
@@ -70,22 +93,25 @@ interface WallState {
   addComment: (postId: string, content: string) => Promise<void>;
   deleteComment: (postId: string, commentId: string) => Promise<void>;
   setEditingPost: (postId: string | null) => void;
+  setPostRelayStatus: (postId: string, status: PostRelayStatus) => void;
+  reset: () => void;
 }
 
-/** Resolve a media hash to a displayable URL using the media storage service */
-async function resolveMediaUrl(mediaHash: string): Promise<string> {
-  try {
-    // If it looks like a blob URL or data URL, return it as-is (legacy/preview)
-    if (mediaHash.startsWith('blob:') || mediaHash.startsWith('data:')) {
-      return mediaHash;
-    }
-    return await mediaService.getMediaUrl(mediaHash);
-  } catch {
-    // If the media file is not found locally, return a placeholder
-    log.warn('Could not resolve media URL for hash:', mediaHash);
-    return '';
-  }
-}
+let lifecycleGeneration = 0;
+
+const initialState = {
+  posts: [] as WallPost[],
+  isLoading: false,
+  isSyncingRelay: false,
+  lastSyncAt: null as number | null,
+  syncError: null as string | null,
+  syncStatus: 'idle' as const,
+  error: null as string | null,
+  editingPostId: null as string | null,
+  commentsByPost: {} as Record<string, Comment[]>,
+  expandedComments: new Set<string>(),
+  loadingComments: new Set<string>(),
+};
 
 /** Map backend content_type string to WallContentType */
 function parseContentType(backendType: string): WallContentType {
@@ -110,21 +136,15 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
   let resolvedMedia: WallPost['media'] = undefined;
 
   if (media && media.length > 0) {
-    resolvedMedia = await Promise.all(
-      media.map(async (m) => ({
-        type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as
-          | 'image'
-          | 'video'
-          | 'audio',
-        url: await resolveMediaUrl(m.mediaHash),
-        name: m.fileName,
-      })),
-    );
-    // Filter out any media with empty URLs (not found)
-    resolvedMedia = resolvedMedia.filter((m) => m.url !== '');
-    if (resolvedMedia.length === 0) {
-      resolvedMedia = undefined;
-    }
+    resolvedMedia = media.map((m) => ({
+      type: (m.mediaType === 'video' ? 'video' : m.mediaType === 'audio' ? 'audio' : 'image') as
+        'image' | 'video' | 'audio',
+      url: m.mediaHash,
+      name: m.fileName,
+      sourcePeerId: post.authorPeerId,
+      mimeType: m.mimeType,
+      totalBytes: m.fileSize,
+    }));
   }
 
   return {
@@ -139,29 +159,15 @@ async function toWallPost(post: Post, media?: PostMedia[]): Promise<WallPost> {
     authorPeerId: post.authorPeerId,
     visibility: post.visibility,
     lamportClock: post.lamportClock,
+    relayStatus: post.relayStatus,
   };
 }
 
-/** Read a File object into a Uint8Array */
-async function readFileAsBytes(file: File): Promise<Uint8Array> {
-  const buffer = await file.arrayBuffer();
-  return new Uint8Array(buffer);
-}
-
 export const useWallStore = create<WallState>((set, get) => ({
-  posts: [],
-  isLoading: false,
-  isSyncingRelay: false,
-  lastSyncAt: null,
-  syncError: null,
-  syncStatus: 'idle',
-  error: null,
-  editingPostId: null,
-  commentsByPost: {},
-  expandedComments: new Set<string>(),
-  loadingComments: new Set<string>(),
+  ...initialState,
 
   loadPosts: async () => {
+    const generation = lifecycleGeneration;
     set({ isLoading: true, error: null });
     try {
       const posts = await postsService.getMyPosts(50);
@@ -207,19 +213,21 @@ export const useWallStore = create<WallState>((set, get) => ({
         }
       }
 
-      set({ posts: wallPosts, isLoading: false });
+      if (generation === lifecycleGeneration) set({ posts: wallPosts, isLoading: false });
     } catch (err) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to load posts', err);
-      set({ error: String(err), isLoading: false });
+      set({ error: getErrorMessage(err), isLoading: false });
     }
   },
 
   createPost: async (
     content: string,
     contentType: WallContentType = 'post',
-    media?: { type: 'image' | 'video' | 'audio'; url: string; file?: File; name?: string }[],
+    media?: DraftMedia[],
     visibility?: PostVisibility,
   ) => {
+    const generation = lifecycleGeneration;
     try {
       // Map WallContentType to backend content_type string
       const backendContentType = contentType === 'post' ? 'text' : contentType;
@@ -231,22 +239,12 @@ export const useWallStore = create<WallState>((set, get) => ({
           const m = media[i];
           const fallbackMimeType =
             m.type === 'image' ? 'image/jpeg' : m.type === 'video' ? 'video/mp4' : 'audio/mpeg';
-          let fileSize = 0;
-          let mediaHash: string;
-          let mimeType = m.file?.type || fallbackMimeType;
-
-          if (m.file) {
-            const bytes = await readFileAsBytes(m.file);
-            fileSize = bytes.length;
-            mediaHash = await mediaService.storeMediaBytes(bytes, mimeType);
-          } else {
-            const response = await fetch(m.url);
-            const blob = await response.blob();
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            fileSize = bytes.length;
-            mimeType = blob.type || mimeType;
-            mediaHash = await mediaService.storeMediaBytes(bytes, mimeType);
+          if (!m.mediaHash || m.fileSize == null) {
+            throw new Error('Attachment must be imported before publishing');
           }
+          const fileSize = m.fileSize;
+          const mediaHash = m.mediaHash;
+          const mimeType = m.mimeType || fallbackMimeType;
 
           signedMediaInputs.push({
             mediaHash,
@@ -265,6 +263,7 @@ export const useWallStore = create<WallState>((set, get) => ({
         selectedVisibility,
         signedMediaInputs.length > 0 ? signedMediaInputs : undefined,
       );
+      if (generation !== lifecycleGeneration) return;
 
       // Add to local state immediately for instant UI feedback.
       const previewMedia = media?.map((m) => ({
@@ -285,33 +284,12 @@ export const useWallStore = create<WallState>((set, get) => ({
         authorPeerId: '', // Will be set properly on reload
         visibility: selectedVisibility,
         lamportClock: 0,
+        relayStatus: result.relayStatus,
       };
 
       set((state) => ({
         posts: [newPost, ...state.posts],
       }));
-
-      // Best-effort sync to relay -- post is already saved locally
-      set({ isSyncingRelay: true, syncStatus: 'in_progress', syncError: null });
-      feedService
-        .syncWallToRelay()
-        .then(() => {
-          set({
-            isSyncingRelay: false,
-            lastSyncAt: Math.floor(Date.now() / 1000),
-            syncStatus: 'success',
-            syncError: null,
-          });
-        })
-        .catch((err) => {
-          log.warn('Failed to sync post to relay (saved locally)', err);
-          set({
-            isSyncingRelay: false,
-            lastSyncAt: Math.floor(Date.now() / 1000),
-            syncStatus: 'partial_failure',
-            syncError: String(err),
-          });
-        });
     } catch (err) {
       log.error('Failed to create post', err);
       throw err;
@@ -319,6 +297,7 @@ export const useWallStore = create<WallState>((set, get) => ({
   },
 
   shareToWall: async (comment: string, sharedFrom: SharedFrom) => {
+    const generation = lifecycleGeneration;
     try {
       // Build the content text: user comment + marker for shared content
       // The shared metadata is stored in the sharedFrom field on WallPost
@@ -328,6 +307,7 @@ export const useWallStore = create<WallState>((set, get) => ({
 
       const selectedVisibility = useSettingsStore.getState().defaultVisibility;
       const result = await postsService.createPost('shared', contentForBackend, selectedVisibility);
+      if (generation !== lifecycleGeneration) return;
 
       const newPost: WallPost = {
         postId: result.postId,
@@ -341,6 +321,7 @@ export const useWallStore = create<WallState>((set, get) => ({
         authorPeerId: '',
         visibility: selectedVisibility,
         lamportClock: 0,
+        relayStatus: result.relayStatus,
       };
 
       set((state) => ({
@@ -353,12 +334,16 @@ export const useWallStore = create<WallState>((set, get) => ({
   },
 
   updatePost: async (postId: string, content: string) => {
+    const generation = lifecycleGeneration;
     try {
-      await postsService.updatePost(postId, content);
+      const result = await postsService.updatePost(postId, content);
+      if (generation !== lifecycleGeneration) return;
 
       // Update local state
       set((state) => ({
-        posts: state.posts.map((post) => (post.postId === postId ? { ...post, content } : post)),
+        posts: state.posts.map((post) =>
+          post.postId === postId ? { ...post, content, relayStatus: result.relayStatus } : post,
+        ),
         editingPostId: null,
       }));
     } catch (err) {
@@ -368,12 +353,18 @@ export const useWallStore = create<WallState>((set, get) => ({
   },
 
   deletePost: async (postId: string) => {
+    const generation = lifecycleGeneration;
     try {
-      await postsService.deletePost(postId);
+      const result = await postsService.deletePost(postId);
+      if (generation !== lifecycleGeneration) return;
 
-      // Remove from local state
+      // Keep a truthful tombstone placeholder until the relay acknowledges it.
       set((state) => ({
-        posts: state.posts.filter((p) => p.postId !== postId),
+        posts: state.posts.map((post) =>
+          post.postId === postId
+            ? { ...post, relayStatus: result.relayStatus, deletionPending: true }
+            : post,
+        ),
       }));
     } catch (err) {
       log.error('Failed to delete post', err);
@@ -385,7 +376,19 @@ export const useWallStore = create<WallState>((set, get) => ({
     set({ editingPostId: postId });
   },
 
+  setPostRelayStatus: (postId: string, status: PostRelayStatus) => {
+    set((state) => ({
+      posts:
+        status === 'relay_acknowledged'
+          ? state.posts.filter((post) => !(post.postId === postId && post.deletionPending))
+          : state.posts.map((post) =>
+              post.postId === postId ? { ...post, relayStatus: status } : post,
+            ),
+    }));
+  },
+
   likePost: async (postId: string) => {
+    const generation = lifecycleGeneration;
     const currentPost = get().posts.find((post) => post.postId === postId);
     if (!currentPost) return;
 
@@ -393,6 +396,7 @@ export const useWallStore = create<WallState>((set, get) => ({
       const summary = currentPost.liked
         ? await likesService.unlikePost(postId)
         : await likesService.likePost(postId);
+      if (generation !== lifecycleGeneration) return;
       feedService
         .syncWallSocialEventsToRelay()
         .catch((err) => log.warn('Failed to sync wall reaction event to relay', err));
@@ -415,6 +419,7 @@ export const useWallStore = create<WallState>((set, get) => ({
   },
 
   loadComments: async (postId: string) => {
+    const generation = lifecycleGeneration;
     if (get().loadingComments.has(postId)) return;
 
     set((state) => {
@@ -425,6 +430,7 @@ export const useWallStore = create<WallState>((set, get) => ({
 
     try {
       const comments = await commentsService.getComments(postId);
+      if (generation !== lifecycleGeneration) return;
       set((state) => {
         const loadingComments = new Set(state.loadingComments);
         loadingComments.delete(postId);
@@ -437,6 +443,7 @@ export const useWallStore = create<WallState>((set, get) => ({
         };
       });
     } catch (err) {
+      if (generation !== lifecycleGeneration) return;
       log.error('Failed to load post comments', err);
       set((state) => {
         const loadingComments = new Set(state.loadingComments);
@@ -465,7 +472,9 @@ export const useWallStore = create<WallState>((set, get) => ({
   },
 
   addComment: async (postId: string, content: string) => {
+    const generation = lifecycleGeneration;
     const comment = await commentsService.addComment(postId, content);
+    if (generation !== lifecycleGeneration) return;
     feedService
       .syncWallSocialEventsToRelay()
       .catch((err) => log.warn('Failed to sync wall comment event to relay', err));
@@ -481,7 +490,9 @@ export const useWallStore = create<WallState>((set, get) => ({
   },
 
   deleteComment: async (postId: string, commentId: string) => {
+    const generation = lifecycleGeneration;
     await commentsService.deleteComment(commentId);
+    if (generation !== lifecycleGeneration) return;
     set((state) => {
       const existing = state.commentsByPost[postId] || [];
       const nextComments = existing.filter((comment) => comment.commentId !== commentId);
@@ -493,4 +504,25 @@ export const useWallStore = create<WallState>((set, get) => ({
       };
     });
   },
+  reset: () => {
+    lifecycleGeneration += 1;
+    set({
+      ...initialState,
+      posts: [],
+      commentsByPost: {},
+      expandedComments: new Set(),
+      loadingComments: new Set(),
+    });
+  },
 }));
+
+export interface PostRelayStatusEvent {
+  post_id: string;
+  event_id: string;
+  status: PostRelayStatus;
+}
+
+/** Apply a network publication event only to a post in the active profile store. */
+export function applyPostRelayStatusEvent(event: PostRelayStatusEvent): void {
+  useWallStore.getState().setPostRelayStatus(event.post_id, event.status);
+}

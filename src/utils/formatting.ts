@@ -83,9 +83,3 @@ export function formatTimeAgo(unixSeconds: number): string {
 
   return date.toLocaleDateString();
 }
-
-/** Truncate a peer ID for display: first 12 chars + last 6. */
-export function shortPeerId(peerId: string): string {
-  if (peerId.length <= 20) return peerId;
-  return `${peerId.slice(0, 12)}...${peerId.slice(-6)}`;
-}
