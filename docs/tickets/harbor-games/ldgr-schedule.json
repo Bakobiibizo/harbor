@@ -116,6 +116,17 @@
       "dependencies": ["games-0310-neo-store-ui"]
     },
     {
+      "slug": "games-0501-public-dns-tls",
+      "title": "Complete games origin DNS and TLS cutover",
+      "description": "After the operator rotates the previously exposed infrastructure credential, replace the authoritative games.social-harbor.com record through the externally managed DNS provider with a route that reaches the validated gx10 tunnel ingress. Confirm valid public TLS, exact store/API routing, restrictive headers, no public origin listener, and unchanged unrelated sites. Source: games-0500 run 88 and Neo Grounds docs/gx10-deployment.md at a15d01b.",
+      "status": "held",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "deployment",
+      "acceptance_criteria": "Credential rotation is explicitly confirmed; games.social-harbor.com resolves to the intended tunnel-backed service and serves valid HTTPS store/API responses; origin remains loopback-only; unrelated routes remain unchanged; sanitized evidence is recorded.",
+      "dependencies": ["games-0500-deploy-store"]
+    },
+    {
       "slug": "games-0600-end-to-end-validation",
       "title": "Validate Harbor game creation-to-offline-play",
       "description": "Run the complete production-shaped path across Neo Grounds, Harbor, gx10, and NAS: Harbor sign-in, real WASM build, creator signing, moderation, embedded discovery, installation, local play, tamper rejection, folder discovery, profile isolation, restart, and offline replay. Capture sanitized evidence and audit every source requirement.",
@@ -124,7 +135,11 @@
       "program": "harbor-games",
       "group": "validation",
       "acceptance_criteria": "Every delivery-acceptance scenario in source-spec.md passes against packaged Harbor and the deployed HTTPS store; full Harbor and Neo Grounds checks pass; adversarial signature/archive/origin/replay tests pass; diff and deployment evidence are captured; no acceptance criterion is skipped or replaced by a limitation.",
-      "dependencies": ["games-0420-harbor-games-ui", "games-0500-deploy-store"]
+      "dependencies": [
+        "games-0420-harbor-games-ui",
+        "games-0500-deploy-store",
+        "games-0501-public-dns-tls"
+      ]
     }
   ]
 }

@@ -15,6 +15,7 @@ graph TD
   HR[games-0410-harbor-wasm-runtime]
   HE[games-0420-harbor-games-ui]
   DP[games-0500-deploy-store]
+  DNS[games-0501-public-dns-tls]
   E2E[games-0600-end-to-end-validation]
 
   C --> P
@@ -31,8 +32,9 @@ graph TD
   HR --> HE
   NU --> HE
   NU --> DP
+  DP --> DNS
   HE --> E2E
-  DP --> E2E
+  DNS --> E2E
 ```
 
 ## Repository ownership
@@ -50,6 +52,7 @@ graph TD
 | `games-0410-harbor-wasm-runtime`   | Harbor                                   |
 | `games-0420-harbor-games-ui`       | Harbor                                   |
 | `games-0500-deploy-store`          | Neo Grounds and `gx10` operations        |
+| `games-0501-public-dns-tls`        | Operator-controlled DNS and `gx10`       |
 | `games-0600-end-to-end-validation` | Both repositories and deployed service   |
 
 Multiplayer is intentionally absent from this graph. It requires a separate contract after the local runtime and distribution path pass acceptance.
