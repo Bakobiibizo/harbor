@@ -1,0 +1,130 @@
+{
+  "format": "ldgr.schedule.v1",
+  "work_items": [
+    {
+      "slug": "games-0100-package-contract",
+      "title": "Freeze the .harborgame package and signing contract",
+      "description": "In Neo Grounds, define deterministic .harborgame archive construction, canonical creator-signing payloads, schema validation, bounded extraction policy inputs, and valid/tampered golden fixtures. Export the canonical schema and fixtures for Harbor compatibility tests. Source: docs/tickets/harbor-games/source-spec.md at the Harbor games branch and Neo Grounds runtime contract a5cfa14.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "protocol",
+      "acceptance_criteria": "Neo Grounds builds a deterministic archive from a real minimal WASM package; independent validation rejects path traversal, duplicate paths, undeclared files, digest changes, malformed identities, and signature changes; Harbor can consume the versioned schema and golden fixtures without undocumented assumptions.",
+      "dependencies": ["games-0001-platform-contract"]
+    },
+    {
+      "slug": "games-0200-harbor-signing",
+      "title": "Implement Harbor game authentication and package signing",
+      "description": "Add domain-separated, bounded Harbor identity signing commands and confirmation UI for Neo Grounds login challenges and finalized game package digests. Extend deep-link routing for the exact trusted games origin without exposing private keys or creating a general raw-signing oracle.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "identity",
+      "acceptance_criteria": "An unlocked identity can explicitly approve and sign valid short-lived Neo Grounds auth and package requests; locked, expired, replayed, wrong-origin, oversized, malformed, and cross-domain requests fail; tests prove no command accepts arbitrary bytes or returns private key material.",
+      "dependencies": ["games-0100-package-contract"]
+    },
+    {
+      "slug": "games-0210-neo-harbor-auth",
+      "title": "Implement Sign in with Harbor verification",
+      "description": "Add durable Neo Grounds challenge, proof-verification, account-link, and session endpoints. Verify Harbor peer ID/public-key derivation and Ed25519 signatures atomically with nonce consumption, expiry, audience binding, request limits, and audit records.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "identity",
+      "acceptance_criteria": "A valid Harbor proof links one identity to the intended Neo Grounds account and creates a secure browser session; replay, expiry, account swap, origin swap, key substitution, signature mutation, and concurrent proof submission fail without partial links; state survives service restart.",
+      "dependencies": ["games-0100-package-contract", "games-0200-harbor-signing"]
+    },
+    {
+      "slug": "games-0220-neo-signin-ui",
+      "title": "Add Neo Grounds Harbor sign-in and package-signing UI",
+      "description": "Add optional Sign in with Harbor account linking and publication-time package signing to Neo Grounds. Creation and Neo-only play remain available without Harbor; Harbor-store submission clearly requires linking and explicit package signing.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "identity-ui",
+      "acceptance_criteria": "The browser initiates the versioned Harbor deep link, reports pending/approved/expired/failed state, obtains a session only after valid proof, and separately requests package signing with visible title, digest, permissions, and creator identity. Cancel and failure never submit or publish a package.",
+      "dependencies": ["games-0210-neo-harbor-auth"]
+    },
+    {
+      "slug": "games-0300-neo-store-service",
+      "title": "Build the durable moderated Neo Grounds Harbor store service",
+      "description": "Replace demo-only store paths with durable metadata, immutable NAS package storage, signed submissions, operator approval/rejection/withdrawal, approved catalog, package download, audit records, quotas, and health endpoints rooted under /mnt/nas/neo-grounds.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "store-backend",
+      "acceptance_criteria": "Linked creators submit creator-signed immutable packages; only an authenticated allowlisted reviewer can approve or reject; only approved packages appear or download; tampering and invalid transitions fail; concurrent submission/approval is atomic; catalog, decisions, and bytes survive restart; backup/restore is tested.",
+      "dependencies": ["games-0100-package-contract", "games-0210-neo-harbor-auth"]
+    },
+    {
+      "slug": "games-0310-neo-store-ui",
+      "title": "Build the embeddable Neo Grounds Harbor store",
+      "description": "Implement the dedicated catalog/search/detail/submission-status/admin routes for embedding at games.social-harbor.com. Emit only the closed versioned install-intent message and configure restrictive framing, CSP, navigation, and content headers.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "store-frontend",
+      "acceptance_criteria": "Anonymous users browse only approved games; linked creators see their submission state; the operator reviews submissions; the embedded route emits validated identifiers rather than URLs or code; browser tests prove disallowed framing, navigation, message, and unapproved-content paths fail.",
+      "dependencies": ["games-0220-neo-signin-ui", "games-0300-neo-store-service"]
+    },
+    {
+      "slug": "games-0400-harbor-game-library",
+      "title": "Implement Harbor's validated local game library",
+      "description": "Add Rust repositories and services for managed package storage, manual .harborgame import, configurable non-recursive folder discovery, atomic installation/update/uninstall, creator/store verification, permissions, profile isolation, and local save metadata.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "client-backend",
+      "acceptance_criteria": "Manual import and folder discovery install valid signed fixtures into managed immutable storage; malformed archives, traversal, symlinks, undeclared files, quota excess, incompatible ABI, and all signature/digest mutations fail without runnable partial state; two profiles cannot access each other's approvals, saves, or history; failed updates preserve the installed version.",
+      "dependencies": ["games-0100-package-contract"]
+    },
+    {
+      "slug": "games-0410-harbor-wasm-runtime",
+      "title": "Run Neo Grounds WASM packages safely inside Harbor",
+      "description": "Implement the Worker-isolated Neo Grounds v1 lifecycle and Canvas 2D command-buffer player in Harbor, with input, audio boundary, fullscreen, lifecycle cleanup, offline launch, deny-by-default capabilities, measured resource limits, and actionable crash states.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "client-runtime",
+      "acceptance_criteria": "A real golden WASM game initializes, updates, renders, receives input, shuts down, and relaunches offline; unsupported imports and multiplayer fail before launch; direct DOM/network/filesystem/Tauri access is absent; measured limits and protected failure modes are documented and tested; a trapped or stalled game does not corrupt Harbor state or remain active after navigation.",
+      "dependencies": ["games-0100-package-contract", "games-0400-harbor-game-library"]
+    },
+    {
+      "slug": "games-0420-harbor-games-ui",
+      "title": "Add Harbor Games navigation, library, and embedded store",
+      "description": "Add the Games tab, local library, import/folder settings, game detail/play surface, sandboxed Neo Grounds iframe, exact-origin install bridge, independent metadata resolution, install confirmation, offline state, permissions, errors, and uninstall/save controls.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "client-frontend",
+      "acceptance_criteria": "Users browse the embedded approved catalog, confirm an origin-checked install, import or discover local packages, launch installed games locally, and understand offline/error/permission state; forged origins/messages and remote package URLs cannot trigger installation; accessibility and keyboard navigation tests pass.",
+      "dependencies": [
+        "games-0310-neo-store-ui",
+        "games-0400-harbor-game-library",
+        "games-0410-harbor-wasm-runtime"
+      ]
+    },
+    {
+      "slug": "games-0500-deploy-store",
+      "title": "Deploy Neo Grounds store on gx10",
+      "description": "Deploy the production Neo Grounds store service on gx10 with loopback binding, constrained supervision, /mnt/nas/neo-grounds storage, backup/restore, health checks, logs, TLS tunnel ingress, DNS for games.social-harbor.com, restrictive headers, and rollback documentation. Preserve existing social-harbor.com and unrelated gx10 services.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "deployment",
+      "acceptance_criteria": "games.social-harbor.com serves the intended store and API over valid HTTPS; origin service is not publicly bound; unrelated routes/services remain unchanged; restart and restore preserve approved data; health/rollback checks pass; no credentials enter repositories or logs; Harbor can frame only the store route and API CORS is minimal.",
+      "dependencies": ["games-0310-neo-store-ui"]
+    },
+    {
+      "slug": "games-0600-end-to-end-validation",
+      "title": "Validate Harbor game creation-to-offline-play",
+      "description": "Run the complete production-shaped path across Neo Grounds, Harbor, gx10, and NAS: Harbor sign-in, real WASM build, creator signing, moderation, embedded discovery, installation, local play, tamper rejection, folder discovery, profile isolation, restart, and offline replay. Capture sanitized evidence and audit every source requirement.",
+      "status": "pending",
+      "priority": "P0",
+      "program": "harbor-games",
+      "group": "validation",
+      "acceptance_criteria": "Every delivery-acceptance scenario in source-spec.md passes against packaged Harbor and the deployed HTTPS store; full Harbor and Neo Grounds checks pass; adversarial signature/archive/origin/replay tests pass; diff and deployment evidence are captured; no acceptance criterion is skipped or replaced by a limitation.",
+      "dependencies": ["games-0420-harbor-games-ui", "games-0500-deploy-store"]
+    }
+  ]
+}
