@@ -561,6 +561,8 @@ pub fn run() {
             commands::get_game_discovery_folder,
             commands::discover_game_packages,
             commands::install_store_game,
+            commands::load_game_runtime,
+            commands::record_game_launch,
             commands::list_installed_games,
             commands::uninstall_game,
             commands::read_game_save,

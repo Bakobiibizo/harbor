@@ -2,7 +2,8 @@ use crate::{
     error::AppError,
     services::{
         verify_game_package, verify_store_approval, GameDiscoveryResult, GameInstallation,
-        GameLibraryService, StoreApproval, VerifiedGamePackage, MAX_HARBOR_GAME_BYTES,
+        GameLibraryService, GameRuntimeBundle, StoreApproval, VerifiedGamePackage,
+        MAX_HARBOR_GAME_BYTES,
     },
 };
 use futures::StreamExt;
@@ -174,6 +175,25 @@ pub async fn install_store_game(
     })
     .await
     .map_err(|error| AppError::Internal(format!("Game installation worker failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn load_game_runtime(
+    game_id: String,
+    service: State<'_, Arc<GameLibraryService>>,
+) -> Result<GameRuntimeBundle, AppError> {
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || service.load_runtime_bundle(&game_id))
+        .await
+        .map_err(|error| AppError::Internal(format!("Game runtime load worker failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn record_game_launch(
+    game_id: String,
+    service: State<'_, Arc<GameLibraryService>>,
+) -> Result<(), AppError> {
+    service.record_launch(&game_id, chrono::Utc::now().timestamp())
 }
 
 #[tauri::command]

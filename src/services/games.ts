@@ -2,6 +2,7 @@ import type {
   GameDiscoveryResult,
   GameInstallation,
   GamePackagePreview,
+  GameRuntimeBundle,
   GameSigningDelivery,
 } from '../types';
 import { invokeCommand } from './command';
@@ -41,6 +42,14 @@ export function installStoreGame(
   approvedPermissions: string[],
 ): Promise<GameInstallation> {
   return invokeCommand('install_store_game', { approvedPermissions, gameId, versionId });
+}
+
+export function loadGameRuntime(gameId: string): Promise<GameRuntimeBundle> {
+  return invokeCommand('load_game_runtime', { gameId });
+}
+
+export function recordGameLaunch(gameId: string): Promise<void> {
+  return invokeCommand('record_game_launch', { gameId });
 }
 
 export function listInstalledGames(): Promise<GameInstallation[]> {

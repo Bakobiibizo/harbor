@@ -39,12 +39,12 @@ pub use content_sync_service::{
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
 pub use game_library_service::{
-    GameDiscoveryResult, GameInstallation, GameLibraryService, MAX_GAME_LIBRARY_BYTES,
-    MAX_GAME_SAVE_BYTES,
+    GameDiscoveryResult, GameInstallation, GameLibraryService, GameRuntimeBundle,
+    MAX_GAME_LIBRARY_BYTES, MAX_GAME_SAVE_BYTES,
 };
 pub use game_package::{
-    verify_game_package, verify_store_approval, StoreApproval, VerifiedGamePackage,
-    MAX_HARBOR_GAME_BYTES,
+    extract_verified_game_files, verify_game_package, verify_store_approval, StoreApproval,
+    VerifiedGamePackage, MAX_HARBOR_GAME_BYTES,
 };
 pub use game_signing_protocol::{GameSigningDelivery, GameSigningRequestPresentation};
 pub use game_signing_service::GameSigningService;

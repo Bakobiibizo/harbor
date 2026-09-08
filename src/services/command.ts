@@ -24,6 +24,7 @@ import type {
   GameDiscoveryResult,
   GameInstallation,
   GamePackagePreview,
+  GameRuntimeBundle,
   GameSigningDelivery,
   HangupReason,
   HangupResult,
@@ -256,6 +257,8 @@ interface HarborCommandMap {
     { gameId: string; versionId: string; approvedPermissions: string[] },
     GameInstallation
   >;
+  load_game_runtime: Command<{ gameId: string }, GameRuntimeBundle>;
+  record_game_launch: Command<{ gameId: string }, void>;
   list_installed_games: NoArgs<GameInstallation[]>;
   uninstall_game: Command<{ gameId: string }, void>;
   read_game_save: Command<{ gameId: string; slot: string }, number[] | null>;

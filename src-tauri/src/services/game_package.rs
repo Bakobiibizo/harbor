@@ -55,6 +55,11 @@ pub struct StoreApproval {
     pub signature: String,
 }
 
+pub fn extract_verified_game_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, AppError> {
+    verify_game_package(bytes)?;
+    read_archive(bytes)
+}
+
 pub fn verify_game_package(bytes: &[u8]) -> Result<VerifiedGamePackage, AppError> {
     let files = read_archive(bytes)?;
     let manifest = parse_canonical_json(required_file(&files, "runtime.json")?, "runtime.json")?;

@@ -1,11 +1,15 @@
 use crate::{
     db::Database,
     error::AppError,
-    services::{verify_game_package, verify_store_approval, StoreApproval, VerifiedGamePackage},
+    services::{
+        extract_verified_game_files, verify_game_package, verify_store_approval, StoreApproval,
+        VerifiedGamePackage,
+    },
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -39,6 +43,17 @@ pub struct GameDiscoveryResult {
     pub file_name: String,
     pub installation: Option<GameInstallation>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameRuntimeBundle {
+    pub asset_manifest: serde_json::Value,
+    pub assets: BTreeMap<String, Vec<u8>>,
+    pub game_id: String,
+    pub manifest: serde_json::Value,
+    pub version_id: String,
+    pub wasm_bytes: Vec<u8>,
 }
 
 pub struct GameLibraryService {
@@ -359,6 +374,37 @@ impl GameLibraryService {
             })
     }
 
+    pub fn load_runtime_bundle(&self, game_id: &str) -> Result<GameRuntimeBundle, AppError> {
+        let installation = self.get(game_id)?;
+        let path = self.verified_package_path(game_id)?;
+        let bytes = fs::read(path)?;
+        let mut files = extract_verified_game_files(&bytes)?;
+        let manifest = serde_json::from_slice(
+            &files
+                .remove("runtime.json")
+                .ok_or_else(|| AppError::InvalidData("Runtime manifest disappeared".into()))?,
+        )
+        .map_err(|error| AppError::Serialization(error.to_string()))?;
+        let asset_manifest = serde_json::from_slice(
+            &files
+                .remove("assets.json")
+                .ok_or_else(|| AppError::InvalidData("Asset manifest disappeared".into()))?,
+        )
+        .map_err(|error| AppError::Serialization(error.to_string()))?;
+        let wasm_bytes = files
+            .remove("game.wasm")
+            .ok_or_else(|| AppError::InvalidData("WASM module disappeared".into()))?;
+        files.remove("package.sig");
+        Ok(GameRuntimeBundle {
+            asset_manifest,
+            assets: files,
+            game_id: installation.game_id,
+            manifest,
+            version_id: installation.version_id,
+            wasm_bytes,
+        })
+    }
+
     pub fn verified_package_path(&self, game_id: &str) -> Result<PathBuf, AppError> {
         let installation = self.get(game_id)?;
         let path = self.package_path(&installation.archive_digest);
@@ -618,6 +664,9 @@ mod tests {
             service.verified_package_path(&installed.game_id).unwrap(),
             source
         );
+        let bundle = service.load_runtime_bundle(&installed.game_id).unwrap();
+        assert_eq!(&bundle.wasm_bytes[..4], b"\0asm");
+        assert!(bundle.assets.is_empty());
         service
             .write_save(&installed.game_id, "main", b"save", 11)
             .unwrap();

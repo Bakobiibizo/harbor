@@ -67,6 +67,28 @@ export interface GameInstallation {
   versionId: string;
 }
 
+export interface GameRuntimeBundle {
+  assetManifest: unknown;
+  assets: Record<string, number[]>;
+  gameId: string;
+  manifest: NeoGroundsRuntimeManifest;
+  versionId: string;
+  wasmBytes: number[];
+}
+
+export interface NeoGroundsRuntimeManifest {
+  compatibility: {
+    hostIntegration: 'worker-host-canvas-proxy';
+    packageFormat: 'neo-grounds-runtime-package';
+    renderer: 'canvas2d-command-buffer';
+    runtimeAbi: 'neo-grounds-wasm-component-v1';
+    schemaVersion: 1;
+  };
+  metadata: { gameId: string; title: string; versionId: string };
+  platformApi: { bindingMode: 'declared-permissions-only'; permissions: string[] };
+  wasmModule: { exports: string[]; imports: string[] };
+}
+
 export interface GameDiscoveryResult {
   error: string | null;
   fileName: string;
