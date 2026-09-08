@@ -18,9 +18,9 @@ use logging::LogConfig;
 use profile_root::ProfileRoot;
 use services::{
     AccountBackupService, AccountsService, BoardService, CallingService, ContactsService,
-    ContentSyncService, FeedService, GameSigningRequestPresentation, GameSigningService,
-    IdentityService, MediaStorageService, MentionsService, MessagingService, PermissionsService,
-    PostsService, WallSocialService,
+    ContentSyncService, FeedService, GameLibraryService, GameSigningRequestPresentation,
+    GameSigningService, IdentityService, MediaStorageService, MentionsService, MessagingService,
+    PermissionsService, PostsService, WallSocialService,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -59,6 +59,7 @@ pub struct ProfileServices {
     pub messaging: Arc<MessagingService>,
     pub posts: Arc<PostsService>,
     pub feed: Arc<FeedService>,
+    pub game_library: Arc<GameLibraryService>,
     pub game_signing: Arc<GameSigningService>,
     pub mentions: Arc<MentionsService>,
     pub calling: Arc<CallingService>,
@@ -105,6 +106,7 @@ impl ProfileServices {
             permissions.clone(),
             contacts.clone(),
         ));
+        let game_library = Arc::new(GameLibraryService::new(data_dir, db.clone())?);
         let game_signing = Arc::new(GameSigningService::new(db.clone(), identity.clone())?);
         let mentions = Arc::new(MentionsService::new(
             db.clone(),
@@ -149,6 +151,7 @@ impl ProfileServices {
             messaging,
             posts,
             feed,
+            game_library,
             game_signing,
             mentions,
             calling,
@@ -493,6 +496,7 @@ pub fn run() {
             app.manage(services.mentions);
             app.manage(services.content_sync);
             app.manage(services.feed);
+            app.manage(services.game_library);
             app.manage(services.game_signing);
             app.manage(services.wall_social);
             app.manage(services.calling);
@@ -551,6 +555,17 @@ pub fn run() {
             commands::update_passphrase_hint,
             commands::get_peer_id,
             commands::approve_game_signing_request,
+            commands::inspect_game_package,
+            commands::import_game_package,
+            commands::configure_game_discovery_folder,
+            commands::get_game_discovery_folder,
+            commands::discover_game_packages,
+            commands::install_store_game,
+            commands::list_installed_games,
+            commands::uninstall_game,
+            commands::read_game_save,
+            commands::write_game_save,
+            commands::delete_game_saves,
             commands::get_identity_entry_state,
             commands::get_identity_publishing_state,
             commands::set_identity_publishing_mode,

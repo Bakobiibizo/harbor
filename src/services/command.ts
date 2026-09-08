@@ -21,6 +21,9 @@ import type {
   GroupCallRoom,
   GroupMembershipAction,
   GroupMembershipSignal,
+  GameDiscoveryResult,
+  GameInstallation,
+  GamePackagePreview,
   GameSigningDelivery,
   HangupReason,
   HangupResult,
@@ -241,6 +244,23 @@ interface HarborCommandMap {
   update_passphrase_hint: Command<{ hint: string | null }, void>;
   get_peer_id: NoArgs<string>;
   approve_game_signing_request: Command<{ approvalId: string }, GameSigningDelivery>;
+  inspect_game_package: Command<{ filePath: string }, GamePackagePreview>;
+  import_game_package: Command<
+    { filePath: string; approvedPermissions: string[] },
+    GameInstallation
+  >;
+  configure_game_discovery_folder: Command<{ folderPath: string }, void>;
+  get_game_discovery_folder: NoArgs<string | null>;
+  discover_game_packages: Command<{ approvedPermissions: string[] }, GameDiscoveryResult[]>;
+  install_store_game: Command<
+    { gameId: string; versionId: string; approvedPermissions: string[] },
+    GameInstallation
+  >;
+  list_installed_games: NoArgs<GameInstallation[]>;
+  uninstall_game: Command<{ gameId: string }, void>;
+  read_game_save: Command<{ gameId: string; slot: string }, number[] | null>;
+  write_game_save: Command<{ gameId: string; slot: string; data: number[] }, void>;
+  delete_game_saves: Command<{ gameId: string }, number>;
   register_relay_name: Command<{ request: RegisterRelayNameRequest }, RelayNameClaim>;
   get_local_name_claim: NoArgs<RelayNameClaim | null>;
   verify_name_claim: Command<{ claim: RelayNameClaim }, boolean>;

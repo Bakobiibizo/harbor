@@ -6,6 +6,8 @@ pub mod contacts_service;
 pub mod content_sync_service;
 pub mod crypto_service;
 pub mod feed_service;
+pub mod game_library_service;
+pub mod game_package;
 pub mod game_signing_protocol;
 pub mod game_signing_service;
 pub mod identity_publishing_policy;
@@ -36,6 +38,14 @@ pub use content_sync_service::{
 };
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
+pub use game_library_service::{
+    GameDiscoveryResult, GameInstallation, GameLibraryService, MAX_GAME_LIBRARY_BYTES,
+    MAX_GAME_SAVE_BYTES,
+};
+pub use game_package::{
+    verify_game_package, verify_store_approval, StoreApproval, VerifiedGamePackage,
+    MAX_HARBOR_GAME_BYTES,
+};
 pub use game_signing_protocol::{GameSigningDelivery, GameSigningRequestPresentation};
 pub use game_signing_service::GameSigningService;
 pub use identity_publishing_policy::IdentityPublishingPolicy;
