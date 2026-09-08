@@ -30,6 +30,7 @@ import {
   ChatIcon,
   WallIcon,
   FeedIcon,
+  GamesIcon,
   NetworkIcon,
   SettingsIcon,
   LockIcon,
@@ -62,6 +63,12 @@ const navItems: NavItem[] = [
     label: 'Feed',
     icon: FeedIcon,
     description: 'Updates from contacts',
+  },
+  {
+    to: '/games',
+    label: 'Games',
+    icon: GamesIcon,
+    description: 'Store & local library',
   },
   {
     to: '/boards',

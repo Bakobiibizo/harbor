@@ -47,6 +47,15 @@ pub struct GameDiscoveryResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GameDiscoveryPreview {
+    pub error: Option<String>,
+    pub file_name: String,
+    pub file_path: String,
+    pub package: Option<VerifiedGamePackage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GameRuntimeBundle {
     pub asset_manifest: serde_json::Value,
     pub assets: BTreeMap<String, Vec<u8>>,
@@ -157,6 +166,44 @@ impl GameLibraryService {
             })
             .map(|value| value.map(PathBuf::from))
             .map_err(Into::into)
+    }
+
+    pub fn inspect_discovery_folder(&self) -> Result<Vec<GameDiscoveryPreview>, AppError> {
+        let folder = self
+            .configured_discovery_folder()?
+            .ok_or_else(|| validation("Configure a games discovery folder first"))?;
+        let metadata = fs::symlink_metadata(&folder)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(validation(
+                "Configured games discovery folder is no longer a real directory",
+            ));
+        }
+        let mut entries: Vec<_> = fs::read_dir(folder)?.collect::<Result<_, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        Ok(entries
+            .into_iter()
+            .filter(|entry| {
+                entry.path().extension().and_then(|value| value.to_str()) == Some("harborgame")
+            })
+            .map(|entry| {
+                let path = entry.path();
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                match self.inspect_package(&path) {
+                    Ok(package) => GameDiscoveryPreview {
+                        error: None,
+                        file_name,
+                        file_path: path.to_string_lossy().into_owned(),
+                        package: Some(package),
+                    },
+                    Err(error) => GameDiscoveryPreview {
+                        error: Some(error.to_string()),
+                        file_name,
+                        file_path: path.to_string_lossy().into_owned(),
+                        package: None,
+                    },
+                }
+            })
+            .collect())
     }
 
     pub fn discover_and_install(

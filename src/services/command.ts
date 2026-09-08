@@ -21,11 +21,13 @@ import type {
   GroupCallRoom,
   GroupMembershipAction,
   GroupMembershipSignal,
+  GameDiscoveryPreview,
   GameDiscoveryResult,
   GameInstallation,
   GamePackagePreview,
   GameRuntimeBundle,
   GameSigningDelivery,
+  StoreGamePreview,
   HangupReason,
   HangupResult,
   IceResult,
@@ -252,7 +254,9 @@ interface HarborCommandMap {
   >;
   configure_game_discovery_folder: Command<{ folderPath: string }, void>;
   get_game_discovery_folder: NoArgs<string | null>;
+  inspect_discovered_game_packages: NoArgs<GameDiscoveryPreview[]>;
   discover_game_packages: Command<{ approvedPermissions: string[] }, GameDiscoveryResult[]>;
+  get_store_game_metadata: Command<{ gameId: string; versionId: string }, StoreGamePreview>;
   install_store_game: Command<
     { gameId: string; versionId: string; approvedPermissions: string[] },
     GameInstallation

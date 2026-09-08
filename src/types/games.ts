@@ -89,6 +89,15 @@ export interface NeoGroundsRuntimeManifest {
   wasmModule: { exports: string[]; imports: string[] };
 }
 
+export interface GameDiscoveryPreview {
+  error: string | null;
+  fileName: string;
+  filePath: string;
+  package: GamePackagePreview | null;
+}
+
+export type StoreGamePreview = GamePackagePreview;
+
 export interface GameDiscoveryResult {
   error: string | null;
   fileName: string;

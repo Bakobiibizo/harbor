@@ -39,8 +39,8 @@ pub use content_sync_service::{
 pub use crypto_service::CryptoService;
 pub use feed_service::{FeedItem, FeedService};
 pub use game_library_service::{
-    GameDiscoveryResult, GameInstallation, GameLibraryService, GameRuntimeBundle,
-    MAX_GAME_LIBRARY_BYTES, MAX_GAME_SAVE_BYTES,
+    GameDiscoveryPreview, GameDiscoveryResult, GameInstallation, GameLibraryService,
+    GameRuntimeBundle, MAX_GAME_LIBRARY_BYTES, MAX_GAME_SAVE_BYTES,
 };
 pub use game_package::{
     extract_verified_game_files, verify_game_package, verify_store_approval, StoreApproval,

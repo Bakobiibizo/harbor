@@ -77,6 +77,11 @@ describe('MainLayout responsive application menu', () => {
     mocks.notifications.length = 0;
   });
 
+  it('includes Games as a first-class navigation destination', () => {
+    renderLayout();
+    expect(screen.getByRole('link', { name: 'Games' })).toHaveAttribute('href', '/games');
+  });
+
   it('collects compact utility actions behind an accessible hamburger menu', () => {
     renderLayout();
 

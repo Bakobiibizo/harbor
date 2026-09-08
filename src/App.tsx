@@ -28,6 +28,7 @@ import {
   ContactWallPage,
   WallPage,
   FeedPage,
+  GamesPage,
   NetworkPage,
   SettingsPage,
 } from './pages';
@@ -383,6 +384,7 @@ export function AppContent() {
               <Route path="/name/:qualifiedName/wall" element={<NamedContactWallPage />} />
               <Route path="/feed" element={<FeedPage />} />
               <Route path="/boards" element={<BoardsPage />} />
+              <Route path="/games" element={<GamesPage />} />
               <Route path="/network" element={<NetworkPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/chat" replace />} />

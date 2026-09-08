@@ -47,6 +47,18 @@ export function FeedIcon({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function GamesIcon({ size = 20, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...defaultProps} {...props}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 8.25h7.5a5.25 5.25 0 014.95 7l-.75 2.25a2.25 2.25 0 01-3.78.86l-1.42-1.42a2.25 2.25 0 00-1.59-.66h-2.32a2.25 2.25 0 00-1.59.66l-1.42 1.42a2.25 2.25 0 01-3.78-.86L3.3 15.25a5.25 5.25 0 014.95-7zM8.25 11.25v3m-1.5-1.5h3m5.25-.75h.008v.008H15V12zm2.25 2.25h.008v.008H17.25v-.008z"
+      />
+    </svg>
+  );
+}
+
 export function BoardsIcon({ size = 20, ...props }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...defaultProps} {...props}>

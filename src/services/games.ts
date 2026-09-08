@@ -1,9 +1,11 @@
 import type {
+  GameDiscoveryPreview,
   GameDiscoveryResult,
   GameInstallation,
   GamePackagePreview,
   GameRuntimeBundle,
   GameSigningDelivery,
+  StoreGamePreview,
 } from '../types';
 import { invokeCommand } from './command';
 
@@ -30,10 +32,18 @@ export function getGameDiscoveryFolder(): Promise<string | null> {
   return invokeCommand('get_game_discovery_folder');
 }
 
+export function inspectDiscoveredGamePackages(): Promise<GameDiscoveryPreview[]> {
+  return invokeCommand('inspect_discovered_game_packages');
+}
+
 export function discoverGamePackages(
   approvedPermissions: string[],
 ): Promise<GameDiscoveryResult[]> {
   return invokeCommand('discover_game_packages', { approvedPermissions });
+}
+
+export function getStoreGameMetadata(gameId: string, versionId: string): Promise<StoreGamePreview> {
+  return invokeCommand('get_store_game_metadata', { gameId, versionId });
 }
 
 export function installStoreGame(

@@ -96,6 +96,7 @@ vi.mock('./pages', () => ({
   ContactWallPage: () => null,
   WallPage: () => null,
   FeedPage: () => null,
+  GamesPage: () => null,
   NetworkPage: () => null,
   SettingsPage: () => null,
 }));
