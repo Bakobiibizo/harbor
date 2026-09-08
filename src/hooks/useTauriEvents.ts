@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import toast from 'react-hot-toast';
-import type { NetworkEvent } from '../types';
+import type { GameSigningRequest, NetworkEvent } from '../types';
 import {
   useNetworkStore,
   useContactsStore,
   useMessagingStore,
   useFeedStore,
+  useGameSigningStore,
   useContactWallStore,
   useWallStore,
   useCallingStore,
@@ -136,6 +137,12 @@ export function useTauriEvents(profileToken: ProfileToken) {
             listen<string>('deep_link_contact', (event) => {
               if (!listenersReady || listenerScope.disposed) return;
               useNetworkStore.getState().setPendingDeepLinkContact(event.payload);
+            }),
+          // Only Rust can create these presentations after validating the deep link.
+          () =>
+            listen<GameSigningRequest>('deep_link_game_signing', (event) => {
+              if (!listenersReady || listenerScope.disposed) return;
+              useGameSigningStore.getState().enqueue(event.payload);
             }),
         ],
         reportListenerError,

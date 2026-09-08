@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import toast, { Toaster } from 'react-hot-toast';
 import { isTauri } from '@tauri-apps/api/core';
-import { useIdentityStore, useNetworkStore, useSettingsStore, useAccountsStore } from './stores';
+import {
+  useAccountsStore,
+  useGameSigningStore,
+  useIdentityStore,
+  useNetworkStore,
+  useSettingsStore,
+} from './stores';
 import { useHarborControlEvents, useTauriEvents } from './hooks';
 import { MainLayout, WindowsTitleBar } from './components/layout';
 import {
@@ -14,6 +20,7 @@ import {
 import { IdentityPublishingGate } from './components/identity';
 import { AddContactDialog, ErrorBoundary } from './components/common';
 import { CallOverlay } from './components/calling/CallOverlay';
+import { GameSigningApprovalDialog } from './components/games/GameSigningApprovalDialog';
 import { HarborIcon } from './components/icons';
 import {
   BoardsPage,
@@ -112,6 +119,8 @@ export function AppContent() {
   const { checkStatus, startNetwork, pendingDeepLinkContact, setPendingDeepLinkContact } =
     useNetworkStore();
   const { autoStartNetwork } = useSettingsStore();
+  const gameSigningRequests = useGameSigningStore((gameSigning) => gameSigning.requests);
+  const removeGameSigningRequest = useGameSigningStore((gameSigning) => gameSigning.remove);
   const { accounts, activeAccount, loading: accountsLoading, loadAccounts } = useAccountsStore();
 
   // UI state for account flow
@@ -384,6 +393,13 @@ export function AppContent() {
             <AddContactDialog
               contactString={pendingDeepLinkContact}
               onClose={() => setPendingDeepLinkContact(null)}
+            />
+          )}
+          {gameSigningRequests[0] && (
+            <GameSigningApprovalDialog
+              identity={state.identity}
+              request={gameSigningRequests[0]}
+              onClose={() => removeGameSigningRequest(gameSigningRequests[0].approvalId)}
             />
           )}
         </>

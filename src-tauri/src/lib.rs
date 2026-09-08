@@ -18,8 +18,9 @@ use logging::LogConfig;
 use profile_root::ProfileRoot;
 use services::{
     AccountBackupService, AccountsService, BoardService, CallingService, ContactsService,
-    ContentSyncService, FeedService, IdentityService, MediaStorageService, MentionsService,
-    MessagingService, PermissionsService, PostsService, WallSocialService,
+    ContentSyncService, FeedService, GameSigningRequestPresentation, GameSigningService,
+    IdentityService, MediaStorageService, MentionsService, MessagingService, PermissionsService,
+    PostsService, WallSocialService,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -33,6 +34,9 @@ pub struct LogDirectory(pub PathBuf);
 /// Multiple links can arrive before the user unlocks (e.g. clicking two share links
 /// in quick succession). All are queued here and drained after a successful unlock.
 pub struct PendingDeepLink(pub Mutex<Vec<String>>);
+
+/// Holds validated Neo Grounds requests until the selected identity is unlocked.
+pub struct PendingGameDeepLink(pub Mutex<Vec<GameSigningRequestPresentation>>);
 
 /// Owns the disposable directory used only to render a startup recovery state.
 /// No account data is opened or mutated when startup validation has failed.
@@ -55,6 +59,7 @@ pub struct ProfileServices {
     pub messaging: Arc<MessagingService>,
     pub posts: Arc<PostsService>,
     pub feed: Arc<FeedService>,
+    pub game_signing: Arc<GameSigningService>,
     pub mentions: Arc<MentionsService>,
     pub calling: Arc<CallingService>,
     pub content_sync: Arc<ContentSyncService>,
@@ -100,6 +105,7 @@ impl ProfileServices {
             permissions.clone(),
             contacts.clone(),
         ));
+        let game_signing = Arc::new(GameSigningService::new(db.clone(), identity.clone())?);
         let mentions = Arc::new(MentionsService::new(
             db.clone(),
             identity.clone(),
@@ -143,6 +149,7 @@ impl ProfileServices {
             messaging,
             posts,
             feed,
+            game_signing,
             mentions,
             calling,
             content_sync,
@@ -239,6 +246,24 @@ fn configure_linux_webkit_call_media(
 /// Normalize, validate, and route a harbor:// URL to the frontend.
 /// Called from both the deep-link on_open_url handler and the single-instance callback.
 fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
+    if url.starts_with("harbor://games/") {
+        let signing_service = app.state::<Arc<GameSigningService>>();
+        let request = match signing_service.prepare_deep_link(url, chrono::Utc::now().timestamp()) {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::warn!(%error, "Ignoring invalid Harbor games deep link");
+                return;
+            }
+        };
+        let identity_service = app.state::<Arc<IdentityService>>();
+        if identity_service.is_unlocked() {
+            let _ = app.emit("deep_link_game_signing", &request);
+        } else if let Ok(mut queue) = app.state::<PendingGameDeepLink>().0.lock() {
+            queue.push(request);
+        }
+        return;
+    }
+
     let contact_string = match commands::network::normalize_contact_invite(url) {
         Ok(value) => value,
         Err(error) => {
@@ -468,6 +493,7 @@ pub fn run() {
             app.manage(services.mentions);
             app.manage(services.content_sync);
             app.manage(services.feed);
+            app.manage(services.game_signing);
             app.manage(services.wall_social);
             app.manage(services.calling);
             app.manage(services.boards);
@@ -475,6 +501,7 @@ pub fn run() {
             app.manage(network_state);
             app.manage(StartupInitializationState(startup_failure));
             app.manage(PendingDeepLink(Mutex::new(Vec::new())));
+            app.manage(PendingGameDeepLink(Mutex::new(Vec::new())));
 
             control::spawn_if_configured(app.handle().clone());
 
@@ -523,6 +550,7 @@ pub fn run() {
             commands::update_profile_avatar,
             commands::update_passphrase_hint,
             commands::get_peer_id,
+            commands::approve_game_signing_request,
             commands::get_identity_entry_state,
             commands::get_identity_publishing_state,
             commands::set_identity_publishing_mode,

@@ -21,6 +21,7 @@ import type {
   GroupCallRoom,
   GroupMembershipAction,
   GroupMembershipSignal,
+  GameSigningDelivery,
   HangupReason,
   HangupResult,
   IceResult,
@@ -239,6 +240,7 @@ interface HarborCommandMap {
   update_profile_avatar: Command<{ filePath: string | null }, IdentityInfo>;
   update_passphrase_hint: Command<{ hint: string | null }, void>;
   get_peer_id: NoArgs<string>;
+  approve_game_signing_request: Command<{ approvalId: string }, GameSigningDelivery>;
   register_relay_name: Command<{ request: RegisterRelayNameRequest }, RelayNameClaim>;
   get_local_name_claim: NoArgs<RelayNameClaim | null>;
   verify_name_claim: Command<{ claim: RelayNameClaim }, boolean>;

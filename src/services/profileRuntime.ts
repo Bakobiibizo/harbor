@@ -2,6 +2,7 @@ import { useBoardsStore } from '../stores/boards';
 import { useCallingStore } from '../stores/calling';
 import { useContactsStore } from '../stores/contacts';
 import { useContactWallStore } from '../stores/contactWall';
+import { useGameSigningStore } from '../stores/gameSigning';
 import { useIdentityStore } from '../stores/identity';
 import { useMediaTransfersStore } from '../stores/mediaTransfers';
 import { useNetworkStore } from '../stores/network';
@@ -22,6 +23,7 @@ export function resetProfileRuntime(): void {
   // Lock the identity view before resetting subscribed peer stores so their
   // observers cannot briefly restart profile-bound work during teardown.
   useIdentityStore.getState().resetRuntimeSession();
+  useGameSigningStore.getState().reset();
   useNetworkStore.getState().reset();
   useContactsStore.getState().reset();
   useBoardsStore.getState().reset();

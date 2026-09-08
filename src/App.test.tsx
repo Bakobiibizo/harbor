@@ -38,6 +38,9 @@ vi.mock('./stores', () => {
       initialize: mocks.initialize,
     }),
     useNetworkStore,
+    useGameSigningStore: (
+      selector: (state: { requests: never[]; remove: () => void }) => unknown,
+    ) => selector({ requests: [], remove: vi.fn() }),
     useSettingsStore: () => ({ autoStartNetwork: false }),
     useAccountsStore: () => ({
       accounts: [{ id: 'personal' }, { id: 'work' }],

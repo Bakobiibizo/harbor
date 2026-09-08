@@ -8,6 +8,7 @@ export * from './permissions';
 export * from './messaging';
 export * from './posts';
 export * from './feed';
+export * from './games';
 export * from './calling';
 export * from './mentions';
 export * from './media';

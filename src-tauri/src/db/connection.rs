@@ -33,6 +33,7 @@ const MIGRATION_027: &str = include_str!("migrations/027_post_relay_outbox.sql")
 const MIGRATION_028: &str = include_str!("migrations/028_contact_revocations.sql");
 const MIGRATION_029: &str = include_str!("migrations/029_profile_avatars.sql");
 const MIGRATION_030: &str = include_str!("migrations/030_call_signaling_replay.sql");
+const MIGRATION_031: &str = include_str!("migrations/031_game_signing_requests.sql");
 
 /// Database wrapper for SQLite connection management
 pub struct Database {
@@ -437,6 +438,12 @@ impl Database {
             info!("Running migration 030...");
             conn.execute_batch(MIGRATION_030)?;
             info!("Migration 030 complete");
+        }
+
+        if version < 31 {
+            info!("Running migration 031...");
+            conn.execute_batch(MIGRATION_031)?;
+            info!("Migration 031 complete");
         }
 
         Ok(())
@@ -872,7 +879,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-            assert_eq!(version, 30);
+            assert_eq!(version, 31);
 
             for table in [
                 "relay_trust_keys",
@@ -894,6 +901,7 @@ mod tests {
                 "local_profile_state",
                 "contact_profile_state",
                 "pending_contact_profiles",
+                "game_signing_requests",
             ] {
                 let exists: bool = conn.query_row(
                     "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",

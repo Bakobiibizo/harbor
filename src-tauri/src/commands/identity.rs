@@ -3,7 +3,7 @@ use crate::error::{AppError, ErrorResponse};
 use crate::models::{CreateIdentityRequest, IdentityInfo};
 use crate::services::identity_service::IdentityInitializationSnapshot;
 use crate::services::{AccountsService, ContactsService, IdentityService, MediaStorageService};
-use crate::PendingDeepLink;
+use crate::{PendingDeepLink, PendingGameDeepLink};
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
 use tauri::{Emitter, Manager, State};
@@ -50,6 +50,11 @@ fn drain_pending_deep_links(app: &tauri::AppHandle) {
     if let Ok(mut queue) = app.state::<PendingDeepLink>().0.lock() {
         for contact_string in queue.drain(..) {
             let _ = app.emit("deep_link_contact", &contact_string);
+        }
+    }
+    if let Ok(mut queue) = app.state::<PendingGameDeepLink>().0.lock() {
+        for request in queue.drain(..) {
+            let _ = app.emit("deep_link_game_signing", &request);
         }
     }
 }

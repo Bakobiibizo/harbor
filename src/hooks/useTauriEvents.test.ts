@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => {
         loadMessages: vi.fn(),
       }),
       useFeedStore: createStore({ loadFeed: vi.fn() }),
+      useGameSigningStore: createStore({ enqueue: vi.fn() }),
       useContactWallStore: createStore({ authorPeerId: null, reconcileWall: vi.fn() }),
       useWallStore: createStore({}),
       useCallingStore: createStore({
@@ -125,9 +126,11 @@ describe('useTauriEvents listener lifecycle', () => {
   it('reports ready only after the full asynchronous listener group commits', async () => {
     const networkRegistration = deferred<() => void>();
     const deepLinkRegistration = deferred<() => void>();
+    const gameSigningRegistration = deferred<() => void>();
     mocks.listen
       .mockReturnValueOnce(networkRegistration.promise)
-      .mockReturnValueOnce(deepLinkRegistration.promise);
+      .mockReturnValueOnce(deepLinkRegistration.promise)
+      .mockReturnValueOnce(gameSigningRegistration.promise);
 
     const view = renderHook(() => useTauriEvents(profileToken));
     expect(getProfileEventsReady()).toBe(false);
@@ -137,6 +140,10 @@ describe('useTauriEvents listener lifecycle', () => {
     expect(getProfileEventsReady()).toBe(false);
 
     deepLinkRegistration.resolve(vi.fn());
+    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(3));
+    expect(getProfileEventsReady()).toBe(false);
+
+    gameSigningRegistration.resolve(vi.fn());
     await waitFor(() => expect(getProfileEventsReady()).toBe(true));
 
     view.unmount();
@@ -190,10 +197,12 @@ describe('useTauriEvents listener lifecycle', () => {
     const disposeOld = vi.fn();
     const disposeCurrentNetwork = vi.fn();
     const disposeCurrentDeepLink = vi.fn();
+    const disposeCurrentGameSigning = vi.fn();
     mocks.listen
       .mockReturnValueOnce(oldRegistration.promise)
       .mockResolvedValueOnce(disposeCurrentNetwork)
-      .mockResolvedValueOnce(disposeCurrentDeepLink);
+      .mockResolvedValueOnce(disposeCurrentDeepLink)
+      .mockResolvedValueOnce(disposeCurrentGameSigning);
 
     const view = renderHook(({ token }: { token: ProfileToken }) => useTauriEvents(token), {
       initialProps: { token: profileToken },
@@ -203,7 +212,7 @@ describe('useTauriEvents listener lifecycle', () => {
     const currentToken = activateProfile(`listener-test-${++profileSequence}`);
     expect(getProfileEventsReady()).toBe(false);
     view.rerender({ token: currentToken });
-    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(getProfileEventsReady()).toBe(true));
     oldRegistration.resolve(disposeOld);
     await waitFor(() => expect(disposeOld).toHaveBeenCalledTimes(1));
@@ -211,11 +220,26 @@ describe('useTauriEvents listener lifecycle', () => {
 
     expect(disposeCurrentNetwork).not.toHaveBeenCalled();
     expect(disposeCurrentDeepLink).not.toHaveBeenCalled();
+    expect(disposeCurrentGameSigning).not.toHaveBeenCalled();
 
     view.unmount();
     expect(disposeCurrentNetwork).toHaveBeenCalledTimes(1);
     expect(disposeCurrentDeepLink).toHaveBeenCalledTimes(1);
+    expect(disposeCurrentGameSigning).toHaveBeenCalledTimes(1);
     expect(getProfileEventsReady()).toBe(false);
+  });
+
+  it('routes only backend-validated game signing presentations to the approval store', async () => {
+    mocks.listen.mockResolvedValue(vi.fn());
+    const view = renderHook(() => useTauriEvents(profileToken));
+    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(3));
+    const signingListener = mocks.listen.mock.calls.find(
+      ([eventName]) => eventName === 'deep_link_game_signing',
+    )?.[1] as ((event: { payload: Record<string, unknown> }) => void) | undefined;
+    const request = { kind: 'auth', approvalId: 'approval-1' };
+    signingListener?.({ payload: request });
+    expect(mocks.stores.useGameSigningStore.getState().enqueue).toHaveBeenCalledWith(request);
+    view.unmount();
   });
 
   it('logs received call signaling as a privacy-safe structured summary', async () => {
@@ -230,7 +254,7 @@ describe('useTauriEvents listener lifecycle', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const view = renderHook(() => useTauriEvents(profileToken));
 
-    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.listen).toHaveBeenCalledTimes(3));
     const networkListener = mocks.listen.mock.calls.find(
       ([eventName]) => eventName === 'harbor:network',
     )?.[1] as ((event: { payload: Record<string, unknown> }) => void) | undefined;

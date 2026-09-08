@@ -9,6 +9,7 @@ export { useMessagingStore } from './messaging';
 export { useContactsStore } from './contacts';
 export { useContactWallStore } from './contactWall';
 export { useFeedStore } from './feed';
+export { useGameSigningStore } from './gameSigning';
 export type { Comment } from './feed';
 export { useSettingsStore } from './settings';
 export { useWallStore } from './wall';
