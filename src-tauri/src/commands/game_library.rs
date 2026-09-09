@@ -122,7 +122,7 @@ pub async fn get_store_game_metadata(
     version_id: String,
 ) -> Result<StoreGamePreview, AppError> {
     let client = store_client()?;
-    let metadata = fetch_store_metadata(&client, &game_id, &version_id).await?;
+    let metadata = fetch_store_metadata(&client, STORE_ORIGIN, &game_id, &version_id).await?;
     Ok(StoreGamePreview {
         archive_digest: metadata.archive_digest,
         byte_length: metadata.byte_length,
@@ -142,15 +142,37 @@ pub async fn install_store_game(
     approved_permissions: Vec<String>,
     service: State<'_, Arc<GameLibraryService>>,
 ) -> Result<GameInstallation, AppError> {
+    install_store_game_from_origin(
+        STORE_ORIGIN,
+        &game_id,
+        &version_id,
+        &approved_permissions,
+        service.inner().clone(),
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+}
+
+/// Install through the same bounded HTTP and validation path as the Tauri command.
+///
+/// The origin argument exists for the cross-repository localhost acceptance harness. Shipping
+/// commands always pass the compiled production origin above.
+pub async fn install_store_game_from_origin(
+    store_origin: &str,
+    game_id: &str,
+    version_id: &str,
+    approved_permissions: &[String],
+    service: Arc<GameLibraryService>,
+    now: i64,
+) -> Result<GameInstallation, AppError> {
     let client = store_client()?;
-    let metadata = fetch_store_metadata(&client, &game_id, &version_id).await?;
+    let metadata = fetch_store_metadata(&client, store_origin, game_id, version_id).await?;
     if metadata.permissions != approved_permissions {
         return Err(AppError::InvalidData(
             "Store permissions changed after user confirmation".into(),
         ));
     }
-    let package_url =
-        format!("{STORE_ORIGIN}/api/harbor-store/games/{game_id}/versions/{version_id}/package");
+    let package_url = store_url(store_origin, game_id, version_id, true)?;
     let package_response =
         client.get(package_url).send().await.map_err(|error| {
             AppError::Network(format!("Could not download store package: {error}"))
@@ -161,15 +183,24 @@ pub async fn install_store_game(
             package_response.status()
         )));
     }
+    require_content_type(&package_response, "application/vnd.harbor.game")?;
+    if package_response.content_length() != Some(metadata.byte_length as u64) {
+        return Err(AppError::InvalidData(
+            "Store package length does not match independently resolved metadata".into(),
+        ));
+    }
     let package_bytes = read_bounded_response(package_response, MAX_HARBOR_GAME_BYTES).await?;
-    let service = service.inner().clone();
+    let approved_permissions = approved_permissions.to_vec();
     tokio::task::spawn_blocking(move || {
         let verified = verify_game_package(&package_bytes)?;
         if verified.archive_digest != metadata.archive_digest
+            || verified.byte_length != metadata.byte_length
             || verified.package_digest != metadata.package_digest
             || verified.creator_peer_id != metadata.creator_peer_id
+            || verified.game_id != metadata.game_id
             || verified.title != metadata.title
             || verified.permissions != metadata.permissions
+            || verified.version_id != metadata.version_id
         {
             return Err(AppError::InvalidData(
                 "Downloaded package does not match independently resolved store metadata".into(),
@@ -182,7 +213,7 @@ pub async fn install_store_game(
             &approved_permissions,
             metadata.approval.clone(),
             &metadata.approval.public_key,
-            chrono::Utc::now().timestamp(),
+            now,
         )
     })
     .await
@@ -260,13 +291,11 @@ fn store_client() -> Result<reqwest::Client, AppError> {
 
 async fn fetch_store_metadata(
     client: &reqwest::Client,
+    store_origin: &str,
     game_id: &str,
     version_id: &str,
 ) -> Result<StoreGameMetadata, AppError> {
-    validate_identifier(game_id, "game ID")?;
-    validate_identifier(version_id, "version ID")?;
-    let metadata_url =
-        format!("{STORE_ORIGIN}/api/harbor-store/games/{game_id}/versions/{version_id}");
+    let metadata_url = store_url(store_origin, game_id, version_id, false)?;
     let response =
         client.get(metadata_url).send().await.map_err(|error| {
             AppError::Network(format!("Could not load store metadata: {error}"))
@@ -277,6 +306,7 @@ async fn fetch_store_metadata(
             response.status()
         )));
     }
+    require_content_type(&response, "application/json")?;
     let bytes = read_bounded_response(response, MAX_METADATA_BYTES).await?;
     let response: ApiSuccess<StoreGameMetadata> = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::InvalidData("Store metadata response is malformed".into()))?;
@@ -316,6 +346,58 @@ async fn fetch_store_metadata(
         ));
     }
     Ok(metadata)
+}
+
+fn store_url(
+    store_origin: &str,
+    game_id: &str,
+    version_id: &str,
+    package: bool,
+) -> Result<reqwest::Url, AppError> {
+    validate_identifier(game_id, "game ID")?;
+    validate_identifier(version_id, "version ID")?;
+    let origin = reqwest::Url::parse(store_origin)
+        .map_err(|_| AppError::Validation("Store origin is invalid".into()))?;
+    let loopback_http = origin.scheme() == "http"
+        && origin.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+    if (origin.scheme() != "https" && !loopback_http)
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+    {
+        return Err(AppError::Validation(
+            "Store origin must be HTTPS or loopback HTTP without a path".into(),
+        ));
+    }
+    let suffix = if package { "/package" } else { "" };
+    origin
+        .join(&format!(
+            "api/harbor-store/games/{game_id}/versions/{version_id}{suffix}"
+        ))
+        .map_err(|_| AppError::Validation("Store URL is invalid".into()))
+}
+
+fn require_content_type(response: &reqwest::Response, expected: &str) -> Result<(), AppError> {
+    let actual = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim);
+    if actual != Some(expected) {
+        return Err(AppError::InvalidData(format!(
+            "Store response content type must be {expected}"
+        )));
+    }
+    Ok(())
 }
 
 async fn read_bounded_response(
@@ -362,4 +444,37 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), AppError> {
         return Err(AppError::Validation(format!("Invalid {label}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acceptance_origin_override_is_limited_to_loopback() {
+        assert!(store_url("http://127.0.0.1:8090", "game_1", "version_1", false).is_ok());
+        assert!(store_url("http://[::1]:8090", "game_1", "version_1", true).is_ok());
+        assert!(store_url(
+            "https://games.social-harbor.com",
+            "game_1",
+            "version_1",
+            true
+        )
+        .is_ok());
+        assert!(store_url(
+            "http://games.social-harbor.com",
+            "game_1",
+            "version_1",
+            false
+        )
+        .is_err());
+        assert!(store_url(
+            "https://games.social-harbor.com/other",
+            "game_1",
+            "version_1",
+            false
+        )
+        .is_err());
+        assert!(store_url("http://127.0.0.1:8090", "../escape", "version_1", false).is_err());
+    }
 }
