@@ -941,10 +941,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resource_limits = ResourceLimits::try_from(args.resource_limits.clone())?;
 
     // Warn if community-only options are used without --community
-    if !args.community {
-        if args.community_name != "Harbor Community" {
-            warn!("--community-name has no effect without --community");
-        }
+    if !args.community && args.community_name != "Harbor Community" {
+        warn!("--community-name has no effect without --community");
     }
 
     info!("Starting Harbor Relay Server...");
@@ -1282,12 +1280,10 @@ fn begin_relay_read(
     timestamp: i64,
     signature: &[u8],
     server_now: i64,
-) -> Result<ReadReplayToken, BoardSyncResponse> {
+) -> Result<ReadReplayToken, String> {
     guard
         .authorize(peer, requester_peer_id, timestamp, signature, server_now)
-        .map_err(|error| BoardSyncResponse::Error {
-            error: error.code().to_string(),
-        })
+        .map_err(|error| error.code().to_string())
 }
 
 fn deny_relay_read(
@@ -1634,7 +1630,7 @@ fn handle_board_request(
                 server_now,
             ) {
                 Ok(token) => token,
-                Err(response) => return response,
+                Err(error) => return BoardSyncResponse::Error { error },
             };
             match service.process_list_boards(&requester_peer_id, timestamp, &signature) {
                 Ok(boards) => {
@@ -1676,7 +1672,7 @@ fn handle_board_request(
                 server_now,
             ) {
                 Ok(token) => token,
-                Err(response) => return response,
+                Err(error) => return BoardSyncResponse::Error { error },
             };
             match service.process_get_board_posts(
                 &requester_peer_id,
@@ -1726,7 +1722,7 @@ fn handle_board_request(
                 server_now,
             ) {
                 Ok(token) => token,
-                Err(response) => return response,
+                Err(error) => return BoardSyncResponse::Error { error },
             };
             match service.process_get_older_board_posts(
                 &requester_peer_id,
@@ -1859,7 +1855,7 @@ fn handle_board_request(
                 server_now,
             ) {
                 Ok(token) => token,
-                Err(response) => return response,
+                Err(error) => return BoardSyncResponse::Error { error },
             };
             match service.process_get_wall_posts_at(
                 &requester_peer_id,
@@ -2021,7 +2017,7 @@ fn handle_board_request(
                 server_now,
             ) {
                 Ok(token) => token,
-                Err(response) => return response,
+                Err(error) => return BoardSyncResponse::Error { error },
             };
             match service.process_get_wall_social_events_at(
                 &requester_peer_id,
