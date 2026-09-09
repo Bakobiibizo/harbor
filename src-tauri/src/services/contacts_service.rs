@@ -17,9 +17,9 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ContactAcceptanceFailpoint {
-    AfterContact,
-    AfterGrant(usize),
-    AfterRequest,
+    Contact,
+    Grant(usize),
+    Request,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,11 +67,11 @@ pub struct PendingContactProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ContactRevocationFailpoint {
-    AfterRelationship,
-    AfterPermissions,
-    AfterRequests,
-    AfterDependentState,
-    AfterOutbox,
+    Relationship,
+    Permissions,
+    Requests,
+    DependentState,
+    Outbox,
 }
 
 /// Service for managing contacts
@@ -329,7 +329,7 @@ impl ContactsService {
             .map_err(|error| AppError::DatabaseString(error.to_string()))?;
 
             #[cfg(test)]
-            if failpoint == Some(ContactAcceptanceFailpoint::AfterContact) {
+            if failpoint == Some(ContactAcceptanceFailpoint::Contact) {
                 return Err(AppError::Internal("injected after contact".into()));
             }
 
@@ -374,7 +374,7 @@ impl ContactsService {
                 }
             }
 
-            for (_index, grant) in grants.iter().enumerate() {
+            for (grant_index, grant) in grants.iter().enumerate() {
                 let scope_json = grant.scope.as_ref().map(|scope| scope.to_string());
                 tx.execute(
                     "INSERT INTO permissions_current(
@@ -429,9 +429,10 @@ impl ContactsService {
                 )
                 .map_err(|error| AppError::DatabaseString(error.to_string()))?;
 
-                #[cfg(test)]
-                if failpoint == Some(ContactAcceptanceFailpoint::AfterGrant(_index)) {
-                    return Err(AppError::Internal(format!("injected after grant {_index}")));
+                if failpoint == Some(ContactAcceptanceFailpoint::Grant(grant_index)) {
+                    return Err(AppError::Internal(format!(
+                        "injected after grant {grant_index}"
+                    )));
                 }
             }
 
@@ -450,7 +451,7 @@ impl ContactsService {
             }
 
             #[cfg(test)]
-            if failpoint == Some(ContactAcceptanceFailpoint::AfterRequest) {
+            if failpoint == Some(ContactAcceptanceFailpoint::Request) {
                 return Err(AppError::Internal("injected after request".into()));
             }
 
@@ -594,7 +595,7 @@ impl ContactsService {
             .map_err(|error| AppError::DatabaseString(error.to_string()))?;
 
             #[cfg(test)]
-            if failpoint == Some(ContactRevocationFailpoint::AfterRelationship) {
+            if failpoint == Some(ContactRevocationFailpoint::Relationship) {
                 return Err(AppError::Internal("injected after relationship".into()));
             }
 
@@ -683,7 +684,7 @@ impl ContactsService {
             .map_err(|error| AppError::DatabaseString(error.to_string()))?;
 
             #[cfg(test)]
-            if failpoint == Some(ContactRevocationFailpoint::AfterPermissions) {
+            if failpoint == Some(ContactRevocationFailpoint::Permissions) {
                 return Err(AppError::Internal("injected after permissions".into()));
             }
 
@@ -695,7 +696,7 @@ impl ContactsService {
             .map_err(|error| AppError::DatabaseString(error.to_string()))?;
 
             #[cfg(test)]
-            if failpoint == Some(ContactRevocationFailpoint::AfterRequests) {
+            if failpoint == Some(ContactRevocationFailpoint::Requests) {
                 return Err(AppError::Internal("injected after requests".into()));
             }
 
@@ -739,7 +740,7 @@ impl ContactsService {
             .map_err(|error| AppError::DatabaseString(error.to_string()))?;
 
             #[cfg(test)]
-            if failpoint == Some(ContactRevocationFailpoint::AfterDependentState) {
+            if failpoint == Some(ContactRevocationFailpoint::DependentState) {
                 return Err(AppError::Internal("injected after dependent state".into()));
             }
 
@@ -764,7 +765,7 @@ impl ContactsService {
             }
 
             #[cfg(test)]
-            if failpoint == Some(ContactRevocationFailpoint::AfterOutbox) {
+            if failpoint == Some(ContactRevocationFailpoint::Outbox) {
                 return Err(AppError::Internal("injected after outbox".into()));
             }
 
@@ -829,10 +830,9 @@ impl ContactsService {
                         ))
                     })
                     .map_err(|error| AppError::DatabaseString(error.to_string()))?;
-                let collected = mapped
+                mapped
                     .collect::<std::result::Result<_, _>>()
-                    .map_err(|error| AppError::DatabaseString(error.to_string()))?;
-                collected
+                    .map_err(|error| AppError::DatabaseString(error.to_string()))?
             };
             let mut entries = Vec::with_capacity(rows.len());
             for (event_id, request_id, peer_id, action, payload) in rows {
@@ -1338,11 +1338,11 @@ mod tests {
             };
 
             let failpoints = [
-                ContactAcceptanceFailpoint::AfterContact,
-                ContactAcceptanceFailpoint::AfterGrant(0),
-                ContactAcceptanceFailpoint::AfterGrant(1),
-                ContactAcceptanceFailpoint::AfterGrant(2),
-                ContactAcceptanceFailpoint::AfterRequest,
+                ContactAcceptanceFailpoint::Contact,
+                ContactAcceptanceFailpoint::Grant(0),
+                ContactAcceptanceFailpoint::Grant(1),
+                ContactAcceptanceFailpoint::Grant(2),
+                ContactAcceptanceFailpoint::Request,
             ];
             for failpoint in failpoints {
                 assert!(contacts
@@ -1477,11 +1477,11 @@ mod tests {
             assert_eq!(revocations.len(), 3);
 
             for failpoint in [
-                ContactRevocationFailpoint::AfterRelationship,
-                ContactRevocationFailpoint::AfterPermissions,
-                ContactRevocationFailpoint::AfterRequests,
-                ContactRevocationFailpoint::AfterDependentState,
-                ContactRevocationFailpoint::AfterOutbox,
+                ContactRevocationFailpoint::Relationship,
+                ContactRevocationFailpoint::Permissions,
+                ContactRevocationFailpoint::Requests,
+                ContactRevocationFailpoint::DependentState,
+                ContactRevocationFailpoint::Outbox,
             ] {
                 assert!(contacts
                     .revoke_contact_with_failpoint(

@@ -145,11 +145,11 @@ pub struct PostsService {
 
 #[derive(Debug, Clone, Copy)]
 enum LocalPostCommitFailpoint {
-    AfterLamport = 1,
-    AfterEvent = 2,
-    AfterProjection = 3,
-    AfterMedia = 4,
-    AfterOutbox = 5,
+    Lamport = 1,
+    Event = 2,
+    Projection = 3,
+    Media = 4,
+    Outbox = 5,
 }
 
 /// A post ready to be synced over the network
@@ -449,7 +449,7 @@ impl PostsService {
             let lamport_clock =
                 PostsRepository::next_lamport_in_transaction(&transaction, &identity.peer_id)
                     .map_err(AppError::Database)? as u64;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterLamport)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Lamport)?;
 
             let mut signed_media_items = Vec::with_capacity(media.len());
             for item in media {
@@ -500,7 +500,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterEvent)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Event)?;
 
             PostsRepository::insert_local_post_in_transaction(
                 &transaction,
@@ -516,7 +516,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterProjection)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Projection)?;
 
             for media_item in &signed_media_items {
                 PostsRepository::add_media_in_transaction(
@@ -525,7 +525,7 @@ impl PostsService {
                 )
                 .map_err(AppError::Database)?;
             }
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterMedia)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Media)?;
 
             let media_items: Vec<WallPostMediaItem> = signed_media_items
                 .iter()
@@ -584,7 +584,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterOutbox)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Outbox)?;
             transaction.commit().map_err(AppError::Database)?;
 
             Ok(OutgoingPost {
@@ -634,7 +634,7 @@ impl PostsService {
             let lamport_clock =
                 PostsRepository::next_lamport_in_transaction(&transaction, &identity.peer_id)
                     .map_err(AppError::Database)? as u64;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterLamport)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Lamport)?;
 
             let update_signable = SignablePostUpdate {
                 post_id: post_id.to_string(),
@@ -678,7 +678,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterEvent)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Event)?;
 
             if !PostsRepository::update_local_post_in_transaction(
                 &transaction,
@@ -694,8 +694,8 @@ impl PostsService {
                     "Post changed during update".to_string(),
                 ));
             }
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterProjection)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterMedia)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Projection)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Media)?;
 
             let relay_signable = SignableWallPostSubmit {
                 author_peer_id: identity.peer_id.clone(),
@@ -739,7 +739,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterOutbox)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Outbox)?;
             transaction.commit().map_err(AppError::Database)?;
 
             Ok(OutgoingPostUpdate {
@@ -786,7 +786,7 @@ impl PostsService {
             let lamport_clock =
                 PostsRepository::next_lamport_in_transaction(&transaction, &identity.peer_id)
                     .map_err(AppError::Database)? as u64;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterLamport)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Lamport)?;
             let signable = SignablePostDelete {
                 post_id: post_id.to_string(),
                 author_peer_id: identity.peer_id.clone(),
@@ -810,7 +810,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterEvent)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Event)?;
 
             if !PostsRepository::delete_local_post_in_transaction(
                 &transaction,
@@ -825,8 +825,8 @@ impl PostsService {
                     "Post changed during delete".to_string(),
                 ));
             }
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterProjection)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterMedia)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Projection)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Media)?;
 
             let wire = WireBoardSyncRequest::DeleteWallPost {
                 author_peer_id: identity.peer_id.clone(),
@@ -850,7 +850,7 @@ impl PostsService {
                 },
             )
             .map_err(AppError::Database)?;
-            self.fail_local_commit_if(LocalPostCommitFailpoint::AfterOutbox)?;
+            self.fail_local_commit_if(LocalPostCommitFailpoint::Outbox)?;
             transaction.commit().map_err(AppError::Database)?;
 
             Ok(OutgoingPostDelete {
@@ -1382,6 +1382,9 @@ mod tests {
     use rusqlite::OptionalExtension;
     use std::sync::Arc;
 
+    type StoredLocalPost = (Option<String>, i64, Option<i64>, Vec<u8>, String);
+    type LocalAtomicState = (Option<StoredLocalPost>, i64, i64, i64, i64);
+
     /// Create a full test environment with identity service that has a created+unlocked identity.
     fn create_test_env() -> (
         Arc<Database>,
@@ -1498,17 +1501,7 @@ mod tests {
         (params, media_hashes, signature)
     }
 
-    fn local_atomic_state(
-        db: &Database,
-        post_id: &str,
-        peer_id: &str,
-    ) -> (
-        Option<(Option<String>, i64, Option<i64>, Vec<u8>, String)>,
-        i64,
-        i64,
-        i64,
-        i64,
-    ) {
+    fn local_atomic_state(db: &Database, post_id: &str, peer_id: &str) -> LocalAtomicState {
         db.with_connection(|connection| {
             Ok((
                 connection
@@ -1597,11 +1590,11 @@ mod tests {
     #[test]
     fn local_create_failure_at_each_commit_boundary_rolls_back_everything() {
         let failpoints = [
-            LocalPostCommitFailpoint::AfterLamport,
-            LocalPostCommitFailpoint::AfterEvent,
-            LocalPostCommitFailpoint::AfterProjection,
-            LocalPostCommitFailpoint::AfterMedia,
-            LocalPostCommitFailpoint::AfterOutbox,
+            LocalPostCommitFailpoint::Lamport,
+            LocalPostCommitFailpoint::Event,
+            LocalPostCommitFailpoint::Projection,
+            LocalPostCommitFailpoint::Media,
+            LocalPostCommitFailpoint::Outbox,
         ];
         for failpoint in failpoints {
             let (db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
@@ -1656,11 +1649,11 @@ mod tests {
     #[test]
     fn local_update_failure_at_each_commit_boundary_preserves_prior_state() {
         for failpoint in [
-            LocalPostCommitFailpoint::AfterLamport,
-            LocalPostCommitFailpoint::AfterEvent,
-            LocalPostCommitFailpoint::AfterProjection,
-            LocalPostCommitFailpoint::AfterMedia,
-            LocalPostCommitFailpoint::AfterOutbox,
+            LocalPostCommitFailpoint::Lamport,
+            LocalPostCommitFailpoint::Event,
+            LocalPostCommitFailpoint::Projection,
+            LocalPostCommitFailpoint::Media,
+            LocalPostCommitFailpoint::Outbox,
         ] {
             let (db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
             let media_hash = "b".repeat(64);
@@ -1700,11 +1693,11 @@ mod tests {
     #[test]
     fn local_delete_failure_at_each_commit_boundary_preserves_prior_state() {
         for failpoint in [
-            LocalPostCommitFailpoint::AfterLamport,
-            LocalPostCommitFailpoint::AfterEvent,
-            LocalPostCommitFailpoint::AfterProjection,
-            LocalPostCommitFailpoint::AfterMedia,
-            LocalPostCommitFailpoint::AfterOutbox,
+            LocalPostCommitFailpoint::Lamport,
+            LocalPostCommitFailpoint::Event,
+            LocalPostCommitFailpoint::Projection,
+            LocalPostCommitFailpoint::Media,
+            LocalPostCommitFailpoint::Outbox,
         ] {
             let (db, _identity, _contacts, _perms, service, peer_id) = create_test_env();
             let media_hash = "c".repeat(64);

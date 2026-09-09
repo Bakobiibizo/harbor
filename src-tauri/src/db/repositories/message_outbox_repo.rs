@@ -98,6 +98,21 @@ pub struct EnqueueOutboxMessage<'a> {
     pub created_at: i64,
 }
 
+struct StoredCommittedMessage {
+    protocol_version: i64,
+    event_id: String,
+    conversation_id: String,
+    sender_peer_id: String,
+    recipient_peer_id: String,
+    nonce_id: Vec<u8>,
+    content_encrypted: Vec<u8>,
+    content_type: String,
+    reply_to_message_id: Option<String>,
+    nonce_counter: i64,
+    lamport_clock: i64,
+    sent_at: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueOutcome {
     Inserted,
@@ -875,56 +890,43 @@ impl<'a> MessageOutboxRepository<'a> {
         event: &RecordMessageEventParams<'_>,
         outbox: &EnqueueOutboxMessage<'_>,
     ) -> Result<bool, OutboxError> {
-        let stored_message: Option<(
-            i64,
-            String,
-            String,
-            String,
-            String,
-            Vec<u8>,
-            Vec<u8>,
-            String,
-            Option<String>,
-            i64,
-            i64,
-            i64,
-        )> = tx
+        let stored_message: Option<StoredCommittedMessage> = tx
             .query_row(
                 "SELECT protocol_version,event_id,conversation_id,sender_peer_id,recipient_peer_id,
                         nonce_id,content_encrypted,content_type,reply_to_message_id,nonce_counter,
                         lamport_clock,sent_at FROM messages WHERE message_id=?",
                 [message.message_id.as_str()],
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get(8)?,
-                        row.get(9)?,
-                        row.get(10)?,
-                        row.get(11)?,
-                    ))
+                    Ok(StoredCommittedMessage {
+                        protocol_version: row.get(0)?,
+                        event_id: row.get(1)?,
+                        conversation_id: row.get(2)?,
+                        sender_peer_id: row.get(3)?,
+                        recipient_peer_id: row.get(4)?,
+                        nonce_id: row.get(5)?,
+                        content_encrypted: row.get(6)?,
+                        content_type: row.get(7)?,
+                        reply_to_message_id: row.get(8)?,
+                        nonce_counter: row.get(9)?,
+                        lamport_clock: row.get(10)?,
+                        sent_at: row.get(11)?,
+                    })
                 },
             )
             .optional()?;
         let same_message = stored_message.is_some_and(|stored| {
-            stored.0 == i64::from(message.protocol_version)
-                && stored.1 == message.event_id
-                && stored.2 == message.conversation_id
-                && stored.3 == message.sender_peer_id
-                && stored.4 == message.recipient_peer_id
-                && stored.5 == message.nonce_id
-                && stored.6 == message.content_encrypted
-                && stored.7 == message.content_type
-                && stored.8 == message.reply_to_message_id
-                && stored.9 == i64::try_from(message.nonce_counter).unwrap_or(-1)
-                && stored.10 == message.lamport_clock
-                && stored.11 == message.sent_at
+            stored.protocol_version == i64::from(message.protocol_version)
+                && stored.event_id == message.event_id
+                && stored.conversation_id == message.conversation_id
+                && stored.sender_peer_id == message.sender_peer_id
+                && stored.recipient_peer_id == message.recipient_peer_id
+                && stored.nonce_id == message.nonce_id
+                && stored.content_encrypted == message.content_encrypted
+                && stored.content_type == message.content_type
+                && stored.reply_to_message_id == message.reply_to_message_id
+                && stored.nonce_counter == i64::try_from(message.nonce_counter).unwrap_or(-1)
+                && stored.lamport_clock == message.lamport_clock
+                && stored.sent_at == message.sent_at
         });
         let same_event: bool = tx
             .query_row(

@@ -86,6 +86,25 @@ enum WorkSolveError {
     WorkBudgetExceeded,
 }
 
+struct WorkChallengeValidation<'a> {
+    peer: PeerId,
+    local_peer_id: &'a str,
+    target: &'a str,
+    relay: &'a str,
+    key_id: &'a str,
+    relay_public_key: &'a [u8],
+    now: i64,
+}
+
+struct SignedContactProfileUpdate<'a> {
+    peer_id: &'a str,
+    revision: u64,
+    display_name: &'a str,
+    avatar_hash: Option<&'a str>,
+    avatar_mime_type: Option<&'a str>,
+    bio: Option<&'a str>,
+}
+
 fn solve_work_bounded(
     c: &super::protocols::board_sync::WorkChallenge,
     cancelled: &AtomicBool,
@@ -186,14 +205,8 @@ fn validate_relay_auth_challenge(
 }
 
 fn validate_work_challenge(
-    peer: PeerId,
-    local_peer_id: &str,
-    expected_target: &str,
-    expected_relay: &str,
-    expected_key_id: &str,
-    relay_public_key: &[u8],
+    validation: WorkChallengeValidation<'_>,
     challenge: &super::protocols::board_sync::WorkChallenge,
-    now: i64,
 ) -> std::result::Result<(), &'static str> {
     if challenge.id.is_empty()
         || challenge.id.len() > 128
@@ -203,23 +216,23 @@ fn validate_work_challenge(
         || challenge.action.len() > 64
         || challenge.audience != "introduce"
         || challenge.key_id.len() > 128
-        || challenge.relay != expected_relay
-        || challenge.requester != local_peer_id
-        || challenge.target != expected_target
+        || challenge.relay != validation.relay
+        || challenge.requester != validation.local_peer_id
+        || challenge.target != validation.target
         || challenge.action != "introduce"
-        || challenge.key_id != expected_key_id
+        || challenge.key_id != validation.key_id
         || challenge.difficulty > POW_MAX_DIFFICULTY
-        || challenge.expires_at < now
-        || challenge.expires_at > now + 330
+        || challenge.expires_at < validation.now
+        || challenge.expires_at > validation.now + 330
         || challenge.delivery_key.len() != 32
         || challenge.relay_signature.is_empty()
         || challenge.relay_signature.len() > 256
     {
         return Err("INTRODUCTION_WORK_INVALID");
     }
-    let public = libp2p::identity::PublicKey::try_decode_protobuf(relay_public_key)
+    let public = libp2p::identity::PublicKey::try_decode_protobuf(validation.relay_public_key)
         .map_err(|_| "INTRODUCTION_WORK_KEY_INVALID")?;
-    if PeerId::from_public_key(&public) != peer {
+    if PeerId::from_public_key(&public) != validation.peer {
         return Err("INTRODUCTION_WORK_TRANSPORT_MISMATCH");
     }
     let mut unsigned = challenge.clone();
@@ -304,14 +317,16 @@ mod pow_budget_tests {
 
         let work = signed_work_challenge(&relay_key, &local_peer, now, 14);
         assert!(validate_work_challenge(
-            relay_peer,
-            &local_peer,
-            "@alice@relay.test",
-            "relay.test",
-            "key-1",
-            &auth.relay_public_key,
+            WorkChallengeValidation {
+                peer: relay_peer,
+                local_peer_id: &local_peer,
+                target: "@alice@relay.test",
+                relay: "relay.test",
+                key_id: "key-1",
+                relay_public_key: &auth.relay_public_key,
+                now,
+            },
             &work,
-            now,
         )
         .is_ok());
 
@@ -319,14 +334,16 @@ mod pow_budget_tests {
         let forged = signed_work_challenge(&attacker, &local_peer, now, 14);
         assert_eq!(
             validate_work_challenge(
-                relay_peer,
-                &local_peer,
-                "@alice@relay.test",
-                "relay.test",
-                "key-1",
-                &auth.relay_public_key,
+                WorkChallengeValidation {
+                    peer: relay_peer,
+                    local_peer_id: &local_peer,
+                    target: "@alice@relay.test",
+                    relay: "relay.test",
+                    key_id: "key-1",
+                    relay_public_key: &auth.relay_public_key,
+                    now,
+                },
                 &forged,
-                now,
             ),
             Err("INTRODUCTION_WORK_SIGNATURE_INVALID")
         );
@@ -345,14 +362,16 @@ mod pow_budget_tests {
         let excessive = signed_work_challenge(&relay_key, &local_peer, now, POW_MAX_DIFFICULTY + 1);
         assert_eq!(
             validate_work_challenge(
-                relay_peer,
-                &local_peer,
-                "@alice@relay.test",
-                "relay.test",
-                "key-1",
-                &auth.relay_public_key,
+                WorkChallengeValidation {
+                    peer: relay_peer,
+                    local_peer_id: &local_peer,
+                    target: "@alice@relay.test",
+                    relay: "relay.test",
+                    key_id: "key-1",
+                    relay_public_key: &auth.relay_public_key,
+                    now,
+                },
                 &excessive,
-                now,
             ),
             Err("INTRODUCTION_WORK_INVALID")
         );
@@ -360,14 +379,16 @@ mod pow_budget_tests {
         let mut swapped = signed_work_challenge(&relay_key, &local_peer, now, 14);
         swapped.target = "@mallory@relay.test".into();
         assert!(validate_work_challenge(
-            relay_peer,
-            &local_peer,
-            "@alice@relay.test",
-            "relay.test",
-            "key-1",
-            &auth.relay_public_key,
+            WorkChallengeValidation {
+                peer: relay_peer,
+                local_peer_id: &local_peer,
+                target: "@alice@relay.test",
+                relay: "relay.test",
+                key_id: "key-1",
+                relay_public_key: &auth.relay_public_key,
+                now,
+            },
             &swapped,
-            now,
         )
         .is_err());
     }
@@ -1580,9 +1601,7 @@ where
         kind: MessageDeliveryFailureKind,
         detail: impl Into<String>,
     ) -> Option<MessageDeliveryFailure> {
-        let Some(pending) = self.requests.remove(request_id) else {
-            return None;
-        };
+        let pending = self.requests.remove(request_id)?;
         let failure = MessageDeliveryFailure {
             event_id: pending.event_id,
             message_id: pending.message_id,
@@ -1601,9 +1620,7 @@ where
         peer_id: &PeerId,
         response: MessagingResponse,
     ) -> Option<MessageDeliveryAttemptOutcome> {
-        let Some(pending) = self.requests.remove(request_id) else {
-            return None;
-        };
+        let pending = self.requests.remove(request_id)?;
         let outcome = if pending.peer_id != *peer_id {
             NetworkResponse::MessageDeliveryFailed(MessageDeliveryFailure {
                 event_id: pending.event_id,
@@ -1662,9 +1679,8 @@ where
         let request_ids: Vec<K> = self
             .requests
             .iter()
-            .filter_map(|(request_id, pending)| {
-                (pending.peer_id == *peer_id).then(|| request_id.clone())
-            })
+            .filter(|entry| entry.1.peer_id == *peer_id)
+            .map(|(request_id, _)| request_id.clone())
             .collect();
         request_ids
             .into_iter()
@@ -1676,13 +1692,14 @@ where
         let cancelled_ids: Vec<K> = self
             .requests
             .iter()
-            .filter_map(|(request_id, pending)| {
-                pending
+            .filter(|entry| {
+                entry
+                    .1
                     .response_tx
                     .as_ref()
                     .is_some_and(oneshot::Sender::is_closed)
-                    .then(|| request_id.clone())
             })
+            .map(|(request_id, _)| request_id.clone())
             .collect();
         let cancelled = cancelled_ids.len();
         for request_id in cancelled_ids {
@@ -1692,9 +1709,8 @@ where
         let expired_ids: Vec<K> = self
             .requests
             .iter()
-            .filter_map(|(request_id, pending)| {
-                (pending.deadline <= now).then(|| request_id.clone())
-            })
+            .filter(|entry| entry.1.deadline <= now)
+            .map(|(request_id, _)| request_id.clone())
             .collect();
         let expired = expired_ids
             .into_iter()
@@ -2113,13 +2129,16 @@ impl NetworkService {
     fn stage_signed_contact_profile(
         &mut self,
         peer: PeerId,
-        peer_id: &str,
-        revision: u64,
-        display_name: &str,
-        avatar_hash: Option<&str>,
-        avatar_mime_type: Option<&str>,
-        bio: Option<&str>,
+        profile: SignedContactProfileUpdate<'_>,
     ) -> Result<()> {
+        let SignedContactProfileUpdate {
+            peer_id,
+            revision,
+            display_name,
+            avatar_hash,
+            avatar_mime_type,
+            bio,
+        } = profile;
         let contacts = self
             .contacts_service
             .clone()
@@ -2755,7 +2774,7 @@ impl NetworkService {
             },
         );
         self.pending_messaging_requests.insert(
-            request_id.clone(),
+            request_id,
             event_id,
             message_id,
             peer_id,
@@ -4829,14 +4848,16 @@ impl NetworkService {
                         .ok_or("INTRODUCTION_WORK_INVALID")
                         .and_then(|pending| {
                             validate_work_challenge(
-                                peer,
-                                &local_peer_id,
-                                &pending.target,
-                                pending.relay_name.as_deref().unwrap_or_default(),
-                                pending.relay_key_id.as_deref().unwrap_or_default(),
-                                &pending.relay_public_key,
+                                WorkChallengeValidation {
+                                    peer,
+                                    local_peer_id: &local_peer_id,
+                                    target: &pending.target,
+                                    relay: pending.relay_name.as_deref().unwrap_or_default(),
+                                    key_id: pending.relay_key_id.as_deref().unwrap_or_default(),
+                                    relay_public_key: &pending.relay_public_key,
+                                    now: Utc::now().timestamp(),
+                                },
                                 &challenge,
-                                Utc::now().timestamp(),
                             )
                         });
                     let pending = self
@@ -4858,14 +4879,16 @@ impl NetworkService {
                     return;
                 };
                 let validation = validate_work_challenge(
-                    peer,
-                    &local_peer_id,
-                    &pending.target,
-                    pending.relay_name.as_deref().unwrap_or_default(),
-                    pending.relay_key_id.as_deref().unwrap_or_default(),
-                    &pending.relay_public_key,
+                    WorkChallengeValidation {
+                        peer,
+                        local_peer_id: &local_peer_id,
+                        target: &pending.target,
+                        relay: pending.relay_name.as_deref().unwrap_or_default(),
+                        key_id: pending.relay_key_id.as_deref().unwrap_or_default(),
+                        relay_public_key: &pending.relay_public_key,
+                        now: Utc::now().timestamp(),
+                    },
                     &challenge,
-                    Utc::now().timestamp(),
                 );
                 if let Err(error) = validation {
                     let pending = self
@@ -5605,12 +5628,14 @@ impl NetworkService {
                 if request.profile_revision > 0 {
                     if let Err(error) = self.stage_signed_contact_profile(
                         peer,
-                        &request.requester_peer_id,
-                        request.profile_revision,
-                        &request.display_name,
-                        request.avatar_hash.as_deref(),
-                        request.avatar_mime_type.as_deref(),
-                        request.bio.as_deref(),
+                        SignedContactProfileUpdate {
+                            peer_id: &request.requester_peer_id,
+                            revision: request.profile_revision,
+                            display_name: &request.display_name,
+                            avatar_hash: request.avatar_hash.as_deref(),
+                            avatar_mime_type: request.avatar_mime_type.as_deref(),
+                            bio: request.bio.as_deref(),
+                        },
                     ) {
                         warn!("Could not stage accepted contact profile from {peer}: {error}");
                     }
@@ -5670,12 +5695,14 @@ impl NetworkService {
             "profile" => {
                 if let Err(error) = self.stage_signed_contact_profile(
                     peer,
-                    &request.requester_peer_id,
-                    request.profile_revision,
-                    &request.display_name,
-                    request.avatar_hash.as_deref(),
-                    request.avatar_mime_type.as_deref(),
-                    request.bio.as_deref(),
+                    SignedContactProfileUpdate {
+                        peer_id: &request.requester_peer_id,
+                        revision: request.profile_revision,
+                        display_name: &request.display_name,
+                        avatar_hash: request.avatar_hash.as_deref(),
+                        avatar_mime_type: request.avatar_mime_type.as_deref(),
+                        bio: request.bio.as_deref(),
+                    },
                 ) {
                     warn!("Rejected profile revision from {peer}: {error}");
                     return;
@@ -5974,12 +6001,14 @@ impl NetworkService {
                     if response.profile_revision > 0 {
                         if let Err(error) = self.stage_signed_contact_profile(
                             peer,
-                            &response.peer_id,
-                            response.profile_revision,
-                            &response.display_name,
-                            response.avatar_hash.as_deref(),
-                            response.avatar_mime_type.as_deref(),
-                            response.bio.as_deref(),
+                            SignedContactProfileUpdate {
+                                peer_id: &response.peer_id,
+                                revision: response.profile_revision,
+                                display_name: &response.display_name,
+                                avatar_hash: response.avatar_hash.as_deref(),
+                                avatar_mime_type: response.avatar_mime_type.as_deref(),
+                                bio: response.bio.as_deref(),
+                            },
                         ) {
                             warn!("Could not stage accepted contact profile from {peer}: {error}");
                         }

@@ -1148,8 +1148,7 @@ impl PostsRepository {
                 )?;
                 let rows =
                     statement.query_map(params![now, limit], |row| row.get::<_, String>(0))?;
-                let event_ids = rows.collect::<SqliteResult<Vec<_>>>()?;
-                event_ids
+                rows.collect::<SqliteResult<Vec<_>>>()?
             };
             let deadline = now.saturating_add(lease_seconds.max(1));
             for event_id in &event_ids {
